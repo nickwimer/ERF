@@ -13,6 +13,8 @@ add_executable(erf_fire_unit_tests
   ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestMain.cpp
   ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestRuntimeStubs.cpp
   ERF_GTestFireTypes.cpp
+  ERF_GTestFirePerimeter.cpp
+  ERF_GTestFirePropagation.cpp
 )
 
 build_erf_exe(erf_fire_unit_tests NO_ERF_MAIN)

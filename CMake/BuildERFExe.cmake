@@ -20,8 +20,16 @@ function(target_link_libraries_includes_only target visibility lib)
 endfunction()
 
 function(erf_add_fire_sources target)
+  set(FIRE_SRC_DIR ${PROJECT_SOURCE_DIR}/Source/Fire)
+
+  target_sources(${target} PRIVATE
+    ${FIRE_SRC_DIR}/Front/ERF_FirePerimeter.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_VectorPerimeterPropagator.cpp
+  )
+
   target_include_directories(${target} PUBLIC
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/Fire>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Front>
   )
 
   target_compile_definitions(${target} PUBLIC ERF_USE_FIRE)
