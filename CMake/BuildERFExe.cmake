@@ -19,6 +19,14 @@ function(target_link_libraries_includes_only target visibility lib)
   endif()
 endfunction()
 
+function(erf_add_fire_sources target)
+  target_include_directories(${target} PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/Fire>
+  )
+
+  target_compile_definitions(${target} PUBLIC ERF_USE_FIRE)
+endfunction()
+
 function(erf_add_native_shoc_sources target)
   set(SRC_DIR ${PROJECT_SOURCE_DIR}/Source)
 
@@ -290,6 +298,10 @@ function(build_erf_lib erf_lib_name)
       ${SRC_DIR}/WindFarmParametrization/GeneralActuatorDisk/ERF_AdvanceGeneralAD.cpp
     )
     target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_WINDFARM)
+  endif()
+
+  if(ERF_ENABLE_FIRE)
+    erf_add_fire_sources(${erf_lib_name})
   endif()
 
   if(ERF_BUILD_LIBRARY_ONLY)

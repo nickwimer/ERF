@@ -177,6 +177,10 @@ set_tests_properties(erf_unit_tests_shuffle_repeat
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+if(ERF_ENABLE_FIRE)
+  add_subdirectory(Fire)
+endif()
+
 add_subdirectory(Shoc)
 
 if(ERF_ENABLE_MPI)
