@@ -30,6 +30,7 @@ function(erf_add_fire_sources target)
     ${FIRE_SRC_DIR}/Behavior/ERF_RothermelModel.cpp
     ${FIRE_SRC_DIR}/Spread/ERF_RichardsEllipse.cpp
     ${FIRE_SRC_DIR}/Spread/ERF_RichardsDirectionalSpread.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireCellCoverage.cpp
   )
 
   target_include_directories(${target} PUBLIC
@@ -37,6 +38,7 @@ function(erf_add_fire_sources target)
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Front>
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Behavior>
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Spread>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Raster>
   )
 
   target_compile_definitions(${target} PUBLIC ERF_USE_FIRE)
