@@ -22,6 +22,7 @@ add_executable(erf_fire_unit_tests
   ERF_GTestFireStandaloneGrowth.cpp
   ERF_GTestFireCellCoverage.cpp
   ERF_GTestFireBurnedFraction.cpp
+  ERF_GTestFireBurnedFractionRaster.cpp
 )
 
 build_erf_exe(erf_fire_unit_tests NO_ERF_MAIN)
