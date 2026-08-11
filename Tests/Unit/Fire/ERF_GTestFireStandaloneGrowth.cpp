@@ -1,3 +1,4 @@
+#include <ERF_FireBurnedFractionRaster.H>
 #include <ERF_FirePerimeterRemesher.H>
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelFuel.H>
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -17,6 +19,8 @@
 namespace
 {
 
+using ERFFire::FireBurnedFractionRaster;
+using ERFFire::FireCartesianRasterGeometry2D;
 using ERFFire::FirePerimeter;
 using ERFFire::FirePerimeterRemeshOptions;
 using ERFFire::FireVec2;
@@ -47,6 +51,13 @@ constexpr amrex::Real initial_wavelet_age_s = amrex::Real(200.0);
 constexpr amrex::Real integration_duration_s = amrex::Real(100.0);
 constexpr amrex::Real dt_s = amrex::Real(1.0);
 constexpr int integration_steps = 100;
+
+constexpr amrex::Real reference_raster_xlo_m = amrex::Real(-20.0);
+constexpr amrex::Real reference_raster_ylo_m = amrex::Real(-20.0);
+constexpr amrex::Real reference_raster_extent_m = amrex::Real(60.0);
+
+using RemeshedGrowthObserver =
+    std::function<void(amrex::Real, const FirePerimeter&)>;
 
 FireVec2
 reference_heading (bool mirrored = false) noexcept
@@ -94,6 +105,68 @@ make_exact_reference_wavelet (
     }
 
     return FirePerimeter(std::move(vertices));
+}
+
+amrex::Real
+exact_reference_area_m2 (amrex::Real age_s) noexcept
+{
+    return pi
+        * (reference_semi_major_rate_mps * age_s)
+        * (reference_flank_ros_mps * age_s);
+}
+
+FireCartesianRasterGeometry2D
+make_reference_raster_geometry (amrex::Real spacing_m)
+{
+    const auto cells_per_side =
+        static_cast<std::size_t>(
+            std::llround(reference_raster_extent_m / spacing_m));
+
+    return {
+        cells_per_side,
+        cells_per_side,
+        reference_raster_xlo_m,
+        reference_raster_ylo_m,
+        spacing_m,
+        spacing_m
+    };
+}
+
+std::vector<amrex::Real>
+capture_burned_fraction (
+    const FireBurnedFractionRaster& raster)
+{
+    std::vector<amrex::Real> values;
+    values.reserve(raster.cell_count());
+
+    const auto& geometry = raster.geometry();
+    for (std::size_t j = 0; j < geometry.ny; ++j) {
+        for (std::size_t i = 0; i < geometry.nx; ++i) {
+            values.push_back(raster.burned_fraction(i, j));
+        }
+    }
+
+    return values;
+}
+
+std::size_t
+partial_cell_count (const FireBurnedFractionRaster& raster)
+{
+    std::size_t count = 0;
+    const auto& geometry = raster.geometry();
+
+    for (std::size_t j = 0; j < geometry.ny; ++j) {
+        for (std::size_t i = 0; i < geometry.nx; ++i) {
+            const amrex::Real fraction =
+                raster.burned_fraction(i, j);
+            if (fraction > amrex::Real(0.0)
+                && fraction < amrex::Real(1.0)) {
+                ++count;
+            }
+        }
+    }
+
+    return count;
 }
 
 amrex::Real
@@ -252,7 +325,8 @@ advance_with_remeshing (
     const RichardsDirectionalSpread& spread,
     const FireVec2& reference_heading,
     const FirePerimeterRemeshOptions& options,
-    bool write_reference_snapshots = false)
+    bool write_reference_snapshots = false,
+    const RemeshedGrowthObserver& observer = {})
 {
     std::size_t vertices_removed = 0;
     std::size_t vertices_added = 0;
@@ -274,6 +348,10 @@ advance_with_remeshing (
                 2048, initial_wavelet_age_s, reference_heading));
     }
 
+    if (observer) {
+        observer(amrex::Real(0.0), perimeter);
+    }
+
     const auto normal_speed = [&spread] (
         const FireVec2&,
         const FireVec2& outward_normal,
@@ -293,6 +371,10 @@ advance_with_remeshing (
         perimeter = std::move(remeshed.perimeter);
         vertices_removed += remeshed.stats.vertices_removed;
         vertices_added += remeshed.stats.vertices_added;
+
+        if (observer) {
+            observer(time_s, perimeter);
+        }
 
         if (write_reference_snapshots && step % 25 == 0) {
             ERFFireTest::maybe_write_snapshot(
@@ -731,6 +813,246 @@ TEST(FireStandaloneGrowth, MirroredSlopeWithRemeshingPreservesSymmetry)
     EXPECT_LT(
         static_cast<double>(maximum_mirror_error_m),
         1.5e-2);
+}
+
+TEST(FireRasterIntegration, RemeshedObliqueFM1MaintainsConservativeMonotoneHistory)
+{
+    constexpr std::size_t initial_vertex_count = 512;
+    const FireVec2 heading = reference_heading();
+    const auto spread = make_oblique_fm1_spread();
+
+    const FirePerimeterRemeshOptions options{
+        0.25,
+        0.75,
+        0.0125
+    };
+
+    const auto raster_geometry =
+        make_reference_raster_geometry(amrex::Real(0.5));
+    FireBurnedFractionRaster raster(raster_geometry);
+
+    std::vector<amrex::Real> previous_fraction(
+        raster.cell_count(), amrex::Real(0.0));
+
+    amrex::Real previous_burned_area_m2 = 0.0;
+    amrex::Real cumulative_newly_burned_area_m2 = 0.0;
+    std::size_t sampled_front_count = 0;
+
+    const RemeshedGrowthObserver observer =
+        [&] (amrex::Real time_s, const FirePerimeter& perimeter)
+    {
+        const long long whole_seconds = std::llround(time_s);
+        if (whole_seconds % 25 != 0) {
+            return;
+        }
+
+        FireBurnedFractionRaster instantaneous(raster_geometry);
+        const auto instantaneous_update =
+            instantaneous.update_from_perimeter(perimeter);
+        const auto persistent_update =
+            raster.update_from_perimeter(perimeter);
+
+        const amrex::Real exact_area_m2 =
+            exact_reference_area_m2(initial_wavelet_age_s + time_s);
+        const amrex::Real relative_vector_area_error =
+            std::abs(perimeter.area_m2() - exact_area_m2)
+            / exact_area_m2;
+
+        EXPECT_LT(
+            static_cast<double>(relative_vector_area_error),
+            1.0e-3);
+
+        EXPECT_NEAR(
+            static_cast<double>(instantaneous_update.burned_area_m2),
+            static_cast<double>(perimeter.area_m2()),
+            5.0e-8);
+
+        EXPECT_NEAR(
+            static_cast<double>(persistent_update.burned_area_m2),
+            static_cast<double>(instantaneous_update.burned_area_m2),
+            5.0e-8);
+
+        EXPECT_NEAR(
+            static_cast<double>(
+                previous_burned_area_m2
+                + persistent_update.newly_burned_area_m2),
+            static_cast<double>(persistent_update.burned_area_m2),
+            5.0e-8);
+
+        EXPECT_GE(
+            static_cast<double>(persistent_update.burned_area_m2),
+            static_cast<double>(previous_burned_area_m2));
+
+        if (sampled_front_count > 0) {
+            EXPECT_GT(
+                static_cast<double>(persistent_update.newly_burned_area_m2),
+                0.0);
+        }
+
+        const auto current_fraction = capture_burned_fraction(raster);
+        ASSERT_EQ(current_fraction.size(), previous_fraction.size());
+
+        for (std::size_t i = 0; i < current_fraction.size(); ++i) {
+            EXPECT_GE(
+                static_cast<double>(current_fraction[i]),
+                static_cast<double>(previous_fraction[i]));
+        }
+
+        previous_fraction = current_fraction;
+        previous_burned_area_m2 = persistent_update.burned_area_m2;
+        cumulative_newly_burned_area_m2 +=
+            persistent_update.newly_burned_area_m2;
+        ++sampled_front_count;
+    };
+
+    auto run = advance_with_remeshing(
+        make_exact_reference_wavelet(
+            initial_vertex_count,
+            initial_wavelet_age_s,
+            heading),
+        spread,
+        heading,
+        options,
+        false,
+        observer);
+
+    EXPECT_EQ(sampled_front_count, 5U);
+
+    EXPECT_NEAR(
+        static_cast<double>(cumulative_newly_burned_area_m2),
+        static_cast<double>(raster.burned_area_m2()),
+        5.0e-8);
+
+    const auto repeated = raster.update_from_perimeter(run.perimeter);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(repeated.newly_burned_area_m2),
+        0.0);
+    EXPECT_NEAR(
+        static_cast<double>(repeated.burned_area_m2),
+        static_cast<double>(previous_burned_area_m2),
+        5.0e-8);
+}
+
+TEST(FireRasterIntegration, FinalRemeshedPerimeterAreaIsResolutionInvariant)
+{
+    constexpr std::size_t initial_vertex_count = 512;
+    const FireVec2 heading = reference_heading();
+    const auto spread = make_oblique_fm1_spread();
+
+    const FirePerimeterRemeshOptions options{
+        0.25,
+        0.75,
+        0.0125
+    };
+
+    auto run = advance_with_remeshing(
+        make_exact_reference_wavelet(
+            initial_vertex_count,
+            initial_wavelet_age_s,
+            heading),
+        spread,
+        heading,
+        options);
+
+    std::vector<std::size_t> partial_counts;
+
+    for (const amrex::Real spacing_m : {
+            amrex::Real(1.0),
+            amrex::Real(0.5),
+            amrex::Real(0.25)}) {
+        FireBurnedFractionRaster raster(
+            make_reference_raster_geometry(spacing_m));
+
+        const auto update = raster.update_from_perimeter(run.perimeter);
+
+        EXPECT_NEAR(
+            static_cast<double>(update.burned_area_m2),
+            static_cast<double>(run.perimeter.area_m2()),
+            1.0e-7);
+
+        EXPECT_NEAR(
+            static_cast<double>(update.newly_burned_area_m2),
+            static_cast<double>(run.perimeter.area_m2()),
+            1.0e-7);
+
+        const std::size_t partial = partial_cell_count(raster);
+        EXPECT_GT(partial, 0U);
+        partial_counts.push_back(partial);
+    }
+
+    ASSERT_EQ(partial_counts.size(), 3U);
+    EXPECT_LT(partial_counts[0], partial_counts[1]);
+    EXPECT_LT(partial_counts[1], partial_counts[2]);
+}
+
+TEST(FireRasterIntegration, ExtinguishedRemeshedFrontCreatesNoAdditionalBurnHistory)
+{
+    const auto behavior = ERFFire::evaluate_rothermel(
+        ERFFire::make_fm1_fuel_parameters(),
+        RothermelInputs{0.12, 1.0, 0.20});
+    const auto spread = ERFFire::make_richards_directional_spread(
+        behavior,
+        {1.0, 0.0},
+        {0.0, 1.0});
+
+    const FirePerimeterRemeshOptions options{
+        0.25,
+        0.75,
+        0.0125
+    };
+
+    FireBurnedFractionRaster raster(
+        make_reference_raster_geometry(amrex::Real(0.5)));
+
+    amrex::Real initial_burned_area_m2 = 0.0;
+    std::size_t sampled_front_count = 0;
+
+    const RemeshedGrowthObserver observer =
+        [&] (amrex::Real time_s, const FirePerimeter& perimeter)
+    {
+        const long long whole_seconds = std::llround(time_s);
+        if (whole_seconds % 25 != 0) {
+            return;
+        }
+
+        const auto update = raster.update_from_perimeter(perimeter);
+
+        if (sampled_front_count == 0) {
+            initial_burned_area_m2 = update.burned_area_m2;
+            EXPECT_GT(
+                static_cast<double>(update.newly_burned_area_m2),
+                0.0);
+        } else {
+            EXPECT_DOUBLE_EQ(
+                static_cast<double>(update.newly_burned_area_m2),
+                0.0);
+            EXPECT_DOUBLE_EQ(
+                static_cast<double>(update.burned_area_m2),
+                static_cast<double>(initial_burned_area_m2));
+        }
+
+        ++sampled_front_count;
+    };
+
+    auto run = advance_with_remeshing(
+        ERFFireTest::make_circle(256, 10.0),
+        spread,
+        {1.0, 0.0},
+        options,
+        false,
+        observer);
+
+    EXPECT_EQ(sampled_front_count, 5U);
+
+    const auto repeated = raster.update_from_perimeter(run.perimeter);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(repeated.newly_burned_area_m2),
+        0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(repeated.burned_area_m2),
+        static_cast<double>(initial_burned_area_m2));
 }
 
 TEST(FireStandaloneGrowth, ExtinctionWithRemeshingIsIdempotentlyStationary)
