@@ -1,4 +1,5 @@
 #include <ERF_FireBurnedFractionRaster.H>
+#include <ERF_FireFirstArrivalRaster.H>
 #include <ERF_FirePerimeterRemesher.H>
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelFuel.H>
@@ -11,8 +12,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <limits>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -21,6 +26,7 @@ namespace
 
 using ERFFire::FireBurnedFractionRaster;
 using ERFFire::FireCartesianRasterGeometry2D;
+using ERFFire::FireFirstArrivalRaster;
 using ERFFire::FirePerimeter;
 using ERFFire::FirePerimeterRemeshOptions;
 using ERFFire::FireVec2;
@@ -47,6 +53,18 @@ constexpr amrex::Real reference_semi_major_rate_mps =
 constexpr amrex::Real reference_center_translation_rate_mps =
     amrex::Real(0.03940169607103429);
 
+// Independent wind-only FM1 fixture: 8% moisture, 1 m/s wind pushing east,
+// zero slope. The ellipse rates are
+// independently derived from the FARSITE length-to-breadth relation at 1 m/s.
+constexpr amrex::Real reference_wind_only_head_ros_mps =
+    amrex::Real(0.10202231168335671);
+constexpr amrex::Real reference_wind_only_flank_ros_mps =
+    amrex::Real(0.05412799019404888);
+constexpr amrex::Real reference_wind_only_semi_major_rate_mps =
+    amrex::Real(0.06536997242848683);
+constexpr amrex::Real reference_wind_only_center_translation_rate_mps =
+    amrex::Real(0.03665233925486989);
+
 constexpr amrex::Real initial_wavelet_age_s = amrex::Real(200.0);
 constexpr amrex::Real integration_duration_s = amrex::Real(100.0);
 constexpr amrex::Real dt_s = amrex::Real(1.0);
@@ -58,6 +76,170 @@ constexpr amrex::Real reference_raster_extent_m = amrex::Real(60.0);
 
 using RemeshedGrowthObserver =
     std::function<void(amrex::Real, const FirePerimeter&)>;
+
+using RemeshedGrowthSweepObserver =
+    std::function<void(
+        amrex::Real,
+        amrex::Real,
+        const FirePerimeter&,
+        const FirePerimeter&)>;
+
+struct M6e2cTimelineRow
+{
+    amrex::Real time_s{};
+    std::size_t pre_remesh_vertices{};
+    std::size_t post_remesh_vertices{};
+    std::size_t newly_arrived_cells{};
+    std::size_t arrived_cells{};
+};
+
+[[nodiscard]] const char*
+fire_test_output_dir () noexcept
+{
+    const char* output_dir =
+        std::getenv("ERF_FIRE_TEST_OUTPUT_DIR");
+    if (output_dir == nullptr || output_dir[0] == '\0') {
+        return nullptr;
+    }
+    return output_dir;
+}
+
+[[nodiscard]] std::ofstream
+open_fire_test_csv (const std::string& filename)
+{
+    const char* output_dir = fire_test_output_dir();
+    if (output_dir == nullptr) {
+        return {};
+    }
+
+    std::ofstream stream(
+        std::string(output_dir) + "/" + filename);
+    if (!stream.is_open()) {
+        throw std::runtime_error(
+            "Unable to open ERF-Fire visualization CSV output");
+    }
+
+    stream << std::setprecision(17);
+    return stream;
+}
+
+void
+maybe_write_m6e2c_timeline (
+    const std::string& filename,
+    const std::vector<M6e2cTimelineRow>& rows)
+{
+    std::ofstream stream = open_fire_test_csv(filename);
+    if (!stream.is_open()) {
+        return;
+    }
+
+    stream
+        << "time_s,pre_remesh_vertices,post_remesh_vertices,"
+        << "newly_arrived_cells,arrived_cells\n";
+
+    for (const auto& row : rows) {
+        stream
+            << row.time_s << ","
+            << row.pre_remesh_vertices << ","
+            << row.post_remesh_vertices << ","
+            << row.newly_arrived_cells << ","
+            << row.arrived_cells << "\n";
+    }
+}
+
+void
+maybe_write_m6e2c_wind_arrival_history (
+    const FireFirstArrivalRaster& arrival,
+    const FireBurnedFractionRaster& burned)
+{
+    std::ofstream stream =
+        open_fire_test_csv(
+            "m6e2c_wind_arrival_history.csv");
+    if (!stream.is_open()) {
+        return;
+    }
+
+    stream
+        << "cell_i,xlo_m,xhi_m,ylo_m,yhi_m,has_arrived,"
+        << "numerical_arrival_s,analytic_arrival_s,error_s,"
+        << "burned_fraction\n";
+
+    const auto& geometry = arrival.geometry();
+    for (std::size_t i = 0; i < geometry.nx; ++i) {
+        const auto cell = arrival.cell_bounds(i, 0);
+        const bool has_arrived =
+            arrival.has_arrived(i, 0);
+        const amrex::Real analytic_arrival_s =
+            cell.xlo_m
+            / reference_wind_only_head_ros_mps
+            - initial_wavelet_age_s;
+
+        stream
+            << i << ","
+            << cell.xlo_m << ","
+            << cell.xhi_m << ","
+            << cell.ylo_m << ","
+            << cell.yhi_m << ","
+            << (has_arrived ? 1 : 0) << ",";
+
+        if (has_arrived) {
+            const amrex::Real numerical_arrival_s =
+                arrival.first_arrival_time_s(i, 0);
+            stream
+                << numerical_arrival_s << ","
+                << analytic_arrival_s << ","
+                << numerical_arrival_s
+                    - analytic_arrival_s << ",";
+        } else {
+            stream
+                << ","
+                << analytic_arrival_s << ","
+                << ",";
+        }
+
+        stream
+            << burned.burned_fraction(i, 0)
+            << "\n";
+    }
+}
+
+void
+maybe_write_m6e2c_extinction_arrival_history (
+    const FireFirstArrivalRaster& arrival)
+{
+    std::ofstream stream =
+        open_fire_test_csv(
+            "m6e2c_extinction_arrival_history.csv");
+    if (!stream.is_open()) {
+        return;
+    }
+
+    stream
+        << "cell_i,xlo_m,xhi_m,ylo_m,yhi_m,has_arrived,"
+        << "arrival_time_s\n";
+
+    const auto& geometry = arrival.geometry();
+    for (std::size_t i = 0; i < geometry.nx; ++i) {
+        const auto cell = arrival.cell_bounds(i, 0);
+        const bool has_arrived =
+            arrival.has_arrived(i, 0);
+
+        stream
+            << i << ","
+            << cell.xlo_m << ","
+            << cell.xhi_m << ","
+            << cell.ylo_m << ","
+            << cell.yhi_m << ","
+            << (has_arrived ? 1 : 0) << ",";
+
+        if (has_arrived) {
+            stream
+                << arrival.first_arrival_time_s(i, 0);
+        }
+
+        stream << "\n";
+    }
+}
 
 FireVec2
 reference_heading (bool mirrored = false) noexcept
@@ -75,22 +257,25 @@ left_perpendicular (const FireVec2& direction) noexcept
 }
 
 FirePerimeter
-make_exact_reference_wavelet (
+make_reference_wavelet_with_rates (
     std::size_t vertex_count,
     amrex::Real age_s,
-    const FireVec2& heading)
+    const FireVec2& heading,
+    amrex::Real semi_major_rate_mps,
+    amrex::Real semi_minor_rate_mps,
+    amrex::Real center_translation_rate_mps)
 {
     std::vector<FireVec2> vertices;
     vertices.reserve(vertex_count);
 
     const FireVec2 flank_direction = left_perpendicular(heading);
     const FireVec2 center =
-        heading * (reference_center_translation_rate_mps * age_s);
+        heading * (center_translation_rate_mps * age_s);
 
     const amrex::Real semi_major_m =
-        reference_semi_major_rate_mps * age_s;
+        semi_major_rate_mps * age_s;
     const amrex::Real semi_minor_m =
-        reference_flank_ros_mps * age_s;
+        semi_minor_rate_mps * age_s;
 
     for (std::size_t i = 0; i < vertex_count; ++i) {
         const amrex::Real angle =
@@ -105,6 +290,35 @@ make_exact_reference_wavelet (
     }
 
     return FirePerimeter(std::move(vertices));
+}
+
+FirePerimeter
+make_exact_reference_wavelet (
+    std::size_t vertex_count,
+    amrex::Real age_s,
+    const FireVec2& heading)
+{
+    return make_reference_wavelet_with_rates(
+        vertex_count,
+        age_s,
+        heading,
+        reference_semi_major_rate_mps,
+        reference_flank_ros_mps,
+        reference_center_translation_rate_mps);
+}
+
+FirePerimeter
+make_wind_only_reference_wavelet (
+    std::size_t vertex_count,
+    amrex::Real age_s)
+{
+    return make_reference_wavelet_with_rates(
+        vertex_count,
+        age_s,
+        {1.0, 0.0},
+        reference_wind_only_semi_major_rate_mps,
+        reference_wind_only_flank_ros_mps,
+        reference_wind_only_center_translation_rate_mps);
 }
 
 amrex::Real
@@ -254,6 +468,19 @@ make_oblique_fm1_spread (bool mirrored = false)
         {0.0, mirrored ? -1.0 : 1.0});
 }
 
+RichardsDirectionalSpread
+make_wind_only_fm1_spread ()
+{
+    const auto behavior = ERFFire::evaluate_rothermel(
+        ERFFire::make_fm1_fuel_parameters(),
+        RothermelInputs{0.08, 1.0, 0.0});
+
+    return ERFFire::make_richards_directional_spread(
+        behavior,
+        {1.0, 0.0},
+        {0.0, 1.0});
+}
+
 FirePerimeter
 advance_fixed_topology (
     FirePerimeter perimeter,
@@ -326,7 +553,8 @@ advance_with_remeshing (
     const FireVec2& reference_heading,
     const FirePerimeterRemeshOptions& options,
     bool write_reference_snapshots = false,
-    const RemeshedGrowthObserver& observer = {})
+    const RemeshedGrowthObserver& observer = {},
+    const RemeshedGrowthSweepObserver& sweep_observer = {})
 {
     std::size_t vertices_removed = 0;
     std::size_t vertices_added = 0;
@@ -363,9 +591,21 @@ advance_with_remeshing (
 
     amrex::Real time_s = 0.0;
     for (int step = 1; step <= integration_steps; ++step) {
-        perimeter = ERFFire::advance_perimeter_rk2(
-            perimeter, time_s, dt_s, normal_speed);
-        time_s += dt_s;
+        const amrex::Real next_time_s = time_s + dt_s;
+        FirePerimeter advanced =
+            ERFFire::advance_perimeter_rk2(
+                perimeter, time_s, dt_s, normal_speed);
+
+        if (sweep_observer) {
+            sweep_observer(
+                time_s,
+                next_time_s,
+                perimeter,
+                advanced);
+        }
+
+        perimeter = std::move(advanced);
+        time_s = next_time_s;
 
         remeshed = ERFFire::remesh_perimeter(perimeter, options);
         perimeter = std::move(remeshed.perimeter);
@@ -1053,6 +1293,349 @@ TEST(FireRasterIntegration, ExtinguishedRemeshedFrontCreatesNoAdditionalBurnHist
     EXPECT_DOUBLE_EQ(
         static_cast<double>(repeated.burned_area_m2),
         static_cast<double>(initial_burned_area_m2));
+}
+
+TEST(FireArrivalIntegration, WindOnlyHeadStripTracksAnalyticArrivalThroughRemeshing)
+{
+    constexpr std::size_t initial_vertex_count = 512;
+    const auto spread = make_wind_only_fm1_spread();
+
+    const FirePerimeterRemeshOptions options{
+        0.25,
+        0.75,
+        0.0125
+    };
+
+    FireFirstArrivalRaster arrival({
+        5,
+        1,
+        22.0,
+        -0.25,
+        2.0,
+        0.5
+    });
+    FireBurnedFractionRaster burned(
+        arrival.geometry());
+
+    std::size_t sweep_count = 0;
+    std::size_t total_newly_arrived = 0;
+    std::size_t topology_change_steps = 0;
+    std::size_t last_pre_remesh_vertex_count = 0;
+    std::size_t last_newly_arrived_cell_count = 0;
+    std::size_t last_arrived_cell_count = 0;
+    bool sweep_observed = false;
+    std::vector<M6e2cTimelineRow> timeline;
+
+    const RemeshedGrowthSweepObserver sweep_observer =
+        [&] (
+            amrex::Real start_time_s,
+            amrex::Real end_time_s,
+            const FirePerimeter& start_perimeter,
+            const FirePerimeter& end_pre_remesh)
+    {
+        EXPECT_EQ(
+            start_perimeter.size(),
+            end_pre_remesh.size());
+
+        const auto arrival_update =
+            arrival.update_from_sweep(
+                start_perimeter,
+                end_pre_remesh,
+                start_time_s,
+                end_time_s,
+                1.0e-7);
+
+        (void)burned.update_from_perimeter(
+            end_pre_remesh);
+
+        total_newly_arrived +=
+            arrival_update.newly_arrived_cell_count;
+        last_newly_arrived_cell_count =
+            arrival_update.newly_arrived_cell_count;
+        last_arrived_cell_count =
+            arrival_update.arrived_cell_count;
+
+        const long long whole_end_seconds =
+            std::llround(end_time_s);
+        if (whole_end_seconds % 20 == 0) {
+            ERFFireTest::maybe_write_snapshot(
+                "m6e2c_wind_pre_remesh",
+                end_time_s,
+                end_pre_remesh);
+        }
+
+        for (std::size_t i = 0; i < 5; ++i) {
+            if (burned.burned_fraction(i, 0)
+                > amrex::Real(0.0)) {
+                EXPECT_TRUE(arrival.has_arrived(i, 0));
+                if (arrival.has_arrived(i, 0)) {
+                    EXPECT_LE(
+                        static_cast<double>(
+                            arrival.first_arrival_time_s(i, 0)),
+                        static_cast<double>(
+                            end_time_s + amrex::Real(1.0e-7)));
+                }
+            }
+        }
+
+        last_pre_remesh_vertex_count =
+            end_pre_remesh.size();
+        sweep_observed = true;
+        ++sweep_count;
+    };
+
+    const RemeshedGrowthObserver post_remesh_observer =
+        [&] (
+            amrex::Real time_s,
+            const FirePerimeter& perimeter)
+    {
+        const long long whole_seconds =
+            std::llround(time_s);
+        if (whole_seconds % 20 == 0) {
+            ERFFireTest::maybe_write_snapshot(
+                "m6e2c_wind_post_remesh",
+                time_s,
+                perimeter);
+            ERFFireTest::maybe_write_snapshot(
+                "m6e2c_wind_exact",
+                time_s,
+                make_wind_only_reference_wavelet(
+                    2048,
+                    initial_wavelet_age_s + time_s));
+        }
+
+        if (time_s == amrex::Real(0.0)) {
+            timeline.push_back({
+                time_s,
+                perimeter.size(),
+                perimeter.size(),
+                0U,
+                0U
+            });
+            return;
+        }
+
+        EXPECT_TRUE(sweep_observed);
+        if (perimeter.size()
+            != last_pre_remesh_vertex_count) {
+            ++topology_change_steps;
+        }
+
+        timeline.push_back({
+            time_s,
+            last_pre_remesh_vertex_count,
+            perimeter.size(),
+            last_newly_arrived_cell_count,
+            last_arrived_cell_count
+        });
+        sweep_observed = false;
+    };
+
+    (void)advance_with_remeshing(
+        make_wind_only_reference_wavelet(
+            initial_vertex_count,
+            initial_wavelet_age_s),
+        spread,
+        {1.0, 0.0},
+        options,
+        false,
+        post_remesh_observer,
+        sweep_observer);
+
+    EXPECT_EQ(sweep_count, 100U);
+    EXPECT_FALSE(sweep_observed);
+    EXPECT_GT(topology_change_steps, 0U);
+    EXPECT_EQ(arrival.arrived_cell_count(), 5U);
+    EXPECT_EQ(total_newly_arrived, 5U);
+
+    maybe_write_m6e2c_timeline(
+        "m6e2c_wind_timeline.csv",
+        timeline);
+    maybe_write_m6e2c_wind_arrival_history(
+        arrival,
+        burned);
+
+    for (std::size_t i = 0; i < 5; ++i) {
+        ASSERT_TRUE(arrival.has_arrived(i, 0));
+        EXPECT_GT(
+            static_cast<double>(
+                burned.burned_fraction(i, 0)),
+            0.0);
+
+        const amrex::Real cell_xlo_m =
+            amrex::Real(22.0)
+            + amrex::Real(2.0)
+            * static_cast<amrex::Real>(i);
+        const amrex::Real exact_arrival_time_s =
+            cell_xlo_m
+            / reference_wind_only_head_ros_mps
+            - initial_wavelet_age_s;
+        const amrex::Real stored_arrival_time_s =
+            arrival.first_arrival_time_s(i, 0);
+
+        EXPECT_NEAR(
+            static_cast<double>(stored_arrival_time_s),
+            static_cast<double>(exact_arrival_time_s),
+            0.25);
+
+        if (i > 0) {
+            EXPECT_GT(
+                static_cast<double>(stored_arrival_time_s),
+                static_cast<double>(
+                    arrival.first_arrival_time_s(i - 1, 0)));
+        }
+    }
+}
+
+TEST(FireArrivalIntegration, ExtinguishedRemeshedSweepsDoNotAdvanceArrivalHistory)
+{
+    const auto behavior = ERFFire::evaluate_rothermel(
+        ERFFire::make_fm1_fuel_parameters(),
+        RothermelInputs{0.12, 1.0, 0.20});
+    const auto spread =
+        ERFFire::make_richards_directional_spread(
+            behavior,
+            {1.0, 0.0},
+            {0.0, 1.0});
+
+    const FirePerimeterRemeshOptions options{
+        0.25,
+        0.75,
+        0.0125
+    };
+
+    FireFirstArrivalRaster arrival({
+        6,
+        1,
+        8.0,
+        -0.25,
+        1.0,
+        0.5
+    });
+
+    std::size_t sweep_count = 0;
+    std::size_t total_newly_arrived = 0;
+    std::size_t last_pre_remesh_vertex_count = 0;
+    std::size_t last_newly_arrived_cell_count = 0;
+    std::size_t last_arrived_cell_count = 0;
+    bool sweep_observed = false;
+    std::vector<M6e2cTimelineRow> timeline;
+
+    const RemeshedGrowthSweepObserver sweep_observer =
+        [&] (
+            amrex::Real start_time_s,
+            amrex::Real end_time_s,
+            const FirePerimeter& start_perimeter,
+            const FirePerimeter& end_pre_remesh)
+    {
+        const auto update =
+            arrival.update_from_sweep(
+                start_perimeter,
+                end_pre_remesh,
+                start_time_s,
+                end_time_s,
+                1.0e-7);
+
+        if (sweep_count == 0) {
+            EXPECT_EQ(
+                update.newly_arrived_cell_count,
+                2U);
+        } else {
+            EXPECT_EQ(
+                update.newly_arrived_cell_count,
+                0U);
+        }
+
+        total_newly_arrived +=
+            update.newly_arrived_cell_count;
+        last_pre_remesh_vertex_count =
+            end_pre_remesh.size();
+        last_newly_arrived_cell_count =
+            update.newly_arrived_cell_count;
+        last_arrived_cell_count =
+            update.arrived_cell_count;
+        sweep_observed = true;
+
+        const long long whole_end_seconds =
+            std::llround(end_time_s);
+        if (whole_end_seconds % 25 == 0) {
+            ERFFireTest::maybe_write_snapshot(
+                "m6e2c_extinction_pre_remesh",
+                end_time_s,
+                end_pre_remesh);
+        }
+
+        ++sweep_count;
+    };
+
+    const RemeshedGrowthObserver post_remesh_observer =
+        [&] (
+            amrex::Real time_s,
+            const FirePerimeter& perimeter)
+    {
+        const long long whole_seconds =
+            std::llround(time_s);
+        if (whole_seconds % 25 == 0) {
+            ERFFireTest::maybe_write_snapshot(
+                "m6e2c_extinction_post_remesh",
+                time_s,
+                perimeter);
+        }
+
+        if (time_s == amrex::Real(0.0)) {
+            timeline.push_back({
+                time_s,
+                perimeter.size(),
+                perimeter.size(),
+                0U,
+                0U
+            });
+            return;
+        }
+
+        EXPECT_TRUE(sweep_observed);
+        timeline.push_back({
+            time_s,
+            last_pre_remesh_vertex_count,
+            perimeter.size(),
+            last_newly_arrived_cell_count,
+            last_arrived_cell_count
+        });
+        sweep_observed = false;
+    };
+
+    (void)advance_with_remeshing(
+        ERFFireTest::make_circle(256, 10.0),
+        spread,
+        {1.0, 0.0},
+        options,
+        false,
+        post_remesh_observer,
+        sweep_observer);
+
+    EXPECT_EQ(sweep_count, 100U);
+    EXPECT_FALSE(sweep_observed);
+    EXPECT_EQ(total_newly_arrived, 2U);
+    EXPECT_EQ(arrival.arrived_cell_count(), 2U);
+
+    maybe_write_m6e2c_timeline(
+        "m6e2c_extinction_timeline.csv",
+        timeline);
+    maybe_write_m6e2c_extinction_arrival_history(
+        arrival);
+
+    ASSERT_TRUE(arrival.has_arrived(0, 0));
+    ASSERT_TRUE(arrival.has_arrived(1, 0));
+    EXPECT_FALSE(arrival.has_arrived(2, 0));
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            arrival.first_arrival_time_s(0, 0)),
+        0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            arrival.first_arrival_time_s(1, 0)),
+        0.0);
 }
 
 TEST(FireStandaloneGrowth, ExtinctionWithRemeshingIsIdempotentlyStationary)
