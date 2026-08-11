@@ -37,3 +37,7 @@ erf_register_gtest_suite(erf_fire_unit_tests
   DISCOVERY_TIMEOUT 60
   EXECUTION_TIMEOUT 900
 )
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireEnvironment.cpp
+)
