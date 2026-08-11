@@ -2,26 +2,12 @@
 #define ERF_FIRE_CELL_COVERAGE_H
 
 #include <ERF_FirePerimeter.H>
+#include <ERF_FireRasterGeometry.H>
 
 #include <AMReX_REAL.H>
 
 namespace ERFFire
 {
-
-/**
- * Physical bounds of one two-dimensional Cartesian raster cell.
- *
- * All coordinates are SI meters.
- * A raster adapter is needed to construct these physical bounds 
- * from the host grid.
- */
-struct FireCartesianCell2D
-{
-    amrex::Real xlo_m{};
-    amrex::Real xhi_m{};
-    amrex::Real ylo_m{};
-    amrex::Real yhi_m{};
-};
 
 /**
  * Exact polygon-cell intersection area for the current piecewise-linear

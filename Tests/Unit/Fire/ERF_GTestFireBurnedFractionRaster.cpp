@@ -1,4 +1,6 @@
 #include <ERF_FireBurnedFractionRaster.H>
+#include <ERF_FirePerimeter.H>
+#include <ERF_FireTypes.H>
 
 #include <gtest/gtest.h>
 
