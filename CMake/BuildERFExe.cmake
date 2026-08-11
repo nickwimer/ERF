@@ -33,6 +33,7 @@ function(erf_add_fire_sources target)
     ${FIRE_SRC_DIR}/Raster/ERF_FireCellCoverage.cpp
     ${FIRE_SRC_DIR}/Raster/ERF_FireBurnedFraction.cpp
     ${FIRE_SRC_DIR}/Raster/ERF_FireBurnedFractionRaster.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireCellArrival.cpp
   )
 
   target_include_directories(${target} PUBLIC
