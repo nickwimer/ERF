@@ -218,7 +218,7 @@ TEST(FireRichards, RejectsInvalidInputs)
         (void)ERFFire::make_richards_ellipse({2.0, 0.0}, 0.5, 2.0),
         std::invalid_argument);
     EXPECT_THROW(
-        (void)ERFFire::make_richards_ellipse({1.0, 0.0}, 0.0, 2.0),
+        (void)ERFFire::make_richards_ellipse({1.0, 0.0}, -0.1, 2.0),
         std::invalid_argument);
     EXPECT_THROW(
         (void)ERFFire::make_richards_ellipse({1.0, 0.0}, 0.5, -1.0),
@@ -227,6 +227,9 @@ TEST(FireRichards, RejectsInvalidInputs)
         (void)ERFFire::farsite_unclamped_length_to_breadth(
             std::numeric_limits<amrex::Real>::infinity()),
         std::invalid_argument);
+    EXPECT_THROW(
+        (void)ERFFire::farsite_unclamped_length_to_breadth(1.0e6),
+        std::overflow_error);
 
     const auto ellipse = ERFFire::make_richards_ellipse(
         {1.0, 0.0}, 0.5, 2.0);

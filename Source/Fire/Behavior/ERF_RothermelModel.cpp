@@ -230,6 +230,12 @@ evaluate_rothermel (
         amrex::Real(0.715)
         * std::exp(amrex::Real(-3.59e-4) * sigma);
 
+    // Equivalent SI representation of the same native-unit wind law.
+    const amrex::Real wind_factor_coefficient_si =
+        wind_c
+        * std::pow(mps_to_ft_min, wind_b)
+        * std::pow(beta_ratio, -wind_e);
+
     const amrex::Real phi_w =
         wind_ft_min == amrex::Real(0.0)
         ? amrex::Real(0.0)
@@ -265,10 +271,47 @@ evaluate_rothermel (
         heat_of_preignition * btu_lb_to_j_kg,
         heat_sink * btu_ft3_to_j_m3,
         r0_ft_min * ft_min_to_mps,
+        wind_factor_coefficient_si,
+        wind_b,
         phi_w,
         phi_s,
         final_ros_ft_min * ft_min_to_mps
     };
+}
+
+amrex::Real
+rothermel_model_wind_speed_for_factor_mps (
+    const RothermelResult& result,
+    amrex::Real target_wind_factor)
+{
+    if (!finite(target_wind_factor)
+        || target_wind_factor < amrex::Real(0.0)) {
+        throw std::invalid_argument(
+            "Rothermel target wind factor must be finite and non-negative");
+    }
+
+    if (!finite(result.wind_factor_coefficient_si)
+        || result.wind_factor_coefficient_si <= amrex::Real(0.0)
+        || !finite(result.wind_factor_exponent)
+        || result.wind_factor_exponent <= amrex::Real(0.0)) {
+        throw std::invalid_argument(
+            "Rothermel wind-factor inversion parameters are invalid");
+    }
+
+    if (target_wind_factor == amrex::Real(0.0)) {
+        return amrex::Real(0.0);
+    }
+
+    const amrex::Real wind_mps = std::pow(
+        target_wind_factor / result.wind_factor_coefficient_si,
+        amrex::Real(1.0) / result.wind_factor_exponent);
+
+    if (!finite(wind_mps)) {
+        throw std::overflow_error(
+            "Rothermel equivalent model wind is not finite");
+    }
+
+    return wind_mps;
 }
 
 } // namespace ERFFire

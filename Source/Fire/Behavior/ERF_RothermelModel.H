@@ -53,6 +53,12 @@ struct RothermelResult
     amrex::Real heat_of_preignition_j_kg{};
     amrex::Real heat_sink_j_m3{};
     amrex::Real no_wind_no_slope_ros_mps{};
+
+    // SI power-law diagnostics for the Rothermel wind factor:
+    // Phi_w = wind_factor_coefficient_si * U_mps^wind_factor_exponent.
+    amrex::Real wind_factor_coefficient_si{};
+    amrex::Real wind_factor_exponent{};
+
     amrex::Real wind_factor{};
     amrex::Real slope_factor{};
     amrex::Real aligned_heading_ros_mps{};
@@ -69,6 +75,16 @@ struct RothermelResult
 [[nodiscard]] RothermelResult evaluate_rothermel(
     const RothermelFuelParameters& fuel,
     const RothermelInputs& inputs);
+
+/**
+ * Invert the same Rothermel wind-factor power law used by
+ * evaluate_rothermel. The returned SI speed is the model/midflame wind
+ * that would produce target_wind_factor for this evaluated fuel bed.
+ * No wind-speed cap or WAF policy is applied here.
+ */
+[[nodiscard]] amrex::Real rothermel_model_wind_speed_for_factor_mps(
+    const RothermelResult& result,
+    amrex::Real target_wind_factor);
 
 } // namespace ERFFire
 

@@ -29,6 +29,7 @@ function(erf_add_fire_sources target)
     ${FIRE_SRC_DIR}/Behavior/ERF_RothermelFuel.cpp
     ${FIRE_SRC_DIR}/Behavior/ERF_RothermelModel.cpp
     ${FIRE_SRC_DIR}/Spread/ERF_RichardsEllipse.cpp
+    ${FIRE_SRC_DIR}/Spread/ERF_RichardsDirectionalSpread.cpp
   )
 
   target_include_directories(${target} PUBLIC

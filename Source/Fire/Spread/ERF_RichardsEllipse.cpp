@@ -51,11 +51,19 @@ farsite_unclamped_length_to_breadth (
 
     // Finney (1998, revised 2004), equation 13. The -0.397 modification makes
     // LB exactly 1 at U=0; Finney documents U in m/s for this formulation.
-    return amrex::Real(0.936)
+    const amrex::Real length_to_breadth =
+        amrex::Real(0.936)
             * std::exp(amrex::Real(0.2566) * effective_midflame_wind_mps)
         + amrex::Real(0.461)
             * std::exp(amrex::Real(-0.1548) * effective_midflame_wind_mps)
         - amrex::Real(0.397);
+
+    if (!finite(length_to_breadth)) {
+        throw std::overflow_error(
+            "FARSITE length-to-breadth relation overflowed");
+    }
+
+    return length_to_breadth;
 }
 
 RichardsEllipse
@@ -66,9 +74,9 @@ make_richards_ellipse (
 {
     require_unit_vector(heading_unit, "heading direction");
 
-    if (!finite(heading_ros_mps) || heading_ros_mps <= amrex::Real(0.0)) {
+    if (!finite(heading_ros_mps) || heading_ros_mps < amrex::Real(0.0)) {
         throw std::invalid_argument(
-            "Richards heading spread rate must be finite and positive");
+            "Richards heading spread rate must be finite and non-negative");
     }
 
     const amrex::Real unclamped_lb =
@@ -116,6 +124,12 @@ richards_normal_speed_mps (
 {
     require_unit_vector(ellipse.heading_unit, "ellipse heading direction");
     require_unit_vector(outward_normal_unit, "outward normal");
+
+    if (ellipse.semi_minor_rate_mps == amrex::Real(0.0)
+        && ellipse.semi_major_rate_mps == amrex::Real(0.0)
+        && ellipse.center_translation_rate_mps == amrex::Real(0.0)) {
+        return amrex::Real(0.0);
+    }
 
     if (!finite(ellipse.semi_minor_rate_mps)
         || !finite(ellipse.semi_major_rate_mps)
