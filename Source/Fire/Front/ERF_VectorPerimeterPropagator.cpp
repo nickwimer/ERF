@@ -1,4 +1,5 @@
 #include <ERF_VectorPerimeterPropagator.H>
+#include <ERF_FireGeometry.H>
 
 #include <cmath>
 #include <stdexcept>
@@ -10,21 +11,6 @@ namespace ERFFire
 {
 namespace
 {
-
-amrex::Real
-raw_signed_area_m2 (const std::vector<FireVec2>& vertices_m) noexcept
-{
-    amrex::Real twice_area = 0.0;
-
-    for (std::size_t i = 0; i < vertices_m.size(); ++i) {
-        const auto& current = vertices_m[i];
-        const auto& next = vertices_m[(i + 1) % vertices_m.size()];
-        twice_area += current.x * next.y - next.x * current.y;
-    }
-
-    return amrex::Real(0.5) * twice_area;
-}
-
 amrex::Real
 checked_speed (
     const NormalSpeedFunction& normal_speed_mps,
@@ -48,7 +34,7 @@ require_counter_clockwise (
     const std::vector<FireVec2>& vertices_m,
     const char* stage)
 {
-    if (raw_signed_area_m2(vertices_m) <= amrex::Real(0.0)) {
+    if (detail::signed_polygon_area_m2(vertices_m) <= amrex::Real(0.0)) {
         throw std::runtime_error(
             std::string("Fire perimeter lost counter-clockwise orientation at ")
             + stage);

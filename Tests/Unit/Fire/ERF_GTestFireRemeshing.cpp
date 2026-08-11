@@ -1,5 +1,6 @@
 #include <ERF_FirePerimeterRemesher.H>
 #include <ERF_VectorPerimeterPropagator.H>
+#include "ERF_FireTestUtils.H"
 
 #include <gtest/gtest.h>
 
@@ -21,30 +22,6 @@ namespace
 using ERFFire::FirePerimeter;
 using ERFFire::FirePerimeterRemeshOptions;
 using ERFFire::FireVec2;
-
-constexpr amrex::Real pi =
-    amrex::Real(3.141592653589793238462643383279502884L);
-
-FirePerimeter
-make_circle (std::size_t vertex_count, amrex::Real radius_m)
-{
-    std::vector<FireVec2> vertices;
-    vertices.reserve(vertex_count);
-
-    for (std::size_t i = 0; i < vertex_count; ++i) {
-        const amrex::Real theta =
-            amrex::Real(2.0) * pi
-            * static_cast<amrex::Real>(i)
-            / static_cast<amrex::Real>(vertex_count);
-        vertices.push_back({
-            radius_m * std::cos(theta),
-            radius_m * std::sin(theta)
-        });
-    }
-
-    return FirePerimeter(std::move(vertices));
-}
-
 amrex::Real
 minimum_edge_length_m (const FirePerimeter& perimeter)
 {
@@ -182,31 +159,6 @@ transform_perimeter (
 
     return FirePerimeter(std::move(transformed));
 }
-
-void
-write_snapshot (
-    const std::string& filename,
-    const FirePerimeter& perimeter)
-{
-    const char* output_dir = std::getenv("ERF_FIRE_TEST_OUTPUT_DIR");
-    if (output_dir == nullptr || output_dir[0] == '\0') {
-        return;
-    }
-
-    const std::filesystem::path directory(output_dir);
-    std::filesystem::create_directories(directory);
-
-    std::ofstream stream(directory / filename);
-    ASSERT_TRUE(stream.good());
-
-    stream << "vertex,x_m,y_m\n";
-    stream << std::setprecision(17);
-    for (std::size_t i = 0; i < perimeter.size(); ++i) {
-        const auto& vertex = perimeter.vertices_m()[i];
-        stream << i << ',' << vertex.x << ',' << vertex.y << '\n';
-    }
-}
-
 TEST(FireRemeshing, StraightEdgeSubdivisionPreservesPolygonExactly)
 {
     const FirePerimeter rectangle({
@@ -299,7 +251,7 @@ TEST(FireRemeshing, ExpandingCircleMaintainsPhysicalSpacingAndAnalyticRadius)
 {
     const FirePerimeterRemeshOptions options{0.6, 1.2, 0.03};
     FirePerimeter perimeter = ERFFire::remesh_perimeter(
-        make_circle(256, 10.0), options).perimeter;
+        ERFFireTest::make_circle(256, 10.0), options).perimeter;
 
     const auto speed = [] (
         const FireVec2&,
@@ -309,7 +261,7 @@ TEST(FireRemeshing, ExpandingCircleMaintainsPhysicalSpacingAndAnalyticRadius)
         return 0.1;
     };
 
-    write_snapshot("remesh_circle_t000.csv", perimeter);
+    ERFFireTest::write_snapshot("remesh_circle_t000.csv", perimeter);
 
     amrex::Real time_s = 0.0;
     for (int step = 1; step <= 100; ++step) {
@@ -323,7 +275,7 @@ TEST(FireRemeshing, ExpandingCircleMaintainsPhysicalSpacingAndAnalyticRadius)
             filename << "remesh_circle_t"
                      << std::setw(3) << std::setfill('0') << step
                      << ".csv";
-            write_snapshot(filename.str(), perimeter);
+            ERFFireTest::write_snapshot(filename.str(), perimeter);
         }
     }
 
@@ -341,8 +293,8 @@ TEST(FireRemeshing, SyntheticAnisotropyTracksHighResolutionReference)
 {
     const FirePerimeterRemeshOptions options{0.6, 1.2, 0.03};
     FirePerimeter remeshed = ERFFire::remesh_perimeter(
-        make_circle(256, 10.0), options).perimeter;
-    FirePerimeter reference = make_circle(1024, 10.0);
+        ERFFireTest::make_circle(256, 10.0), options).perimeter;
+    FirePerimeter reference = ERFFireTest::make_circle(1024, 10.0);
 
     const auto speed = [] (
         const FireVec2&,
@@ -367,8 +319,8 @@ TEST(FireRemeshing, SyntheticAnisotropyTracksHighResolutionReference)
         time_s += dt_s;
     }
 
-    write_snapshot("remesh_nonuniform_t100.csv", remeshed);
-    write_snapshot("reference_nonuniform_t100.csv", reference);
+    ERFFireTest::write_snapshot("remesh_nonuniform_t100.csv", remeshed);
+    ERFFireTest::write_snapshot("reference_nonuniform_t100.csv", reference);
 
     const amrex::Real geometric_distance_m =
         symmetric_vertex_to_segments_distance_m(remeshed, reference);
@@ -415,7 +367,7 @@ TEST(FireRemeshing, SharpCornerIsNotCollapsedPastChordTolerance)
 
 TEST(FireRemeshing, RejectsInvalidPhysicalSpacingControls)
 {
-    const FirePerimeter perimeter = make_circle(32, 10.0);
+    const FirePerimeter perimeter = ERFFireTest::make_circle(32, 10.0);
 
     EXPECT_THROW(
         (void) ERFFire::remesh_perimeter(

@@ -1,4 +1,5 @@
 #include <ERF_VectorPerimeterPropagator.H>
+#include "ERF_FireTestUtils.H"
 
 #include <gtest/gtest.h>
 
@@ -18,31 +19,6 @@ namespace
 
 using ERFFire::FirePerimeter;
 using ERFFire::FireVec2;
-
-constexpr amrex::Real pi =
-    3.141592653589793238462643383279502884L;
-
-FirePerimeter
-make_circle (std::size_t vertex_count, amrex::Real radius_m)
-{
-    std::vector<FireVec2> vertices;
-    vertices.reserve(vertex_count);
-
-    for (std::size_t i = 0; i < vertex_count; ++i) {
-        const amrex::Real theta =
-            amrex::Real(2.0) * pi
-            * static_cast<amrex::Real>(i)
-            / static_cast<amrex::Real>(vertex_count);
-
-        vertices.push_back({
-            radius_m * std::cos(theta),
-            radius_m * std::sin(theta)
-        });
-    }
-
-    return FirePerimeter(std::move(vertices));
-}
-
 FirePerimeter
 make_planar_strip (
     std::size_t short_side_segments,
@@ -96,41 +72,6 @@ make_planar_strip (
 
     return FirePerimeter(std::move(vertices));
 }
-
-void
-maybe_write_snapshot (
-    const std::string& case_name,
-    amrex::Real time_s,
-    const FirePerimeter& perimeter)
-{
-    const char* output_dir = std::getenv("ERF_FIRE_TEST_OUTPUT_DIR");
-    if (output_dir == nullptr || output_dir[0] == '\0') {
-        return;
-    }
-
-    const std::filesystem::path directory(output_dir);
-    std::filesystem::create_directories(directory);
-
-    std::ostringstream filename;
-    filename << case_name
-             << "_t"
-             << std::setw(3)
-             << std::setfill('0')
-             << static_cast<long long>(std::llround(time_s))
-             << ".csv";
-
-    std::ofstream stream(directory / filename.str());
-    ASSERT_TRUE(stream.good());
-
-    stream << "vertex,x_m,y_m\n";
-    stream << std::setprecision(17);
-
-    for (std::size_t i = 0; i < perimeter.size(); ++i) {
-        const auto& vertex = perimeter.vertices_m()[i];
-        stream << i << ',' << vertex.x << ',' << vertex.y << '\n';
-    }
-}
-
 TEST(FirePropagation, PrescribedPlanarStripAdvancesAtRequestedSpeed)
 {
     constexpr std::size_t short_side_segments = 20;
@@ -156,7 +97,7 @@ TEST(FirePropagation, PrescribedPlanarStripAdvancesAtRequestedSpeed)
     };
 
     amrex::Real time_s = 0.0;
-    maybe_write_snapshot("planar", time_s, perimeter);
+    ERFFireTest::maybe_write_snapshot("planar", time_s, perimeter);
 
     for (int step = 1; step <= total_steps; ++step) {
         perimeter = ERFFire::advance_perimeter_rk2(
@@ -164,7 +105,7 @@ TEST(FirePropagation, PrescribedPlanarStripAdvancesAtRequestedSpeed)
         time_s += dt_s;
 
         if (step % 25 == 0) {
-            maybe_write_snapshot("planar", time_s, perimeter);
+            ERFFireTest::maybe_write_snapshot("planar", time_s, perimeter);
         }
     }
 
@@ -204,7 +145,7 @@ TEST(FirePropagation, PrescribedCircleExpandsRadially)
     constexpr amrex::Real dt_s = 1.0;
     constexpr int total_steps = 100;
 
-    FirePerimeter perimeter = make_circle(vertex_count, initial_radius_m);
+    FirePerimeter perimeter = ERFFireTest::make_circle(vertex_count, initial_radius_m);
     const amrex::Real initial_area_m2 = perimeter.area_m2();
 
     const auto speed = [=] (
@@ -216,7 +157,7 @@ TEST(FirePropagation, PrescribedCircleExpandsRadially)
     };
 
     amrex::Real time_s = 0.0;
-    maybe_write_snapshot("circle", time_s, perimeter);
+    ERFFireTest::maybe_write_snapshot("circle", time_s, perimeter);
 
     for (int step = 1; step <= total_steps; ++step) {
         perimeter = ERFFire::advance_perimeter_rk2(
@@ -224,7 +165,7 @@ TEST(FirePropagation, PrescribedCircleExpandsRadially)
         time_s += dt_s;
 
         if (step % 25 == 0) {
-            maybe_write_snapshot("circle", time_s, perimeter);
+            ERFFireTest::maybe_write_snapshot("circle", time_s, perimeter);
         }
     }
 
@@ -270,7 +211,7 @@ TEST(FirePropagation, MidpointIntegratorShowsSecondOrderConvergence)
 
     const auto run = [=] (amrex::Real dt_s) -> amrex::Real
     {
-        FirePerimeter perimeter = make_circle(64, initial_radius_m);
+        FirePerimeter perimeter = ERFFireTest::make_circle(64, initial_radius_m);
 
         const auto speed = [=] (
             const FireVec2& position_m,
@@ -318,7 +259,7 @@ TEST(FirePropagation, MidpointIntegratorShowsSecondOrderConvergence)
 
 TEST(FirePropagation, RejectsInvalidIntegratorInputs)
 {
-    const FirePerimeter perimeter = make_circle(32, 10.0);
+    const FirePerimeter perimeter = ERFFireTest::make_circle(32, 10.0);
 
     const auto constant_speed = [] (
         const FireVec2&,

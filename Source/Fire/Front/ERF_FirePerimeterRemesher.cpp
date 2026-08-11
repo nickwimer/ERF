@@ -1,4 +1,5 @@
 #include <ERF_FirePerimeterRemesher.H>
+#include <ERF_FireGeometry.H>
 
 #include <algorithm>
 #include <cmath>
@@ -11,27 +12,6 @@ namespace ERFFire
 {
 namespace
 {
-
-amrex::Real
-cross (const FireVec2& a, const FireVec2& b) noexcept
-{
-    return a.x * b.y - a.y * b.x;
-}
-
-amrex::Real
-raw_signed_area_m2 (const std::vector<FireVec2>& vertices_m) noexcept
-{
-    const FireVec2 origin = vertices_m.front();
-    amrex::Real twice_area = 0.0;
-
-    for (std::size_t i = 1; i + 1 < vertices_m.size(); ++i) {
-        twice_area += cross(
-            vertices_m[i] - origin,
-            vertices_m[i + 1] - origin);
-    }
-
-    return amrex::Real(0.5) * twice_area;
-}
 
 amrex::Real
 point_to_segment_distance_m (
@@ -60,7 +40,7 @@ orientation_sign (
     const FireVec2& b,
     const FireVec2& c) noexcept
 {
-    const amrex::Real value = cross(b - a, c - a);
+    const amrex::Real value = detail::cross_2d(b - a, c - a);
     const amrex::Real scale =
         std::max({
             norm(b - a),
@@ -238,7 +218,7 @@ can_remove_vertex (
 
     std::vector<FireVec2> candidate = vertices_m;
     candidate.erase(candidate.begin() + static_cast<std::ptrdiff_t>(index));
-    return raw_signed_area_m2(candidate) > amrex::Real(0.0);
+    return detail::signed_polygon_area_m2(candidate) > amrex::Real(0.0);
 }
 
 std::size_t

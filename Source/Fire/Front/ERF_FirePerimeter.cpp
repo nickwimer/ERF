@@ -1,4 +1,5 @@
 #include <ERF_FirePerimeter.H>
+#include <ERF_FireGeometry.H>
 
 #include <algorithm>
 #include <cmath>
@@ -61,15 +62,7 @@ FirePerimeter::validate () const
 amrex::Real
 FirePerimeter::signed_area_m2 () const noexcept
 {
-    amrex::Real twice_area = 0.0;
-
-    for (std::size_t i = 0; i < m_vertices_m.size(); ++i) {
-        const auto& current = m_vertices_m[i];
-        const auto& next = m_vertices_m[(i + 1) % m_vertices_m.size()];
-        twice_area += current.x * next.y - next.x * current.y;
-    }
-
-    return amrex::Real(0.5) * twice_area;
+    return detail::signed_polygon_area_m2(m_vertices_m);
 }
 
 amrex::Real
