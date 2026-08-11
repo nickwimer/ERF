@@ -25,6 +25,7 @@ function(erf_add_fire_sources target)
   target_sources(${target} PRIVATE
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeter.cpp
     ${FIRE_SRC_DIR}/Front/ERF_VectorPerimeterPropagator.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterRemesher.cpp
   )
 
   target_include_directories(${target} PUBLIC
