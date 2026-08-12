@@ -193,16 +193,11 @@ validate_common_level0_coordinate_scope (
         "fire z_phys_nd BoxArray does not cover the level-0 nodal domain");
 }
 
+
 void
-validate_flat_scope_and_layout (
+validate_horizontal_velocity_layout_and_ghosts (
     const ERFFireLevel0EnvironmentInputs& inputs)
 {
-    validate_common_level0_coordinate_scope(inputs);
-
-    require(
-        inputs.mesh_type != MeshType::VariableDz,
-        "flat Fire environment defers VariableDz / terrain-fitted wind sampling");
-
     const amrex::Box& domain = inputs.geometry.Domain();
     const amrex::Box expected_u =
         amrex::convert(domain, amrex::IntVect(1, 0, 0));
@@ -224,6 +219,195 @@ validate_flat_scope_and_layout (
     require(
         y_ng[0] >= 1 && y_ng[1] >= 1 && y_ng[2] >= 1,
         "fire y-velocity snapshot requires at least one filled ghost cell");
+}
+
+void
+validate_reference_height_agl (amrex::Real reference_height_agl_m)
+{
+    if (!std::isfinite(reference_height_agl_m)
+        || reference_height_agl_m < amrex::Real(0)) {
+        throw std::invalid_argument(
+            "fire atmospheric reference height AGL must be finite and nonnegative");
+    }
+}
+
+enum class HorizontalVelocityFace
+{
+    X,
+    Y
+};
+
+amrex::Real
+terrain_face_ground_height_m (
+    const amrex::Array4<const amrex::Real>& z,
+    int i,
+    int j,
+    int bottom_k,
+    HorizontalVelocityFace face)
+{
+    amrex::Real value{};
+    if (face == HorizontalVelocityFace::X) {
+        value =
+            amrex::Real(0.5)
+            * (z(i, j, bottom_k)
+               + z(i, j + 1, bottom_k));
+    } else {
+        value =
+            amrex::Real(0.5)
+            * (z(i, j, bottom_k)
+               + z(i + 1, j, bottom_k));
+    }
+
+    require(
+        std::isfinite(value),
+        "fire terrain face ground height must be finite");
+    return value;
+}
+
+amrex::Real
+terrain_face_cell_center_height_m (
+    const amrex::Array4<const amrex::Real>& z,
+    int i,
+    int j,
+    int k,
+    HorizontalVelocityFace face)
+{
+    amrex::Real value{};
+    if (face == HorizontalVelocityFace::X) {
+        value =
+            amrex::Real(0.25)
+            * (z(i, j, k)
+               + z(i, j + 1, k)
+               + z(i, j, k + 1)
+               + z(i, j + 1, k + 1));
+    } else {
+        value =
+            amrex::Real(0.25)
+            * (z(i, j, k)
+               + z(i + 1, j, k)
+               + z(i, j, k + 1)
+               + z(i + 1, j, k + 1));
+    }
+
+    require(
+        std::isfinite(value),
+        "fire terrain face cell-center height must be finite");
+    return value;
+}
+
+amrex::Real
+terrain_face_reference_wind_value (
+    const amrex::Array4<const amrex::Real>& velocity,
+    const amrex::Array4<const amrex::Real>& z,
+    int i,
+    int j,
+    int domain_klo,
+    int domain_khi,
+    amrex::Real reference_height_agl_m,
+    HorizontalVelocityFace face,
+    std::vector<amrex::Real>& agl_cell_center_m)
+{
+    const amrex::Real ground =
+        terrain_face_ground_height_m(
+            z, i, j, domain_klo, face);
+
+    const std::size_t nz =
+        static_cast<std::size_t>(
+            domain_khi - domain_klo + 1);
+    if (agl_cell_center_m.size() != nz) {
+        throw std::logic_error(
+            "fire terrain AGL column scratch has wrong size");
+    }
+
+    for (int k = domain_klo; k <= domain_khi; ++k) {
+        const amrex::Real physical_height =
+            terrain_face_cell_center_height_m(
+                z, i, j, k, face);
+        const amrex::Real agl =
+            physical_height - ground;
+
+        require(
+            std::isfinite(agl),
+            "fire terrain face AGL cell-center height must be finite");
+
+        agl_cell_center_m[
+            static_cast<std::size_t>(k - domain_klo)] = agl;
+    }
+
+    const FireVerticalLinearBracket bracket =
+        fire_vertical_linear_bracket(
+            agl_cell_center_m,
+            reference_height_agl_m);
+
+    const int lower_k =
+        domain_klo
+        + static_cast<int>(bracket.lower_k);
+    const int upper_k =
+        domain_klo
+        + static_cast<int>(bracket.upper_k);
+
+    const amrex::Real lower_value =
+        velocity(i, j, lower_k);
+    const amrex::Real upper_value =
+        velocity(i, j, upper_k);
+
+    require(
+        std::isfinite(lower_value)
+        && std::isfinite(upper_value),
+        "fire terrain reference-wind source values must be finite");
+
+    if (lower_k == upper_k) {
+        return lower_value;
+    }
+
+    const amrex::Real value =
+        lower_value
+        + bracket.upper_weight
+            * (upper_value - lower_value);
+
+    if (!std::isfinite(value)) {
+        throw std::overflow_error(
+            "fire terrain vertically interpolated wind is not finite");
+    }
+    return value;
+}
+
+void
+validate_flat_scope_and_layout (
+    const ERFFireLevel0EnvironmentInputs& inputs)
+{
+    validate_common_level0_coordinate_scope(inputs);
+
+    require(
+        inputs.mesh_type != MeshType::VariableDz,
+        "flat Fire environment defers VariableDz / terrain-fitted wind sampling");
+
+    validate_horizontal_velocity_layout_and_ghosts(inputs);
+}
+
+
+void
+validate_terrain_reference_wind_scope_and_layout (
+    const ERFFireLevel0EnvironmentInputs& inputs)
+{
+    validate_common_level0_coordinate_scope(inputs);
+
+    require(
+        inputs.mesh_type == MeshType::VariableDz,
+        "terrain reference-wind snapshot requires VariableDz");
+    require(
+        inputs.terrain_type == TerrainType::StaticFittedMesh,
+        "terrain reference-wind snapshot requires static fitted terrain");
+
+    validate_horizontal_velocity_layout_and_ghosts(inputs);
+
+    const amrex::IntVect z_ng =
+        inputs.z_phys_nd.nGrowVect();
+    require(
+        z_ng[0] >= 1
+        && z_ng[1] >= 1
+        && z_ng[2] >= 1,
+        "terrain reference-wind snapshot requires at least one z_phys_nd ghost cell in every direction");
 }
 
 void
@@ -387,11 +571,8 @@ freeze_erf_level0_environment (
 {
     validate_flat_scope_and_layout(inputs);
 
-    if (!std::isfinite(reference_height_agl_m) ||
-        reference_height_agl_m < amrex::Real(0)) {
-        throw std::invalid_argument(
-            "fire atmospheric reference height AGL must be finite and nonnegative");
-    }
+    validate_reference_height_agl(
+        reference_height_agl_m);
 
     const amrex::Box& domain = inputs.geometry.Domain();
     const amrex::Real ground =
@@ -503,6 +684,150 @@ freeze_erf_level0_environment (
                     bracket);
             v_wind_mps[
                 layout.v_storage_index(i, j)] = value;
+        }
+    }
+
+    return FireFlatEnvironmentSampler(
+        std::move(layout),
+        reference_height_agl_m,
+        std::move(u_wind_mps),
+        std::move(v_wind_mps));
+}
+
+
+FireFlatEnvironmentSampler
+freeze_erf_level0_terrain_reference_wind_environment (
+    const ERFFireLevel0EnvironmentInputs& inputs,
+    amrex::Real reference_height_agl_m)
+{
+    validate_terrain_reference_wind_scope_and_layout(inputs);
+    validate_reference_height_agl(reference_height_agl_m);
+
+    const amrex::Box& domain =
+        inputs.geometry.Domain();
+
+    amrex::Box u_box =
+        amrex::convert(
+            domain,
+            amrex::IntVect(1, 0, 0));
+    u_box.grow(amrex::IntVect(1, 1, 0));
+
+    amrex::Box v_box =
+        amrex::convert(
+            domain,
+            amrex::IntVect(0, 1, 0));
+    v_box.grow(amrex::IntVect(1, 1, 0));
+
+    amrex::Box z_box =
+        amrex::convert(
+            domain,
+            amrex::IntVect(1, 1, 1));
+    z_box.grow(amrex::IntVect(1, 1, 0));
+
+    const amrex::FArrayBox u_host =
+        replicated_host_copy(
+            inputs.x_velocity,
+            u_box,
+            1);
+    const amrex::FArrayBox v_host =
+        replicated_host_copy(
+            inputs.y_velocity,
+            v_box,
+            1);
+    const amrex::FArrayBox z_host =
+        replicated_host_copy(
+            inputs.z_phys_nd,
+            z_box,
+            1);
+
+    const auto u = u_host.const_array();
+    const auto v = v_host.const_array();
+    const auto z = z_host.const_array();
+
+    const auto cell_size =
+        inputs.geometry.CellSizeArray();
+    const auto prob_lo =
+        inputs.geometry.ProbLoArray();
+
+    const std::size_t nx =
+        static_cast<std::size_t>(
+            domain.length(0));
+    const std::size_t ny =
+        static_cast<std::size_t>(
+            domain.length(1));
+
+    FireFlatEnvironmentLayout2D layout(
+        prob_lo[0],
+        prob_lo[1],
+        cell_size[0],
+        cell_size[1],
+        nx,
+        ny);
+
+    std::vector<amrex::Real> u_wind_mps(
+        layout.u_storage_size());
+    std::vector<amrex::Real> v_wind_mps(
+        layout.v_storage_size());
+
+    const int domain_ilo =
+        domain.smallEnd(0);
+    const int domain_jlo =
+        domain.smallEnd(1);
+    const int domain_klo =
+        domain.smallEnd(2);
+    const int domain_khi =
+        domain.bigEnd(2);
+
+    const int nx_int =
+        static_cast<int>(nx);
+    const int ny_int =
+        static_cast<int>(ny);
+
+    std::vector<amrex::Real> agl_column(
+        static_cast<std::size_t>(
+            domain.length(2)));
+
+    for (int j = -1; j <= ny_int; ++j) {
+        for (int i = -1; i <= nx_int + 1; ++i) {
+            const int src_i =
+                domain_ilo + i;
+            const int src_j =
+                domain_jlo + j;
+
+            u_wind_mps[
+                layout.u_storage_index(i, j)] =
+                terrain_face_reference_wind_value(
+                    u,
+                    z,
+                    src_i,
+                    src_j,
+                    domain_klo,
+                    domain_khi,
+                    reference_height_agl_m,
+                    HorizontalVelocityFace::X,
+                    agl_column);
+        }
+    }
+
+    for (int j = -1; j <= ny_int + 1; ++j) {
+        for (int i = -1; i <= nx_int; ++i) {
+            const int src_i =
+                domain_ilo + i;
+            const int src_j =
+                domain_jlo + j;
+
+            v_wind_mps[
+                layout.v_storage_index(i, j)] =
+                terrain_face_reference_wind_value(
+                    v,
+                    z,
+                    src_i,
+                    src_j,
+                    domain_klo,
+                    domain_khi,
+                    reference_height_agl_m,
+                    HorizontalVelocityFace::Y,
+                    agl_column);
         }
     }
 

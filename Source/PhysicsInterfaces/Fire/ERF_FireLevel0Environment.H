@@ -61,6 +61,29 @@ freeze_erf_level0_environment (
     amrex::Real reference_height_agl_m);
 
 /**
+ * Freeze the already-fillpatched level-0 horizontal wind at one constant
+ * local height above static fitted terrain.
+ *
+ * Each native x/y face owns its own terrain-following vertical column. The
+ * adapter derives that face's ground elevation and physical cell-center
+ * heights from z_phys_nd, vertically interpolates the native staggered
+ * velocity to reference_height_agl_m, and stores only the resulting 2-D
+ * staggered reference-wind snapshot.
+ *
+ * z_phys_nd is authoritative for this terrain reduction; z_phys_cc is not
+ * used to construct face heights. The returned sampler owns its host data and
+ * never references ERF MultiFabs after this function returns.
+ *
+ * This API is geometry/sampling infrastructure only. Does not switch
+ * the ERF timestep driver to this path and does not activate terrain slope in
+ * Fire spread.
+ */
+FireFlatEnvironmentSampler
+freeze_erf_level0_terrain_reference_wind_environment (
+    const ERFFireLevel0EnvironmentInputs& inputs,
+    amrex::Real reference_height_agl_m);
+
+/**
  * Return the common, horizontally flat level-0 nodal vertical faces as
  * heights above physical ground.
  *
