@@ -45,3 +45,27 @@ target_sources(erf_fire_unit_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireLevel0Environment.cpp
 )
+
+add_executable(erf_fire_timestep_identity
+  ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+  ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestRuntimeStubs.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.cpp
+)
+
+build_erf_exe(erf_fire_timestep_identity NO_ERF_MAIN)
+add_dependencies(erf_fire_unit_tests erf_fire_timestep_identity)
+
+add_test(
+  NAME FireTimeStepIntegration.OneWayReadPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayReadPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)

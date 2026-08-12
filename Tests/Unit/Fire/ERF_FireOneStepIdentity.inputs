@@ -1,0 +1,36 @@
+erf.prob_name = "Fire Identity"
+
+stop_time = 0.02
+
+amrex.fpe_trap_invalid = 1
+erf.fix_random_seed = 1
+
+geometry.prob_lo = 0.0 0.0 0.0
+geometry.prob_hi = 8.0 8.0 8.0
+geometry.is_periodic = 1 1 0
+
+amr.n_cell = 8 8 8
+amr.max_level = 0
+amr.max_grid_size = 8
+amr.v = 0
+
+zlo.type = "SlipWall"
+zhi.type = "SlipWall"
+zlo.theta = 300.0
+zhi.theta = 300.0
+
+erf.init_type = "uniform"
+erf.use_gravity = false
+erf.fixed_dt = 0.01
+erf.molec_diff_type = "None"
+erf.les_type = "None"
+erf.sum_interval = -1
+erf.v = 0
+erf.plot_int_1 = -1
+erf.plot_int_2 = -1
+erf.check_int = -1
+
+prob.rho_0 = 1.0
+prob.T_0 = 300.0
+
+fire.reference_height_agl_m = 2.75

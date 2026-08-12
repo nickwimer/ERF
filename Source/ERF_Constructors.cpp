@@ -13,6 +13,12 @@
 #include "AMReX_EB2_IF_Plane.H"
 #include "ERF_EBIFTerrain.H"
 
+#ifdef ERF_USE_FIRE
+#include <ERF_FireFlatEnvironmentSampler.H>
+#endif
+
+#include <cmath>
+
 using namespace amrex;
 
 // Constructor - reads in parameters from inputs file
@@ -104,6 +110,32 @@ ERF::ERF_shared ()
     for (int lev = 0; lev <= max_level; ++lev) { m_forest_drag[lev] = nullptr;}
 
     ReadParameters();
+
+#ifdef ERF_USE_FIRE
+    {
+        ParmParse pp_fire("fire");
+        pp_fire.query(
+            "environment_read",
+            m_fire_environment_read_enabled);
+
+        if (m_fire_environment_read_enabled) {
+            const bool have_reference_height = pp_fire.query(
+                "reference_height_agl_m",
+                m_fire_reference_height_agl_m);
+            if (!have_reference_height) {
+                Error(
+                    "fire.environment_read requires "
+                    "fire.reference_height_agl_m");
+            }
+            if (!std::isfinite(m_fire_reference_height_agl_m)
+                || m_fire_reference_height_agl_m < amrex::Real(0)) {
+                Error(
+                    "fire.reference_height_agl_m must be finite and nonnegative");
+            }
+        }
+    }
+#endif
+
     // Create one invocation identity after inputs are available and before
     // InitData can read restart metadata or write an output on restart.
     execution_provenance = erf_provenance::initialize_execution_provenance();

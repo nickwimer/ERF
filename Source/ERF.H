@@ -79,6 +79,13 @@
 #include "ERF_P3Interface.H"
 #endif
 
+#ifdef ERF_USE_FIRE
+namespace ERFFire
+{
+class FireFlatEnvironmentSampler;
+}
+#endif
+
 #include <iostream>
 
 #ifdef AMREX_LAZY
@@ -143,6 +150,23 @@ public:
     // Advance solution to final time
     void Evolve ();
     double EvolveOneStep (double time, double dt_request);
+
+#ifdef ERF_USE_FIRE
+    bool FireEnvironmentReadEnabled () const noexcept
+    {
+        return m_fire_environment_read_enabled;
+    }
+
+    const ERFFire::FireFlatEnvironmentSampler* FireEnvironmentSnapshot () const noexcept
+    {
+        return m_fire_environment_snapshot.get();
+    }
+
+    double FireEnvironmentSnapshotTime () const noexcept
+    {
+        return m_fire_environment_snapshot_time;
+    }
+#endif
 
     void ConfigureDriverAtmosToOceanCoupling (bool use_coupling_driver,
                                               bool use_two_way_coupling,
@@ -709,6 +733,15 @@ public:
     bool m_driver_atm2ocn_uses_state_contract = true;
 
 private:
+
+#ifdef ERF_USE_FIRE
+    bool m_fire_environment_read_enabled = false;
+    amrex::Real m_fire_reference_height_agl_m = amrex::Real(0);
+    double m_fire_environment_snapshot_time =
+        std::numeric_limits<double>::quiet_NaN();
+    std::unique_ptr<ERFFire::FireFlatEnvironmentSampler>
+        m_fire_environment_snapshot;
+#endif
 
     ///////////////////////////
     // private member functions

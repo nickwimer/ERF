@@ -3,6 +3,10 @@
 #include <ERF_ReadFromWRFBdy.H>
 #include <ERF_ReadFromERFBdy.H>
 
+#ifdef ERF_USE_FIRE
+#include <ERF_FireLevel0Environment.H>
+#endif
+
 using namespace amrex;
 
 /**
@@ -138,6 +142,33 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                            {&S_new, &rU_new[lev], &rV_new[lev], &rW_new[lev]},
                            base_state[lev], base_state[lev]);
     }
+
+#ifdef ERF_USE_FIRE
+    // Freeze one immutable atmospheric t^n snapshot after the existing
+    // level-0 FillPatch and before time labels or prognostic state advance.
+    // Future fire RK/current-point sampling reuses this same snapshot.
+    if (lev == 0 && m_fire_environment_read_enabled) {
+        ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
+            geom[0],
+            U_new,
+            V_new,
+            *z_phys_cc[0],
+            *z_phys_nd[0],
+            solverChoice.mesh_type,
+            solverChoice.terrain_type,
+            solverChoice.buildings_type,
+            max_level};
+
+        auto next_snapshot =
+            std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
+                ERFFire::freeze_erf_level0_environment(
+                    fire_inputs,
+                    m_fire_reference_height_agl_m));
+
+        m_fire_environment_snapshot = std::move(next_snapshot);
+        m_fire_environment_snapshot_time = time;
+    }
+#endif
 
     if (regrid_int > 0)  // We may need to regrid
     {
