@@ -34,6 +34,11 @@ main (int argc, char** argv)
             "reference_height_agl_m",
             expected_reference_height_agl_m);
 
+        bool expect_constant_reference_wind = true;
+        pp_fire.query(
+            "test_expect_constant_reference_wind",
+            expect_constant_reference_wind);
+
         ERF erf;
         erf.InitData();
 
@@ -96,6 +101,7 @@ main (int argc, char** argv)
                     "fire environment snapshot produced non-finite wind");
             }
             if (!expect_two_way
+                && expect_constant_reference_wind
                 && (std::abs(
                         sample.horizontal_wind_mps.x
                         - amrex::Real(1.0))

@@ -159,7 +159,9 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
     //   -> ordinary ERF Advance.
     //
     // one_way follows the same Fire evolution path but installs no atmospheric
-    // source. No WAF is applied in either mode.
+    // source. VariableDz one_way freezes local-AGL wind and map-plane terrain
+    // slope. VariableDz two_way remains rejected until terrain-aware source
+    // deposition is implemented. No WAF is applied.
     if (lev == 0 && m_fire_runtime_options.enabled) {
         ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
             geom[0],
@@ -172,11 +174,28 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             solverChoice.buildings_type,
             max_level};
 
-        auto next_snapshot =
-            std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
-                ERFFire::freeze_erf_level0_environment(
-                    fire_inputs,
-                    m_fire_runtime_options.reference_height_agl_m));
+        std::unique_ptr<ERFFire::FireTerrainSurface>
+            next_terrain_surface;
+        std::unique_ptr<ERFFire::FireFlatEnvironmentSampler>
+            next_snapshot;
+
+        if (solverChoice.mesh_type == MeshType::VariableDz) {
+            next_terrain_surface =
+                std::make_unique<ERFFire::FireTerrainSurface>(
+                    ERFFire::make_erf_level0_terrain_surface(
+                        fire_inputs));
+            next_snapshot =
+                std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
+                    ERFFire::freeze_erf_level0_terrain_reference_wind_environment(
+                        fire_inputs,
+                        m_fire_runtime_options.reference_height_agl_m));
+        } else {
+            next_snapshot =
+                std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
+                    ERFFire::freeze_erf_level0_environment(
+                        fire_inputs,
+                        m_fire_runtime_options.reference_height_agl_m));
+        }
 
         m_fire_environment_snapshot = std::move(next_snapshot);
         m_fire_environment_snapshot_time = time;
@@ -204,9 +223,16 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
         ERFFire::ERFFireSpreadRuntime next_fire_runtime =
             *m_fire_spread_runtime;
 
-        (void)next_fire_runtime.advance_direct_reference_wind(
-            *m_fire_environment_snapshot,
-            static_cast<Real>(dt[0]));
+        if (next_terrain_surface) {
+            (void)next_fire_runtime.advance_direct_reference_wind(
+                *m_fire_environment_snapshot,
+                *next_terrain_surface,
+                static_cast<Real>(dt[0]));
+        } else {
+            (void)next_fire_runtime.advance_direct_reference_wind(
+                *m_fire_environment_snapshot,
+                static_cast<Real>(dt[0]));
+        }
 
         std::unique_ptr<MultiFab> next_fire_source;
         double next_fire_source_time =

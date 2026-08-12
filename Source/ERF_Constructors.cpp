@@ -131,11 +131,11 @@ ERF::ERF_shared ()
             }
             if (ParallelDescriptor::NProcs() != 1) {
                 Error(
-                    "M7e fire runtime currently requires one MPI rank");
+                    "Fire runtime currently requires one MPI rank");
             }
             if (max_level != 0) {
                 Error(
-                    "M7e fire runtime currently requires amr.max_level = 0");
+                    "Fire runtime currently requires amr.max_level = 0");
             }
 
             std::string coupling_mode;
@@ -154,17 +154,31 @@ ERF::ERF_shared ()
                     "fire.coupling_mode must be one_way or two_way");
             }
 
+            if (solverChoice.mesh_type == MeshType::VariableDz
+                && solverChoice.terrain_type
+                    != TerrainType::StaticFittedMesh) {
+                Error(
+                    "Fire VariableDz coupling requires "
+                    "erf.terrain_type = StaticFittedMesh");
+            }
+
             if (m_fire_runtime_options.coupling_mode
                     == ERFFire::ERFFireCouplingMode::TwoWay) {
+                if (solverChoice.mesh_type == MeshType::VariableDz) {
+                    Error(
+                        "Fire two-way coupling currently defers "
+                        "VariableDz terrain feedback; use one_way until "
+                        "terrain-aware source deposition is implemented");
+                }
                 if (solverChoice.moisture_type
                     != MoistureType::MoistNoCondensation) {
                     Error(
-                        "M9c fire.coupling_mode = two_way requires "
+                        "Fire.coupling_mode = two_way requires "
                         "erf.moisture_model = MoistNoCondensation");
                 }
                 if (solverChoice.anelastic[0] != 0) {
                     Error(
-                        "M9c fire.coupling_mode = two_way currently requires "
+                        "Fire.coupling_mode = two_way currently requires "
                         "compressible ERF");
                 }
             }
@@ -176,7 +190,7 @@ ERF::ERF_shared ()
             }
             if (wind_mode != "direct_reference") {
                 Error(
-                    "M7e supports only fire.wind_mode = direct_reference");
+                    "Supports only fire.wind_mode = direct_reference");
             }
             m_fire_runtime_options.wind_mode =
                 ERFFire::ERFFireWindMode::DirectReference;
@@ -196,7 +210,7 @@ ERF::ERF_shared ()
             }
             if (m_fire_runtime_options.fuel_model != "FM1") {
                 Error(
-                    "M7e supports only fire.fuel_model = FM1");
+                    "Supports only fire.fuel_model = FM1");
             }
 
             if (!pp_fire.query(

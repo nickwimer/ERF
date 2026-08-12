@@ -116,3 +116,34 @@ set_tests_properties(
     TIMEOUT 900
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+add_test(
+  NAME FireTimeStepIntegration.OneWayTerrainSpreadPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
+    -DIDENTITY_CASE_PREFIX=fire_terrain_identity
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayTerrainSpreadPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayTerrainIsRejectedUntilM10c
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTERRAIN_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayTerrainReject.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayTerrainIsRejectedUntilM10c
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)

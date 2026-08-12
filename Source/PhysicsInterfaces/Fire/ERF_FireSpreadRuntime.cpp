@@ -30,6 +30,67 @@ wind_push_unit(const FireVec2& wind_mps, amrex::Real speed_mps)
     return wind_mps / speed_mps;
 }
 
+
+FireVec2
+terrain_upslope_unit(
+    const FireVec2& gradient_m_per_m,
+    amrex::Real slope_tangent)
+{
+    if (!(slope_tangent > amrex::Real(0.0))) {
+        return {
+            amrex::Real(1.0),
+            amrex::Real(0.0)};
+    }
+    return gradient_m_per_m / slope_tangent;
+}
+
+bool
+same_horizontal_geometry(
+    const FireCartesianRasterGeometry2D& lhs,
+    const FireCartesianRasterGeometry2D& rhs) noexcept
+{
+    return lhs.nx == rhs.nx
+        && lhs.ny == rhs.ny
+        && lhs.xlo_m == rhs.xlo_m
+        && lhs.ylo_m == rhs.ylo_m
+        && lhs.dx_m == rhs.dx_m
+        && lhs.dy_m == rhs.dy_m;
+}
+
+bool
+environment_matches_geometry(
+    const FireFlatEnvironmentSampler& environment,
+    const FireCartesianRasterGeometry2D& geometry) noexcept
+{
+    const auto& layout = environment.layout();
+
+    return layout.nx() == geometry.nx
+        && layout.ny() == geometry.ny
+        && layout.xlo_m() == geometry.xlo_m
+        && layout.ylo_m() == geometry.ylo_m
+        && layout.dx_m() == geometry.dx_m
+        && layout.dy_m() == geometry.dy_m;
+}
+
+void
+require_terrain_runtime_geometry(
+    const FireFlatEnvironmentSampler& environment,
+    const FireTerrainSurface& terrain,
+    const FireCartesianRasterGeometry2D& runtime_geometry)
+{
+    require(
+        same_horizontal_geometry(
+            terrain.geometry(),
+            runtime_geometry),
+        "fire terrain geometry must match the Fire runtime raster geometry");
+
+    require(
+        environment_matches_geometry(
+            environment,
+            runtime_geometry),
+        "fire terrain reference-wind geometry must match the Fire runtime raster geometry");
+}
+
 void
 require_perimeter_inside_environment(
     const FirePerimeter& perimeter,
@@ -93,6 +154,35 @@ ERFFireSpreadRuntime::advance_direct_reference_wind(
     const FireFlatEnvironmentSampler& environment,
     amrex::Real dt_s)
 {
+    return advance_direct_reference_wind_impl(
+        environment,
+        nullptr,
+        dt_s);
+}
+
+ERFFireStepDiagnostics
+ERFFireSpreadRuntime::advance_direct_reference_wind(
+    const FireFlatEnvironmentSampler& environment,
+    const FireTerrainSurface& terrain,
+    amrex::Real dt_s)
+{
+    require_terrain_runtime_geometry(
+        environment,
+        terrain,
+        config_.raster_geometry);
+
+    return advance_direct_reference_wind_impl(
+        environment,
+        &terrain,
+        dt_s);
+}
+
+ERFFireStepDiagnostics
+ERFFireSpreadRuntime::advance_direct_reference_wind_impl(
+    const FireFlatEnvironmentSampler& environment,
+    const FireTerrainSurface* terrain_surface,
+    amrex::Real dt_s)
+{
     require(
         std::isfinite(dt_s) && dt_s > amrex::Real(0.0),
         "fire spread dt must be finite and positive");
@@ -107,7 +197,7 @@ ERFFireSpreadRuntime::advance_direct_reference_wind(
             "fire spread end time must be finite and representably later");
     }
 
-    const auto normal_speed = [this, &environment](
+    const auto normal_speed = [this, &environment, terrain_surface](
         const FireVec2& position_m,
         const FireVec2& outward_normal,
         amrex::Real) -> amrex::Real
@@ -122,19 +212,41 @@ ERFFireSpreadRuntime::advance_direct_reference_wind(
                 "fire spread sampled wind magnitude is not finite");
         }
 
+        FireVec2 terrain_gradient_m_per_m{};
+        if (terrain_surface != nullptr) {
+            terrain_gradient_m_per_m =
+                terrain_surface->terrain_gradient_m_per_m(
+                    position_m.x,
+                    position_m.y);
+        }
+
+        const amrex::Real slope_tangent =
+            norm(terrain_gradient_m_per_m);
+        if (!std::isfinite(slope_tangent)) {
+            throw std::overflow_error(
+                "fire spread sampled terrain slope magnitude is not finite");
+        }
+
+        const FireVec2 upslope_unit =
+            terrain_upslope_unit(
+                terrain_gradient_m_per_m,
+                slope_tangent);
+
         const RothermelResult behavior =
             evaluate_rothermel(
                 config_.fuel,
                 RothermelInputs{
                     config_.dead_fuel_moisture_fraction,
                     speed_mps,
-                    amrex::Real(0.0)});
+                    slope_tangent});
 
         const RichardsDirectionalSpread spread =
             make_richards_directional_spread(
                 behavior,
-                wind_push_unit(wind_mps, speed_mps),
-                FireVec2{amrex::Real(1.0), amrex::Real(0.0)});
+                wind_push_unit(
+                    wind_mps,
+                    speed_mps),
+                upslope_unit);
 
         return richards_normal_speed_mps(
             spread.ellipse, outward_normal);

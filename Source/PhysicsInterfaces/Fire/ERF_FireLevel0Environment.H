@@ -74,9 +74,9 @@ freeze_erf_level0_environment (
  * used to construct face heights. The returned sampler owns its host data and
  * never references ERF MultiFabs after this function returns.
  *
- * This API is geometry/sampling infrastructure only. Does not switch
- * the ERF timestep driver to this path and does not activate terrain slope in
- * Fire spread.
+ * The one-way VariableDz driver uses this snapshot together with the
+ * independently extracted FireTerrainSurface. This routine itself remains
+ * limited to wind reduction and applies neither slope forcing nor feedback.
  */
 FireFlatEnvironmentSampler
 freeze_erf_level0_terrain_reference_wind_environment (

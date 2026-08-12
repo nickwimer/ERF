@@ -5,6 +5,7 @@
 #include <ERF_FireCombustionRaster.H>
 #include <ERF_FireFirstArrivalRaster.H>
 #include <ERF_FireFlatEnvironmentSampler.H>
+#include <ERF_FireTerrainSurface.H>
 #include <ERF_FirePerimeterRemesher.H>
 #include <ERF_RothermelFuel.H>
 
@@ -16,7 +17,7 @@ namespace ERFFire
 {
 
 /**
- * Flat-grid fire-spread configuration.
+ * Map-plane fire-spread configuration.
  *
  * The direct-reference-wind advance path deliberately performs no wind
  * adjustment factor or hidden height conversion. It is valid only when the
@@ -62,7 +63,7 @@ struct ERFFireStepDiagnostics
 };
 
 /**
- * Owning flat-fire spread runtime state.
+ * Owning map-plane Fire spread runtime state.
  *
  * FirePerimeter is authoritative. Burned fraction and first arrival are
  * persistent history derived from the propagated pre-remesh perimeter.
@@ -126,8 +127,8 @@ public:
      * Rothermel model wind.
      *
      * This is an explicit controlled-case coupling mode, not a WAF model.
-     * Flat terrain implies zero slope. The atmospheric wind vector is the
-     * push-to direction.
+     * This overload uses exactly zero terrain slope. The atmospheric wind
+     * vector is the map-plane push-to direction.
      *
      * Strong exception guarantee: persistent perimeter/raster/combustion/time
      * state is committed only after propagation, arrival, burned-history,
@@ -138,7 +139,27 @@ public:
         const FireFlatEnvironmentSampler& environment,
         amrex::Real dt_s);
 
+    /**
+     * Advance one Fire step with direct reference wind plus terrain slope.
+     *
+     * Fire remains a map-plane model: terrain contributes the local
+     * horizontal gradient (dh/dx, dh/dy), its magnitude is the Rothermel
+     * slope tangent, and its normalized direction is the Richards upslope
+     * direction. No terrain-surface arclength rescaling or WAF is applied.
+     */
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_direct_reference_wind(
+        const FireFlatEnvironmentSampler& environment,
+        const FireTerrainSurface& terrain,
+        amrex::Real dt_s);
+
 private:
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_direct_reference_wind_impl(
+        const FireFlatEnvironmentSampler& environment,
+        const FireTerrainSurface* terrain_surface,
+        amrex::Real dt_s);
+
     ERFFireSpreadConfig config_;
     FirePerimeter perimeter_;
     FireBurnedFractionRaster burned_fraction_;

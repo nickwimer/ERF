@@ -20,7 +20,7 @@ enum class ERFFireWindMode
 };
 
 /**
- * ERF-facing runtime configuration for the flat-grid Fire checkpoint.
+ * ERF-facing runtime configuration for level-0 Fire coupling.
  *
  * Coupling mode is driver policy. ERFFireSpreadRuntime remains coupling
  * neutral so the exact same fire evolution path can later serve one-way and

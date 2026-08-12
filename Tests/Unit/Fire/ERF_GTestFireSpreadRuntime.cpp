@@ -1,4 +1,5 @@
 #include <ERF_FireSpreadRuntime.H>
+#include <ERF_FireTerrainSurface.H>
 #include <ERF_FireCombustion.H>
 
 #include <ERF_RichardsDirectionalSpread.H>
@@ -228,6 +229,128 @@ direct_normal_speed(
 
     return ERFFire::richards_normal_speed_mps(
         spread.ellipse, outward_normal);
+}
+
+
+constexpr Real terrain_reference_heading_x =
+    Real(0.9264182564780811);
+constexpr Real terrain_reference_heading_y =
+    Real(0.37649596819104475);
+constexpr Real terrain_reference_flank_ros_mps =
+    Real(0.056788787267489274);
+constexpr Real terrain_reference_semi_major_rate_mps =
+    Real(0.0691191725397976);
+constexpr Real terrain_reference_center_translation_rate_mps =
+    Real(0.03940169607103429);
+
+FirePerimeter
+make_terrain_exact_wavelet(
+    std::size_t count,
+    FireVec2 ignition_m,
+    Real age_s)
+{
+    const FireVec2 heading{
+        terrain_reference_heading_x,
+        terrain_reference_heading_y};
+    const FireVec2 flank{
+        -heading.y,
+        heading.x};
+    const FireVec2 center =
+        ignition_m
+        + heading
+            * (terrain_reference_center_translation_rate_mps
+               * age_s);
+
+    std::vector<FireVec2> vertices;
+    vertices.reserve(count);
+
+    for (std::size_t i = 0; i < count; ++i) {
+        const Real angle =
+            Real(2.0) * pi * static_cast<Real>(i)
+            / static_cast<Real>(count);
+
+        vertices.push_back(
+            center
+            + heading
+                * (terrain_reference_semi_major_rate_mps
+                   * age_s * std::cos(angle))
+            + flank
+                * (terrain_reference_flank_ros_mps
+                   * age_s * std::sin(angle)));
+    }
+
+    return FirePerimeter(std::move(vertices));
+}
+
+Real
+exact_terrain_support(
+    FireVec2 ignition_m,
+    Real age_s,
+    FireVec2 direction)
+{
+    const FireVec2 heading{
+        terrain_reference_heading_x,
+        terrain_reference_heading_y};
+    const FireVec2 flank{
+        -heading.y,
+        heading.x};
+
+    const Real center =
+        ERFFire::dot(ignition_m, direction)
+        + terrain_reference_center_translation_rate_mps
+            * age_s
+            * ERFFire::dot(heading, direction);
+
+    const Real major =
+        terrain_reference_semi_major_rate_mps
+        * age_s
+        * ERFFire::dot(heading, direction);
+    const Real minor =
+        terrain_reference_flank_ros_mps
+        * age_s
+        * ERFFire::dot(flank, direction);
+
+    return center
+        + std::sqrt(
+            major * major
+            + minor * minor);
+}
+
+ERFFire::FireTerrainSurface
+make_planar_terrain(
+    const FireCartesianRasterGeometry2D& geometry,
+    FireVec2 gradient)
+{
+    std::vector<Real> nodal;
+    nodal.reserve(
+        (geometry.nx + 1)
+        * (geometry.ny + 1));
+
+    for (std::size_t j = 0;
+         j <= geometry.ny;
+         ++j) {
+        const Real y =
+            geometry.ylo_m
+            + static_cast<Real>(j)
+                * geometry.dy_m;
+
+        for (std::size_t i = 0;
+             i <= geometry.nx;
+             ++i) {
+            const Real x =
+                geometry.xlo_m
+                + static_cast<Real>(i)
+                    * geometry.dx_m;
+
+            nodal.push_back(
+                gradient.x * x
+                + gradient.y * y);
+        }
+    }
+
+    return ERFFire::FireTerrainSurface(
+        geometry,
+        std::move(nodal));
 }
 
 } // namespace
@@ -687,6 +810,257 @@ TEST(FireSpreadRuntime, FailedMidpointSampleLeavesAllPersistentStateUnchanged)
             before_vertices[i].x);
         EXPECT_EQ(
             runtime.perimeter().vertices_m()[i].y,
+            before_vertices[i].y);
+    }
+}
+
+
+TEST(
+    FireSpreadRuntime,
+    PlanarTerrainSlopeTracksIndependentObliqueWavelet)
+{
+    constexpr Real initial_age_s = Real(20.0);
+    constexpr Real dt_s = Real(1.0);
+    const FireVec2 ignition{
+        Real(14.0),
+        Real(14.0)};
+
+    const FireCartesianRasterGeometry2D geometry{
+        32, 32,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+
+    const FirePerimeter initial =
+        make_terrain_exact_wavelet(
+            512,
+            ignition,
+            initial_age_s);
+
+    ERFFireSpreadRuntime runtime(
+        initial,
+        Real(0.0),
+        make_config(geometry));
+
+    const auto environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            32, 32,
+            FireVec2{Real(1.0), Real(0.0)});
+
+    const auto terrain =
+        make_planar_terrain(
+            geometry,
+            FireVec2{Real(0.0), Real(0.20)});
+
+    (void)runtime.advance_direct_reference_wind(
+        environment,
+        terrain,
+        dt_s);
+
+    const Real final_age_s =
+        initial_age_s + dt_s;
+
+    for (const FireVec2 direction
+         : std::vector<FireVec2>{
+             {Real(1.0), Real(0.0)},
+             {Real(-1.0), Real(0.0)},
+             {Real(0.0), Real(1.0)},
+             {Real(0.0), Real(-1.0)}}) {
+        EXPECT_NEAR(
+            polygon_support(
+                runtime.perimeter(),
+                direction),
+            exact_terrain_support(
+                ignition,
+                final_age_s,
+                direction),
+            Real(2.0e-3));
+    }
+}
+
+TEST(
+    FireSpreadRuntime,
+    FlatTerrainOverloadIsBitwiseEquivalentToFlatPath)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16, 16,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+
+    const FirePerimeter initial =
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0));
+
+    ERFFireSpreadRuntime flat_runtime(
+        initial,
+        Real(0.0),
+        make_config(geometry));
+    ERFFireSpreadRuntime terrain_runtime(
+        initial,
+        Real(0.0),
+        make_config(geometry));
+
+    const auto environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            16, 16,
+            FireVec2{Real(1.0), Real(0.0)});
+
+    const auto flat_terrain =
+        make_planar_terrain(
+            geometry,
+            FireVec2{Real(0.0), Real(0.0)});
+
+    const auto flat_diagnostics =
+        flat_runtime.advance_direct_reference_wind(
+            environment,
+            Real(1.0));
+    const auto terrain_diagnostics =
+        terrain_runtime.advance_direct_reference_wind(
+            environment,
+            flat_terrain,
+            Real(1.0));
+
+    EXPECT_EQ(
+        terrain_runtime.current_time_s(),
+        flat_runtime.current_time_s());
+    EXPECT_EQ(
+        terrain_diagnostics.burned_area_m2,
+        flat_diagnostics.burned_area_m2);
+    EXPECT_EQ(
+        terrain_diagnostics.arrived_cell_count,
+        flat_diagnostics.arrived_cell_count);
+    EXPECT_EQ(
+        terrain_diagnostics.remaining_dry_fuel_kg,
+        flat_diagnostics.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        terrain_diagnostics.consumed_dry_fuel_kg,
+        flat_diagnostics.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        terrain_diagnostics.sensible_energy_j,
+        flat_diagnostics.sensible_energy_j);
+    EXPECT_EQ(
+        terrain_diagnostics.water_released_kg,
+        flat_diagnostics.water_released_kg);
+
+    ASSERT_EQ(
+        terrain_runtime.perimeter().size(),
+        flat_runtime.perimeter().size());
+
+    for (std::size_t i = 0;
+         i < flat_runtime.perimeter().size();
+         ++i) {
+        EXPECT_EQ(
+            terrain_runtime.perimeter()
+                .vertices_m()[i].x,
+            flat_runtime.perimeter()
+                .vertices_m()[i].x);
+        EXPECT_EQ(
+            terrain_runtime.perimeter()
+                .vertices_m()[i].y,
+            flat_runtime.perimeter()
+                .vertices_m()[i].y);
+    }
+}
+
+TEST(
+    FireSpreadRuntime,
+    TerrainGeometryMismatchIsRejectedTransactionally)
+{
+    const FireCartesianRasterGeometry2D runtime_geometry{
+        16, 16,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+
+    const FirePerimeter initial =
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0));
+
+    ERFFireSpreadRuntime runtime(
+        initial,
+        Real(0.0),
+        make_config(runtime_geometry));
+
+    const auto environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            16, 16,
+            FireVec2{Real(1.0), Real(0.0)});
+
+    const FireCartesianRasterGeometry2D wrong_geometry{
+        15, 16,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    const auto terrain =
+        make_planar_terrain(
+            wrong_geometry,
+            FireVec2{Real(0.0), Real(0.20)});
+
+    const auto before_vertices =
+        runtime.perimeter().vertices_m();
+    const Real before_burned =
+        runtime.burned_fraction_raster()
+            .burned_area_m2();
+    const std::size_t before_arrived =
+        runtime.first_arrival_raster()
+            .arrived_cell_count();
+    const auto before_combustion =
+        runtime.combustion_raster().totals();
+
+    EXPECT_THROW(
+        runtime.advance_direct_reference_wind(
+            environment,
+            terrain,
+            Real(1.0)),
+        std::invalid_argument);
+
+    EXPECT_EQ(
+        runtime.current_time_s(),
+        Real(0.0));
+    EXPECT_EQ(
+        runtime.burned_fraction_raster()
+            .burned_area_m2(),
+        before_burned);
+    EXPECT_EQ(
+        runtime.first_arrival_raster()
+            .arrived_cell_count(),
+        before_arrived);
+
+    const auto after_combustion =
+        runtime.combustion_raster().totals();
+    EXPECT_EQ(
+        after_combustion.remaining_dry_fuel_kg,
+        before_combustion.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.consumed_dry_fuel_kg,
+        before_combustion.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.sensible_energy_j,
+        before_combustion.sensible_energy_j);
+    EXPECT_EQ(
+        after_combustion.water_released_kg,
+        before_combustion.water_released_kg);
+
+    ASSERT_EQ(
+        runtime.perimeter().vertices_m().size(),
+        before_vertices.size());
+    for (std::size_t i = 0;
+         i < before_vertices.size();
+         ++i) {
+        EXPECT_EQ(
+            runtime.perimeter()
+                .vertices_m()[i].x,
+            before_vertices[i].x);
+        EXPECT_EQ(
+            runtime.perimeter()
+                .vertices_m()[i].y,
             before_vertices[i].y);
     }
 }

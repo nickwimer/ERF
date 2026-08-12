@@ -13,10 +13,11 @@ namespace ERFFire
  * wind_push_unit is the direction the wind pushes the fire, not the
  * meteorological direction from which the wind originates. upslope_unit is
  * the direction of increasing elevation. Both directions must already be
- * expressed in the same orthonormal two-dimensional basis. For terrain-aware
- * use, Finney's FARSITE formulation requires that basis to be the local
- * surface plane; projection to/from ERF horizontal coordinates is deliberately
- * deferred to the terrain/coupling layer.
+ * expressed in the same orthonormal two-dimensional basis. ERF-Fire uses the
+ * horizontal map-plane x/y basis: wind is the sampled horizontal push vector,
+ * while upslope is the normalized horizontal terrain gradient. The Fire
+ * perimeter, normals, burned area, and propagation rates remain map-plane
+ * quantities; no terrain-surface arclength rescaling is applied here.
  *
  * Only the resultant vector is stored. Its magnitude, preferred-heading state,
  * and unit heading are derived accessors so they cannot drift out of

@@ -4,11 +4,14 @@ endif()
 if(NOT DEFINED IDENTITY_INPUT OR "${IDENTITY_INPUT}" STREQUAL "")
   message(FATAL_ERROR "IDENTITY_INPUT is required")
 endif()
+if(NOT DEFINED IDENTITY_CASE_PREFIX OR "${IDENTITY_CASE_PREFIX}" STREQUAL "")
+  set(IDENTITY_CASE_PREFIX "fire_identity")
+endif()
 
 file(REAL_PATH "." identity_root)
 
 function(run_identity_case mode label checkpoint_var)
-  set(case_dir "${identity_root}/fire_identity_${label}")
+  set(case_dir "${identity_root}/${IDENTITY_CASE_PREFIX}_${label}")
   file(REMOVE_RECURSE "${case_dir}")
   file(MAKE_DIRECTORY "${case_dir}")
 
