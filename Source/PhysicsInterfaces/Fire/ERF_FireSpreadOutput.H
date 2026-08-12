@@ -13,8 +13,9 @@ class ERFFireSpreadRuntime;
  *
  * The output consists of:
  *   perimeter_NNNNNN.csv -- authoritative vector perimeter
- *   raster_NNNNNN.csv    -- burned-fraction and first-arrival history
- *   summary.csv           -- manifest of snapshots from the current run
+ *   raster_NNNNNN.csv    -- burned, arrival, and combustion history/state
+ *   summary.csv           -- manifest with cumulative extensive combustion
+ *                            diagnostics for each saved snapshot
  *
  * step_index==0 truncates summary.csv and begins a new manifest. Snapshot
  * filenames are always overwritten individually; unrelated files are never

@@ -82,10 +82,14 @@ write_erf_fire_spread_snapshot(
         auto stream = open_output(directory / raster_name);
         stream
             << "time_s,i,j,xlo_m,xhi_m,ylo_m,yhi_m,"
-            << "burned_fraction,has_arrived,first_arrival_time_s\n";
+            << "burned_fraction,has_arrived,first_arrival_time_s,"
+            << "ignited_area_fraction,remaining_dry_fuel_kg_m2,"
+            << "consumed_dry_fuel_kg_m2,sensible_energy_j_m2,"
+            << "water_released_kg_m2\n";
 
         const auto& burned = runtime.burned_fraction_raster();
         const auto& arrival = runtime.first_arrival_raster();
+        const auto& combustion = runtime.combustion_raster();
         const auto& geometry = burned.geometry();
 
         for (std::size_t j = 0; j < geometry.ny; ++j) {
@@ -108,7 +112,17 @@ write_erf_fire_spread_snapshot(
                     stream
                         << arrival.first_arrival_time_s(i, j);
                 }
-                stream << "\n";
+
+                const auto& combustion_state =
+                    combustion.state(i, j);
+                stream
+                    << ","
+                    << combustion_state.ignited_area_fraction << ","
+                    << combustion_state.remaining_dry_fuel_kg_m2 << ","
+                    << combustion_state.consumed_dry_fuel_kg_m2 << ","
+                    << combustion_state.sensible_energy_j_m2 << ","
+                    << combustion_state.water_released_kg_m2
+                    << "\n";
             }
         }
     }
@@ -132,11 +146,16 @@ write_erf_fire_spread_snapshot(
             + summary_path.string());
     }
 
+    const auto combustion_totals =
+        runtime.combustion_raster().totals();
+
     summary << std::setprecision(17);
     if (step_index == 0) {
         summary
             << "step,time_s,vertex_count,burned_area_m2,"
-            << "arrived_cell_count,perimeter_file,raster_file\n";
+            << "arrived_cell_count,remaining_dry_fuel_kg,"
+            << "consumed_dry_fuel_kg,sensible_energy_j,"
+            << "water_released_kg,perimeter_file,raster_file\n";
     }
 
     summary
@@ -145,6 +164,10 @@ write_erf_fire_spread_snapshot(
         << runtime.perimeter().size() << ","
         << runtime.burned_fraction_raster().burned_area_m2() << ","
         << runtime.first_arrival_raster().arrived_cell_count() << ","
+        << combustion_totals.remaining_dry_fuel_kg << ","
+        << combustion_totals.consumed_dry_fuel_kg << ","
+        << combustion_totals.sensible_energy_j << ","
+        << combustion_totals.water_released_kg << ","
         << perimeter_name << ","
         << raster_name << "\n";
 }

@@ -54,6 +54,10 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
       perimeter_(std::move(initial_perimeter)),
       burned_fraction_(config_.raster_geometry),
       first_arrival_(config_.raster_geometry),
+      combustion_(
+          config_.raster_geometry,
+          config_.combustion_parameters,
+          config_.combustion_options),
       current_time_s_(initial_time_s)
 {
     require(
@@ -80,6 +84,8 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     (void)first_arrival_.initialize_from_perimeter(
         perimeter_, current_time_s_);
     (void)burned_fraction_.update_from_perimeter(perimeter_);
+    (void)combustion_.initialize_from_burned_fraction(
+        burned_fraction_);
 }
 
 ERFFireStepDiagnostics
@@ -156,6 +162,15 @@ ERFFireSpreadRuntime::advance_direct_reference_wind(
     const FireRasterBurnedAreaUpdate burned_update =
         next_burned.update_from_perimeter(advanced);
 
+    FireCombustionRaster next_combustion = combustion_;
+    const FireCombustionRasterAdvance combustion_update =
+        next_combustion.advance_from_linear_sweep(
+            perimeter_,
+            advanced,
+            burned_fraction_,
+            next_burned,
+            dt_s);
+
     const std::size_t pre_remesh_vertex_count = advanced.size();
     FirePerimeterRemeshResult remeshed =
         remesh_perimeter(advanced, config_.remesh_options);
@@ -170,11 +185,19 @@ ERFFireSpreadRuntime::advance_direct_reference_wind(
         arrival_update.newly_arrived_cell_count,
         arrival_update.arrived_cell_count,
         burned_update.newly_burned_area_m2,
-        burned_update.burned_area_m2};
+        burned_update.burned_area_m2,
+        combustion_update.newly_consumed_dry_fuel_kg,
+        combustion_update.totals.remaining_dry_fuel_kg,
+        combustion_update.totals.consumed_dry_fuel_kg,
+        combustion_update.sensible_energy_increment_j,
+        combustion_update.totals.sensible_energy_j,
+        combustion_update.water_released_increment_kg,
+        combustion_update.totals.water_released_kg};
 
     perimeter_ = std::move(remeshed.perimeter);
     first_arrival_ = std::move(next_arrival);
     burned_fraction_ = std::move(next_burned);
+    combustion_ = std::move(next_combustion);
     current_time_s_ = end_time_s;
 
     return diagnostics;

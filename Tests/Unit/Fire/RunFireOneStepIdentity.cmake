@@ -50,6 +50,26 @@ function(run_identity_case mode label checkpoint_var)
           "enabled one-way fire run did not produce ${required_file}")
       endif()
     endforeach()
+
+    file(STRINGS
+      "${case_dir}/fire_output/summary.csv"
+      summary_header
+      LIMIT_COUNT 1)
+    if(NOT "${summary_header}" STREQUAL
+        "step,time_s,vertex_count,burned_area_m2,arrived_cell_count,remaining_dry_fuel_kg,consumed_dry_fuel_kg,sensible_energy_j,water_released_kg,perimeter_file,raster_file")
+      message(FATAL_ERROR
+        "enabled one-way Fire combustion summary header does not match expected schema: ${summary_header}")
+    endif()
+
+    file(STRINGS
+      "${case_dir}/fire_output/raster_000005.csv"
+      raster_header
+      LIMIT_COUNT 1)
+    if(NOT "${raster_header}" STREQUAL
+        "time_s,i,j,xlo_m,xhi_m,ylo_m,yhi_m,burned_fraction,has_arrived,first_arrival_time_s,ignited_area_fraction,remaining_dry_fuel_kg_m2,consumed_dry_fuel_kg_m2,sensible_energy_j_m2,water_released_kg_m2")
+      message(FATAL_ERROR
+        "enabled one-way Fire combustion raster header does not match expected schema: ${raster_header}")
+    endif()
   elseif(EXISTS "${case_dir}/fire_output")
     message(FATAL_ERROR
       "disabled fire control unexpectedly produced fire_output")

@@ -115,6 +115,44 @@ main (int argc, char** argv)
                 throw std::runtime_error(
                     "one-way fire arrival history is empty");
             }
+
+            const auto combustion_totals =
+                fire_runtime->combustion_raster().totals();
+            if (!(combustion_totals.remaining_dry_fuel_kg
+                  > amrex::Real(0.0))) {
+                throw std::runtime_error(
+                    "one-way fire combustion has no remaining ignited fuel");
+            }
+            if (!(combustion_totals.consumed_dry_fuel_kg
+                  > amrex::Real(0.0))
+                || !(combustion_totals.sensible_energy_j
+                     > amrex::Real(0.0))
+                || !(combustion_totals.water_released_kg
+                     > amrex::Real(0.0))) {
+                throw std::runtime_error(
+                    "one-way fire combustion did not consume fuel and release heat/water");
+            }
+
+            const auto& combustion_parameters =
+                fire_runtime->combustion_raster().parameters();
+            const amrex::Real expected_ignited_dry_fuel_kg =
+                fire_runtime->burned_fraction_raster().burned_area_m2()
+                * combustion_parameters.dry_fuel_load_kg_m2;
+            const amrex::Real represented_ignited_dry_fuel_kg =
+                combustion_totals.remaining_dry_fuel_kg
+                + combustion_totals.consumed_dry_fuel_kg;
+            const amrex::Real combustion_mass_tolerance =
+                amrex::Real(1.0e-10)
+                * std::max(
+                    amrex::Real(1.0),
+                    std::abs(expected_ignited_dry_fuel_kg));
+            if (std::abs(
+                    represented_ignited_dry_fuel_kg
+                    - expected_ignited_dry_fuel_kg)
+                > combustion_mass_tolerance) {
+                throw std::runtime_error(
+                    "one-way fire combustion mass does not match burned-area fuel loading");
+            }
         } else {
             if (snapshot != nullptr) {
                 throw std::runtime_error(

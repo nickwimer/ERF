@@ -234,6 +234,9 @@ ERF::ERF_shared ()
                 "arrival_time_tolerance_s",
                 m_fire_runtime_options.arrival_time_tolerance_s);
             pp_fire.query(
+                "combustion_temporal_substeps",
+                m_fire_runtime_options.combustion_temporal_substeps);
+            pp_fire.query(
                 "output_dir",
                 m_fire_runtime_options.output_dir);
             pp_fire.query(
@@ -288,6 +291,10 @@ ERF::ERF_shared ()
                     m_fire_runtime_options.arrival_time_tolerance_s)) {
                 Error(
                     "fire.arrival_time_tolerance_s must be finite and positive");
+            }
+            if (m_fire_runtime_options.combustion_temporal_substeps <= 0) {
+                Error(
+                    "fire.combustion_temporal_substeps must be positive");
             }
             if (m_fire_runtime_options.output_dir.empty()) {
                 Error(

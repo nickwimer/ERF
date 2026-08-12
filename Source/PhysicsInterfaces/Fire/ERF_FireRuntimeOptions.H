@@ -47,6 +47,7 @@ struct ERFFireRuntimeOptions
     amrex::Real remesh_max_chord_error_m{};
 
     amrex::Real arrival_time_tolerance_s{amrex::Real(1.0e-7)};
+    int combustion_temporal_substeps{16};
 
     std::string output_dir{"fire_output"};
     int output_interval_steps{1};

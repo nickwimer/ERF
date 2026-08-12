@@ -52,6 +52,7 @@ fire.remesh_min_edge_length_m = 0.05
 fire.remesh_max_edge_length_m = 0.25
 fire.remesh_max_chord_error_m = 0.002
 fire.arrival_time_tolerance_s = 1.0e-7
+fire.combustion_temporal_substeps = 16
 
 fire.output_dir = "fire_output"
 fire.output_interval_steps = 1

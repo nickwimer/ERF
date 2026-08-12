@@ -1,4 +1,5 @@
 #include <ERF_FireSpreadRuntime.H>
+#include <ERF_FireCombustion.H>
 
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelModel.H>
@@ -21,6 +22,7 @@ using amrex::Real;
 using ERFFire::ERFFireSpreadConfig;
 using ERFFire::ERFFireSpreadRuntime;
 using ERFFire::FireCartesianRasterGeometry2D;
+using ERFFire::FireCombustionRasterOptions;
 using ERFFire::FireFlatEnvironmentLayout2D;
 using ERFFire::FireFlatEnvironmentSampler;
 using ERFFire::FirePerimeter;
@@ -195,6 +197,8 @@ make_config(
     return {
         ERFFire::make_fm1_fuel_parameters(),
         Real(0.08),
+        ERFFire::make_fm1_combustion_parameters(Real(0.08)),
+        FireCombustionRasterOptions{16},
         remesh,
         raster,
         Real(1.0e-7)};
@@ -408,6 +412,147 @@ TEST(FireSpreadRuntime, ArrivalBurnHistoryPrecedesRemeshingAndAdvancesMonotonica
         Real(0.0));
 }
 
+
+TEST(FireSpreadRuntime, CombustionInitializesFromIgnitionBurnHistory)
+{
+    const FirePerimeter initial =
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0));
+
+    ERFFireSpreadRuntime runtime(
+        initial,
+        Real(0.0),
+        make_config(
+            FireCartesianRasterGeometry2D{
+                16, 16, Real(0.0), Real(0.0), Real(1.0), Real(1.0)}));
+
+    const auto& combustion = runtime.combustion_raster();
+    ASSERT_TRUE(combustion.initialized());
+
+    const auto totals = combustion.totals();
+    const Real expected_ignited_dry_fuel_kg =
+        runtime.burned_fraction_raster().burned_area_m2()
+        * combustion.parameters().dry_fuel_load_kg_m2;
+    const Real tolerance =
+        Real(1.0e-12)
+        * std::max(Real(1.0), std::abs(expected_ignited_dry_fuel_kg));
+
+    EXPECT_GT(totals.remaining_dry_fuel_kg, Real(0.0));
+    EXPECT_NEAR(
+        totals.remaining_dry_fuel_kg,
+        expected_ignited_dry_fuel_kg,
+        tolerance);
+    EXPECT_EQ(totals.consumed_dry_fuel_kg, Real(0.0));
+    EXPECT_EQ(totals.sensible_energy_j, Real(0.0));
+    EXPECT_EQ(totals.water_released_kg, Real(0.0));
+}
+
+TEST(FireSpreadRuntime, CombustionAdvanceProvidesConservativeExtensiveDiagnostics)
+{
+    const FirePerimeter initial =
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0));
+
+    ERFFireSpreadRuntime runtime(
+        initial,
+        Real(0.0),
+        make_config(
+            FireCartesianRasterGeometry2D{
+                16, 16, Real(0.0), Real(0.0), Real(1.0), Real(1.0)}));
+
+    const auto before = runtime.combustion_raster().totals();
+
+    const auto environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0), Real(1.0), Real(1.0),
+            16, 16, FireVec2{Real(1.0), Real(0.0)});
+
+    const auto diagnostics =
+        runtime.advance_direct_reference_wind(
+            environment, Real(1.0));
+
+    const auto after = runtime.combustion_raster().totals();
+    const auto& parameters =
+        runtime.combustion_raster().parameters();
+
+    const Real expected_ignited_dry_fuel_kg =
+        runtime.burned_fraction_raster().burned_area_m2()
+        * parameters.dry_fuel_load_kg_m2;
+    const Real expected_energy_j =
+        after.consumed_dry_fuel_kg
+        * parameters.sensible_heat_release_j_kg_dry;
+    const Real expected_water_kg =
+        after.consumed_dry_fuel_kg
+        * (parameters.fuel_moisture_fraction
+           + parameters.combustion_water_yield_kg_per_kg_dry);
+
+    const auto tolerance = [] (Real value) {
+        return Real(1.0e-11)
+            * std::max(Real(1.0), std::abs(value));
+    };
+
+    EXPECT_GT(
+        diagnostics.newly_consumed_dry_fuel_kg,
+        Real(0.0));
+    EXPECT_GT(
+        diagnostics.sensible_energy_increment_j,
+        Real(0.0));
+    EXPECT_GT(
+        diagnostics.water_released_increment_kg,
+        Real(0.0));
+
+    EXPECT_NEAR(
+        diagnostics.newly_consumed_dry_fuel_kg,
+        after.consumed_dry_fuel_kg
+            - before.consumed_dry_fuel_kg,
+        tolerance(after.consumed_dry_fuel_kg));
+    EXPECT_NEAR(
+        diagnostics.sensible_energy_increment_j,
+        after.sensible_energy_j
+            - before.sensible_energy_j,
+        tolerance(after.sensible_energy_j));
+    EXPECT_NEAR(
+        diagnostics.water_released_increment_kg,
+        after.water_released_kg
+            - before.water_released_kg,
+        tolerance(after.water_released_kg));
+
+    EXPECT_NEAR(
+        diagnostics.remaining_dry_fuel_kg,
+        after.remaining_dry_fuel_kg,
+        tolerance(after.remaining_dry_fuel_kg));
+    EXPECT_NEAR(
+        diagnostics.consumed_dry_fuel_kg,
+        after.consumed_dry_fuel_kg,
+        tolerance(after.consumed_dry_fuel_kg));
+    EXPECT_NEAR(
+        diagnostics.sensible_energy_j,
+        after.sensible_energy_j,
+        tolerance(after.sensible_energy_j));
+    EXPECT_NEAR(
+        diagnostics.water_released_kg,
+        after.water_released_kg,
+        tolerance(after.water_released_kg));
+
+    EXPECT_NEAR(
+        after.remaining_dry_fuel_kg
+            + after.consumed_dry_fuel_kg,
+        expected_ignited_dry_fuel_kg,
+        tolerance(expected_ignited_dry_fuel_kg));
+    EXPECT_NEAR(
+        after.sensible_energy_j,
+        expected_energy_j,
+        tolerance(expected_energy_j));
+    EXPECT_NEAR(
+        after.water_released_kg,
+        expected_water_kg,
+        tolerance(expected_water_kg));
+}
+
 TEST(FireSpreadRuntime, EndpointOutsideEnvironmentIsRejectedTransactionally)
 {
     const FirePerimeter initial =
@@ -434,6 +579,8 @@ TEST(FireSpreadRuntime, EndpointOutsideEnvironmentIsRejectedTransactionally)
         runtime.burned_fraction_raster().burned_area_m2();
     const std::size_t before_arrived =
         runtime.first_arrival_raster().arrived_cell_count();
+    const auto before_combustion =
+        runtime.combustion_raster().totals();
 
     EXPECT_THROW(
         runtime.advance_direct_reference_wind(
@@ -447,6 +594,20 @@ TEST(FireSpreadRuntime, EndpointOutsideEnvironmentIsRejectedTransactionally)
     EXPECT_EQ(
         runtime.burned_fraction_raster().burned_area_m2(),
         before_burned_area);
+    const auto after_combustion =
+        runtime.combustion_raster().totals();
+    EXPECT_EQ(
+        after_combustion.remaining_dry_fuel_kg,
+        before_combustion.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.consumed_dry_fuel_kg,
+        before_combustion.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.sensible_energy_j,
+        before_combustion.sensible_energy_j);
+    EXPECT_EQ(
+        after_combustion.water_released_kg,
+        before_combustion.water_released_kg);
     ASSERT_EQ(
         runtime.perimeter().vertices_m().size(),
         before_vertices.size());
@@ -487,6 +648,8 @@ TEST(FireSpreadRuntime, FailedMidpointSampleLeavesAllPersistentStateUnchanged)
         runtime.burned_fraction_raster().burned_area_m2();
     const std::size_t before_arrived =
         runtime.first_arrival_raster().arrived_cell_count();
+    const auto before_combustion =
+        runtime.combustion_raster().totals();
 
     EXPECT_THROW(
         runtime.advance_direct_reference_wind(
@@ -500,6 +663,20 @@ TEST(FireSpreadRuntime, FailedMidpointSampleLeavesAllPersistentStateUnchanged)
     EXPECT_EQ(
         runtime.burned_fraction_raster().burned_area_m2(),
         before_burned_area);
+    const auto after_combustion =
+        runtime.combustion_raster().totals();
+    EXPECT_EQ(
+        after_combustion.remaining_dry_fuel_kg,
+        before_combustion.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.consumed_dry_fuel_kg,
+        before_combustion.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.sensible_energy_j,
+        before_combustion.sensible_energy_j);
+    EXPECT_EQ(
+        after_combustion.water_released_kg,
+        before_combustion.water_released_kg);
     ASSERT_EQ(
         runtime.perimeter().vertices_m().size(),
         before_vertices.size());

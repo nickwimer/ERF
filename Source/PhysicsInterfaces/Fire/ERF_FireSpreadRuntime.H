@@ -2,6 +2,7 @@
 #define ERF_FIRE_SPREAD_RUNTIME_H_
 
 #include <ERF_FireBurnedFractionRaster.H>
+#include <ERF_FireCombustionRaster.H>
 #include <ERF_FireFirstArrivalRaster.H>
 #include <ERF_FireFlatEnvironmentSampler.H>
 #include <ERF_FirePerimeterRemesher.H>
@@ -26,6 +27,8 @@ struct ERFFireSpreadConfig
 {
     RothermelFuelParameters fuel{};
     amrex::Real dead_fuel_moisture_fraction{};
+    FireCombustionParameters combustion_parameters{};
+    FireCombustionRasterOptions combustion_options{};
     FirePerimeterRemeshOptions remesh_options{};
     FireCartesianRasterGeometry2D raster_geometry{};
     amrex::Real arrival_time_tolerance_s{amrex::Real(1.0e-6)};
@@ -46,6 +49,16 @@ struct ERFFireStepDiagnostics
 
     amrex::Real newly_burned_area_m2{};
     amrex::Real burned_area_m2{};
+
+    amrex::Real newly_consumed_dry_fuel_kg{};
+    amrex::Real remaining_dry_fuel_kg{};
+    amrex::Real consumed_dry_fuel_kg{};
+
+    amrex::Real sensible_energy_increment_j{};
+    amrex::Real sensible_energy_j{};
+
+    amrex::Real water_released_increment_kg{};
+    amrex::Real water_released_kg{};
 };
 
 /**
@@ -53,6 +66,8 @@ struct ERFFireStepDiagnostics
  *
  * FirePerimeter is authoritative. Burned fraction and first arrival are
  * persistent history derived from the propagated pre-remesh perimeter.
+ * Cell-resolved combustion state is synchronized with burned history and is
+ * advanced from the same fixed-topology physical sweep before remeshing.
  *
  * Each advance_direct_reference_wind() call consumes one immutable atmospheric
  * snapshot for the whole fire step. The RK2 normal-speed callback samples that
@@ -89,6 +104,12 @@ public:
         return first_arrival_;
     }
 
+    [[nodiscard]] const FireCombustionRaster&
+    combustion_raster() const noexcept
+    {
+        return combustion_;
+    }
+
     [[nodiscard]] amrex::Real current_time_s() const noexcept
     {
         return current_time_s_;
@@ -108,9 +129,9 @@ public:
      * Flat terrain implies zero slope. The atmospheric wind vector is the
      * push-to direction.
      *
-     * Strong exception guarantee: persistent perimeter/raster/time state is
-     * committed only after propagation, arrival, burned-history, and remeshing
-     * all succeed.
+     * Strong exception guarantee: persistent perimeter/raster/combustion/time
+     * state is committed only after propagation, arrival, burned-history,
+     * combustion, and remeshing all succeed.
      */
     [[nodiscard]] ERFFireStepDiagnostics
     advance_direct_reference_wind(
@@ -122,6 +143,7 @@ private:
     FirePerimeter perimeter_;
     FireBurnedFractionRaster burned_fraction_;
     FireFirstArrivalRaster first_arrival_;
+    FireCombustionRaster combustion_;
     amrex::Real current_time_s_{};
 };
 

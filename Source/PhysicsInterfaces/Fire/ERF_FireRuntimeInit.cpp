@@ -1,5 +1,6 @@
 #include "ERF_FireRuntimeInit.H"
 
+#include <ERF_FireCombustion.H>
 #include <ERF_FirePerimeter.H>
 #include <ERF_FireSpreadRuntime.H>
 #include <ERF_RothermelFuel.H>
@@ -112,6 +113,11 @@ make_erf_fire_spread_runtime(
     ERFFireSpreadConfig config{
         make_fm1_fuel_parameters(),
         options.dead_fuel_moisture_fraction,
+        make_fm1_combustion_parameters(
+            options.dead_fuel_moisture_fraction),
+        FireCombustionRasterOptions{
+            static_cast<std::size_t>(
+                options.combustion_temporal_substeps)},
         FirePerimeterRemeshOptions{
             options.remesh_min_edge_length_m,
             options.remesh_max_edge_length_m,
