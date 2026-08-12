@@ -41,6 +41,7 @@ function(erf_add_fire_sources target)
     ${FIRE_SRC_DIR}/Raster/ERF_FireBurnedFractionRaster.cpp
     ${FIRE_SRC_DIR}/Raster/ERF_FireCellArrival.cpp
     ${FIRE_SRC_DIR}/Raster/ERF_FireFirstArrivalRaster.cpp
+    ${FIRE_SRC_DIR}/Burn/ERF_FireCombustion.cpp
   )
 
   target_include_directories(${target} PUBLIC
@@ -50,6 +51,7 @@ function(erf_add_fire_sources target)
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Spread>
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Raster>
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Environment>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Burn>
     $<BUILD_INTERFACE:${FIRE_IFACE_DIR}>
   )
 
