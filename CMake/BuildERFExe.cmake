@@ -21,8 +21,10 @@ endfunction()
 
 function(erf_add_fire_sources target)
   set(FIRE_SRC_DIR ${PROJECT_SOURCE_DIR}/Source/Fire)
+  set(FIRE_IFACE_DIR ${PROJECT_SOURCE_DIR}/Source/PhysicsInterfaces/Fire)
 
   target_sources(${target} PRIVATE
+    ${FIRE_IFACE_DIR}/ERF_FireLevel0Environment.cpp
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeter.cpp
     ${FIRE_SRC_DIR}/Front/ERF_VectorPerimeterPropagator.cpp
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterRemesher.cpp
@@ -44,6 +46,8 @@ function(erf_add_fire_sources target)
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Behavior>
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Spread>
     $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Raster>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Environment>
+    $<BUILD_INTERFACE:${FIRE_IFACE_DIR}>
   )
 
   target_compile_definitions(${target} PUBLIC ERF_USE_FIRE)
