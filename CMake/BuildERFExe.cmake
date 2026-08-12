@@ -44,6 +44,7 @@ function(erf_add_fire_sources target)
     ${FIRE_SRC_DIR}/Raster/ERF_FireFirstArrivalRaster.cpp
     ${FIRE_SRC_DIR}/Burn/ERF_FireCombustion.cpp
     ${FIRE_SRC_DIR}/Burn/ERF_FireCombustionRaster.cpp
+    ${FIRE_SRC_DIR}/Burn/ERF_FireSurfaceFeedback.cpp
   )
 
   target_include_directories(${target} PUBLIC
