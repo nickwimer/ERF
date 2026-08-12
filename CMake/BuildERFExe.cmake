@@ -31,6 +31,7 @@ function(erf_add_fire_sources target)
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeter.cpp
     ${FIRE_SRC_DIR}/Front/ERF_VectorPerimeterPropagator.cpp
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterRemesher.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterSweep.cpp
     ${FIRE_SRC_DIR}/Behavior/ERF_RothermelFuel.cpp
     ${FIRE_SRC_DIR}/Behavior/ERF_RothermelModel.cpp
     ${FIRE_SRC_DIR}/Spread/ERF_RichardsEllipse.cpp
@@ -42,6 +43,7 @@ function(erf_add_fire_sources target)
     ${FIRE_SRC_DIR}/Raster/ERF_FireCellArrival.cpp
     ${FIRE_SRC_DIR}/Raster/ERF_FireFirstArrivalRaster.cpp
     ${FIRE_SRC_DIR}/Burn/ERF_FireCombustion.cpp
+    ${FIRE_SRC_DIR}/Burn/ERF_FireCombustionRaster.cpp
   )
 
   target_include_directories(${target} PUBLIC

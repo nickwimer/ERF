@@ -1,9 +1,8 @@
 #include <ERF_FireCellArrival.H>
+#include <ERF_FirePerimeterSweep.H>
 
 #include <cmath>
 #include <stdexcept>
-#include <utility>
-#include <vector>
 
 namespace ERFFire
 {
@@ -54,27 +53,6 @@ validate_sweep_inputs (
         throw std::invalid_argument(
             "Fire arrival time tolerance is not representable at the supplied time");
     }
-}
-
-FirePerimeter
-interpolate_perimeter (
-    const FirePerimeter& start_perimeter,
-    const FirePerimeter& end_perimeter,
-    amrex::Real alpha)
-{
-    std::vector<FireVec2> vertices;
-    vertices.reserve(start_perimeter.size());
-
-    const auto& start = start_perimeter.vertices_m();
-    const auto& end = end_perimeter.vertices_m();
-
-    for (std::size_t i = 0; i < start.size(); ++i) {
-        vertices.push_back(
-            start[i]
-            + (end[i] - start[i]) * alpha);
-    }
-
-    return FirePerimeter(std::move(vertices));
 }
 
 bool
@@ -140,7 +118,7 @@ fire_cell_first_arrival_time_linear_sweep(
         }
 
         const FirePerimeter middle_perimeter =
-            interpolate_perimeter(
+            interpolate_fire_perimeter_linear_sweep(
                 start_perimeter,
                 end_perimeter,
                 middle_alpha);
