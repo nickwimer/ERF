@@ -1,6 +1,7 @@
 #include <ERF_FireFirstArrivalRaster.H>
 
 #include <ERF_FireCellArrival.H>
+#include <ERF_FireCellCoverage.H>
 
 #include <stdexcept>
 #include <utility>
@@ -80,6 +81,51 @@ FireFirstArrivalRaster::arrived_cell_count () const noexcept
 }
 
 FireFirstArrivalRasterUpdate
+FireFirstArrivalRaster::initialize_from_perimeter (
+    const FirePerimeter& perimeter,
+    amrex::Real time_s)
+{
+    if (!std::isfinite(time_s)) {
+        throw std::invalid_argument(
+            "Fire first-arrival initial-condition time must be finite");
+    }
+
+    if (has_initial_condition_ || has_committed_sweep_) {
+        throw std::logic_error(
+            "Fire first-arrival initial condition may be set only once before sweeps");
+    }
+
+    std::vector<std::uint8_t> next_arrived = arrived_;
+    std::vector<amrex::Real> next_first_arrival_time_s =
+        first_arrival_time_s_;
+
+    std::size_t newly_arrived_cell_count = 0;
+
+    for (std::size_t j = 0; j < geometry_.ny; ++j) {
+        for (std::size_t i = 0; i < geometry_.nx; ++i) {
+            const std::size_t index = flat_index(i, j);
+            if (fire_perimeter_cell_intersection_area_m2(
+                    perimeter, cell_bounds(i, j))
+                > amrex::Real(0.0)) {
+                next_arrived[index] = std::uint8_t(1);
+                next_first_arrival_time_s[index] = time_s;
+                ++newly_arrived_cell_count;
+            }
+        }
+    }
+
+    arrived_.swap(next_arrived);
+    first_arrival_time_s_.swap(next_first_arrival_time_s);
+    has_initial_condition_ = true;
+    initial_condition_time_s_ = time_s;
+
+    return {
+        arrived_cell_count(),
+        newly_arrived_cell_count
+    };
+}
+
+FireFirstArrivalRasterUpdate
 FireFirstArrivalRaster::update_from_sweep (
     const FirePerimeter& start_perimeter,
     const FirePerimeter& end_perimeter,
@@ -87,6 +133,18 @@ FireFirstArrivalRaster::update_from_sweep (
     amrex::Real end_time_s,
     amrex::Real time_tolerance_s)
 {
+    if (has_committed_sweep_
+        && start_time_s != last_sweep_end_time_s_) {
+        throw std::invalid_argument(
+            "Fire first-arrival raster sweeps must be contiguous in time");
+    }
+    if (!has_committed_sweep_
+        && has_initial_condition_
+        && start_time_s != initial_condition_time_s_) {
+        throw std::invalid_argument(
+            "Fire first-arrival first sweep must start at the initial-condition time");
+    }
+
     // Query one known-valid raster cell unconditionally.
     // Reuse the result below if that first cell is unresolved.
     const FireCartesianCell2D first_cell =
@@ -99,12 +157,6 @@ FireFirstArrivalRaster::update_from_sweep (
             start_time_s,
             end_time_s,
             time_tolerance_s);
-
-    if (has_committed_sweep_
-        && start_time_s != last_sweep_end_time_s_) {
-        throw std::invalid_argument(
-            "Fire first-arrival raster sweeps must be contiguous in time");
-    }
 
     std::vector<std::uint8_t> next_arrived =
         arrived_;

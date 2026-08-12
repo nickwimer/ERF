@@ -74,10 +74,22 @@ public:
     [[nodiscard]] std::size_t arrived_cell_count() const noexcept;
 
     /**
+     * Seed ignition-area arrival history at one exact initial time.
+     *
+     * This may be called exactly once before any sweep update. Cells with
+     * positive perimeter intersection area are marked arrived at time_s.
+     * Boundary-only contact remains zero-area and is not marked.
+     *
+     * The first subsequent sweep must begin exactly at time_s.
+     */
+    [[nodiscard]] FireFirstArrivalRasterUpdate initialize_from_perimeter(
+        const FirePerimeter& perimeter,
+        amrex::Real time_s);
+
+    /**
      * Update first-arrival history from one pre-remesh physical sweep.
      *
-     * start_perimeter and end_perimeter must satisfy the M6e1 fixed-topology
-     * correspondence contract. A cell whose mask is already set is never
+     * A cell whose mask is already set is never
      * overwritten. The update has strong exception safety: no persistent
      * arrival history changes unless every unresolved cell query succeeds.
      */
@@ -96,6 +108,8 @@ private:
     FireCartesianRasterGeometry2D geometry_{};
     std::vector<std::uint8_t> arrived_;
     std::vector<amrex::Real> first_arrival_time_s_;
+    bool has_initial_condition_{false};
+    amrex::Real initial_condition_time_s_{};
     bool has_committed_sweep_{false};
     amrex::Real last_sweep_end_time_s_{};
 };

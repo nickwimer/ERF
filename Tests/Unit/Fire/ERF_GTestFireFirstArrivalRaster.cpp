@@ -69,6 +69,73 @@ TEST(FireFirstArrivalRaster, ConstructsUnsetHistoryOnSharedGeometry)
         1.8);
 }
 
+TEST(FireFirstArrivalRaster, InitialConditionSeedsIgnitionAndPinsFirstSweepStart)
+{
+    FireFirstArrivalRaster raster({
+        3,
+        1,
+        0.0,
+        0.0,
+        1.0,
+        1.0
+    });
+
+    const auto ignition =
+        make_rectangle(-2.0, 1.0, -1.0, 2.0);
+
+    const auto seeded =
+        raster.initialize_from_perimeter(
+            ignition, 5.0);
+
+    EXPECT_EQ(seeded.newly_arrived_cell_count, 1U);
+    EXPECT_EQ(seeded.arrived_cell_count, 1U);
+    ASSERT_TRUE(raster.has_arrived(0, 0));
+    EXPECT_FALSE(raster.has_arrived(1, 0));
+    EXPECT_FALSE(raster.has_arrived(2, 0));
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            raster.first_arrival_time_s(0, 0)),
+        5.0);
+
+    EXPECT_THROW(
+        (void)raster.initialize_from_perimeter(
+            ignition, 5.0),
+        std::logic_error);
+
+    const auto end =
+        make_rectangle(-2.0, 2.5, -1.0, 2.0);
+
+    EXPECT_THROW(
+        (void)raster.update_from_sweep(
+            ignition,
+            end,
+            5.5,
+            6.5,
+            1.0e-9),
+        std::invalid_argument);
+
+    EXPECT_EQ(raster.arrived_cell_count(), 1U);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            raster.first_arrival_time_s(0, 0)),
+        5.0);
+
+    const auto advanced =
+        raster.update_from_sweep(
+            ignition,
+            end,
+            5.0,
+            6.0,
+            1.0e-9);
+
+    EXPECT_GT(advanced.newly_arrived_cell_count, 0U);
+    EXPECT_GT(advanced.arrived_cell_count, 1U);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            raster.first_arrival_time_s(0, 0)),
+        5.0);
+}
+
 TEST(FireFirstArrivalRaster, AlreadyCoveredCellsRecordSweepStartExactly)
 {
     FireFirstArrivalRaster raster({
