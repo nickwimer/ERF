@@ -111,6 +111,34 @@
                      dptr_wbar_sub, d_rayleigh_ptrs_at_lev, d_sinesq_at_lev,
                      input_sounding_data, turbPert, true);
 
+#ifdef ERF_USE_FIRE
+        if (level == 0
+            && m_fire_atmospheric_source_tendency) {
+            if (!m_fire_runtime_options.enabled
+                || m_fire_runtime_options.coupling_mode
+                    != ERFFire::ERFFireCouplingMode::TwoWay) {
+                Error(
+                    "ERF Fire atmospheric source exists outside two_way coupling");
+            }
+            if (cc_src.nComp()
+                    != m_fire_atmospheric_source_tendency->nComp()
+                || !amrex::match(
+                    cc_src.boxArray(),
+                    m_fire_atmospheric_source_tendency->boxArray())) {
+                Error(
+                    "ERF Fire atmospheric source layout does not match cc_src");
+            }
+
+            MultiFab::Add(
+                cc_src,
+                *m_fire_atmospheric_source_tendency,
+                0,
+                0,
+                cc_src.nComp(),
+                0);
+        }
+#endif
+
         // *****************************************************************************
         // Add nudging terms on moist variables if we have a non-zero relaxation region
         // *****************************************************************************

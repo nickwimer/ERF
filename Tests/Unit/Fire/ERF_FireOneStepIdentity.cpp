@@ -21,6 +21,14 @@ main (int argc, char** argv)
         bool expect_fire_enabled = false;
         pp_fire.query("enabled", expect_fire_enabled);
 
+        std::string expected_coupling_mode{"one_way"};
+        pp_fire.query(
+            "coupling_mode",
+            expected_coupling_mode);
+        const bool expect_two_way =
+            expect_fire_enabled
+            && expected_coupling_mode == "two_way";
+
         amrex::Real expected_reference_height_agl_m = amrex::Real(0);
         pp_fire.query(
             "reference_height_agl_m",
@@ -49,6 +57,8 @@ main (int argc, char** argv)
 
         const auto* snapshot = erf.FireEnvironmentSnapshot();
         const auto* fire_runtime = erf.FireSpreadRuntime();
+        const auto* fire_source =
+            erf.FireAtmosphericSourceTendency();
 
         if (expect_fire_enabled) {
             if (snapshot == nullptr) {
@@ -85,14 +95,48 @@ main (int argc, char** argv)
                 throw std::runtime_error(
                     "fire environment snapshot produced non-finite wind");
             }
-            if (std::abs(
-                    sample.horizontal_wind_mps.x
-                    - amrex::Real(1.0))
-                > amrex::Real(1.0e-12)
-                || std::abs(sample.horizontal_wind_mps.y)
-                    > amrex::Real(1.0e-12)) {
+            if (!expect_two_way
+                && (std::abs(
+                        sample.horizontal_wind_mps.x
+                        - amrex::Real(1.0))
+                    > amrex::Real(1.0e-12)
+                    || std::abs(sample.horizontal_wind_mps.y)
+                        > amrex::Real(1.0e-12))) {
                 throw std::runtime_error(
-                    "fire identity atmosphere did not preserve configured constant wind");
+                    "one-way fire identity atmosphere did not preserve configured constant wind");
+            }
+
+            if (expect_two_way) {
+                if (fire_source == nullptr) {
+                    throw std::runtime_error(
+                        "two-way fire did not create a native atmospheric source");
+                }
+                if (erf.FireAtmosphericSourceTime()
+                    != expected_snapshot_time) {
+                    throw std::runtime_error(
+                        "two-way fire source was not frozen at the final t^n");
+                }
+                if (fire_source->norm0(
+                        Rho_comp, 0, true)
+                    != amrex::Real(0.0)) {
+                    throw std::runtime_error(
+                        "two-way fire source modified dry-air density");
+                }
+                if (!(fire_source->norm0(
+                          RhoTheta_comp, 0, true)
+                      > amrex::Real(0.0))) {
+                    throw std::runtime_error(
+                        "two-way fire rho-theta source is not positive");
+                }
+                if (!(fire_source->norm0(
+                          RhoQ1_comp, 0, true)
+                      > amrex::Real(0.0))) {
+                    throw std::runtime_error(
+                        "two-way fire rho-qv source is not positive");
+                }
+            } else if (fire_source != nullptr) {
+                throw std::runtime_error(
+                    "non-two-way fire unexpectedly created an atmospheric source");
             }
 
             amrex::Real maximum_x =
@@ -162,6 +206,10 @@ main (int argc, char** argv)
                 throw std::runtime_error(
                     "disabled fire unexpectedly created spread runtime state");
             }
+            if (fire_source != nullptr) {
+                throw std::runtime_error(
+                    "disabled fire unexpectedly created atmospheric source state");
+            }
         }
 
         // Use ERF's existing public checkpoint writer as the atmospheric
@@ -171,7 +219,7 @@ main (int argc, char** argv)
         erf.WriteCheckpointFile();
         amrex::Print() << "ERF_FIRE_IDENTITY_CHILD_OK=1\n";
     } catch (const std::exception& error) {
-        amrex::Print() << "ERF fire one-way identity error: "
+        amrex::Print() << "ERF fire integration error: "
                        << error.what() << "\n";
         result = 2;
     }

@@ -265,6 +265,24 @@ replicated_values (
 
 } // namespace
 
+
+TEST(
+    FireLevel0Environment,
+    FlatVerticalFacesAreReportedInAGLCoordinates)
+{
+    FlatAtmosphereFixture fixture;
+
+    const auto faces =
+        ERFFire::erf_fire_level0_flat_vertical_faces_agl(
+            fixture.inputs());
+
+    ASSERT_EQ(faces.size(), 4U);
+    EXPECT_EQ(faces[0], Real(0));
+    EXPECT_EQ(faces[1], Real(4));
+    EXPECT_EQ(faces[2], Real(14));
+    EXPECT_EQ(faces[3], Real(34));
+}
+
 TEST(
     FireLevel0Environment,
     FlatStretchedSnapshotMatchesAnalyticNativeStaggeredWind)

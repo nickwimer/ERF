@@ -7,6 +7,8 @@
 #include <AMReX_Geometry.H>
 #include <AMReX_MultiFab.H>
 
+#include <vector>
+
 namespace ERFFire
 {
 
@@ -44,6 +46,19 @@ FireFlatEnvironmentSampler
 freeze_erf_level0_environment (
     const ERFFireLevel0EnvironmentInputs& inputs,
     amrex::Real reference_height_agl_m);
+
+/**
+ * Return the common, horizontally flat level-0 nodal vertical faces as
+ * heights above physical ground.
+ *
+ * The returned vector has nz+1 entries, begins at exactly zero AGL, and is
+ * strictly increasing. Every nodal z plane is required to be horizontally
+ * uniform. This uses the same flat-grid scope/layout contract as the frozen
+ * Fire environment sampler.
+ */
+[[nodiscard]] std::vector<amrex::Real>
+erf_fire_level0_flat_vertical_faces_agl (
+    const ERFFireLevel0EnvironmentInputs& inputs);
 
 } // namespace ERFFire
 

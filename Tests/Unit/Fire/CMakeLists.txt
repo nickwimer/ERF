@@ -65,6 +65,10 @@ target_sources(erf_fire_unit_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireAtmosphericSource.cpp
 )
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireLevel0SourceCoupling.cpp
+)
 
 add_executable(erf_fire_timestep_identity
   ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
@@ -84,6 +88,21 @@ add_test(
 )
 set_tests_properties(
   FireTimeStepIntegration.OneWaySpreadPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedback.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayFeedbackChangesAtmosphere
   PROPERTIES
     LABELS unit
     TIMEOUT 900

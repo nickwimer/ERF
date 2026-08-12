@@ -147,12 +147,26 @@ ERF::ERF_shared ()
                 m_fire_runtime_options.coupling_mode =
                     ERFFire::ERFFireCouplingMode::OneWay;
             } else if (coupling_mode == "two_way") {
-                Error(
-                    "fire.coupling_mode = two_way is reserved but not implemented; "
-                    "use one_way for the M7e checkpoint");
+                m_fire_runtime_options.coupling_mode =
+                    ERFFire::ERFFireCouplingMode::TwoWay;
             } else {
                 Error(
                     "fire.coupling_mode must be one_way or two_way");
+            }
+
+            if (m_fire_runtime_options.coupling_mode
+                    == ERFFire::ERFFireCouplingMode::TwoWay) {
+                if (solverChoice.moisture_type
+                    != MoistureType::MoistNoCondensation) {
+                    Error(
+                        "M9c fire.coupling_mode = two_way requires "
+                        "erf.moisture_model = MoistNoCondensation");
+                }
+                if (solverChoice.anelastic[0] != 0) {
+                    Error(
+                        "M9c fire.coupling_mode = two_way currently requires "
+                        "compressible ERF");
+                }
             }
 
             std::string wind_mode;
@@ -237,6 +251,9 @@ ERF::ERF_shared ()
                 "combustion_temporal_substeps",
                 m_fire_runtime_options.combustion_temporal_substeps);
             pp_fire.query(
+                "feedback_extinction_depth_m",
+                m_fire_runtime_options.feedback_extinction_depth_m);
+            pp_fire.query(
                 "output_dir",
                 m_fire_runtime_options.output_dir);
             pp_fire.query(
@@ -295,6 +312,11 @@ ERF::ERF_shared ()
             if (m_fire_runtime_options.combustion_temporal_substeps <= 0) {
                 Error(
                     "fire.combustion_temporal_substeps must be positive");
+            }
+            if (!finite_positive(
+                    m_fire_runtime_options.feedback_extinction_depth_m)) {
+                Error(
+                    "fire.feedback_extinction_depth_m must be finite and positive");
             }
             if (m_fire_runtime_options.output_dir.empty()) {
                 Error(

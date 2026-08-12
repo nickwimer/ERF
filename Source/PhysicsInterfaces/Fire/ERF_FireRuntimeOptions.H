@@ -48,6 +48,7 @@ struct ERFFireRuntimeOptions
 
     amrex::Real arrival_time_tolerance_s{amrex::Real(1.0e-7)};
     int combustion_temporal_substeps{16};
+    amrex::Real feedback_extinction_depth_m{amrex::Real(50.0)};
 
     std::string output_dir{"fire_output"};
     int output_interval_steps{1};

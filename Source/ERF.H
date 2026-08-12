@@ -169,6 +169,16 @@ public:
     {
         return m_fire_spread_runtime.get();
     }
+
+    const amrex::MultiFab* FireAtmosphericSourceTendency () const noexcept
+    {
+        return m_fire_atmospheric_source_tendency.get();
+    }
+
+    double FireAtmosphericSourceTime () const noexcept
+    {
+        return m_fire_atmospheric_source_time;
+    }
 #endif
 
     void ConfigureDriverAtmosToOceanCoupling (bool use_coupling_driver,
@@ -745,6 +755,10 @@ private:
         m_fire_environment_snapshot;
     std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
         m_fire_spread_runtime;
+    std::unique_ptr<amrex::MultiFab>
+        m_fire_atmospheric_source_tendency;
+    double m_fire_atmospheric_source_time =
+        std::numeric_limits<double>::quiet_NaN();
     int m_fire_step_index = 0;
 #endif
 

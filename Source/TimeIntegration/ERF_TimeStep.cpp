@@ -5,8 +5,10 @@
 
 #ifdef ERF_USE_FIRE
 #include <ERF_FireLevel0Environment.H>
+#include <ERF_FireLevel0SourceCoupling.H>
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireSpreadOutput.H>
+#include <ERF_FireSurfaceFeedback.H>
 #endif
 
 using namespace amrex;
@@ -146,14 +148,18 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
     }
 
 #ifdef ERF_USE_FIRE
-    // One-way Fire checkpoint sequencing:
+    // Explicit Fire coupling sequencing:
     //   FillPatch atmosphere at t^n
     //   -> freeze one immutable t^n environment snapshot
-    //   -> advance the coupling-neutral Fire state across dt[0]
-    //   -> continue the ordinary ERF atmospheric Advance with no Fire source.
+    //   -> advance one candidate coupling-neutral Fire state across dt[0]
+    //   -> for two_way only, difference combustion history, project the
+    //      step-integrated release using t^n pressure, and prepare a constant
+    //      native ERF source tendency for the same atmospheric step
+    //   -> atomically commit the Fire candidate/source
+    //   -> ordinary ERF Advance.
     //
-    // The same frozen snapshot is spatially sampled at every current and RK
-    // midpoint Fire vertex. No WAF or Fire-to-atmosphere feedback is applied.
+    // one_way follows the same Fire evolution path but installs no atmospheric
+    // source. No WAF is applied in either mode.
     if (lev == 0 && m_fire_runtime_options.enabled) {
         ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
             geom[0],
@@ -195,9 +201,43 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 "ERF-Fire runtime clock is not synchronized with level-0 t^n");
         }
 
-        (void)m_fire_spread_runtime->advance_direct_reference_wind(
+        ERFFire::ERFFireSpreadRuntime next_fire_runtime =
+            *m_fire_spread_runtime;
+
+        (void)next_fire_runtime.advance_direct_reference_wind(
             *m_fire_environment_snapshot,
             static_cast<Real>(dt[0]));
+
+        std::unique_ptr<MultiFab> next_fire_source;
+        double next_fire_source_time =
+            std::numeric_limits<double>::quiet_NaN();
+
+        if (m_fire_runtime_options.coupling_mode
+            == ERFFire::ERFFireCouplingMode::TwoWay) {
+            const ERFFire::FireSurfaceFeedbackRaster feedback =
+                ERFFire::make_fire_surface_feedback_increment(
+                    m_fire_spread_runtime->combustion_raster(),
+                    next_fire_runtime.combustion_raster());
+
+            next_fire_source =
+                ERFFire::make_erf_fire_level0_source_tendency(
+                    feedback,
+                    fire_inputs,
+                    S_new,
+                    solverChoice.moisture_type,
+                    static_cast<Real>(dt[0]),
+                    ERFFire::ERFFireAtmosphericSourceOptions{
+                        m_fire_runtime_options
+                            .feedback_extinction_depth_m});
+            next_fire_source_time = time;
+        }
+
+        *m_fire_spread_runtime =
+            std::move(next_fire_runtime);
+        m_fire_atmospheric_source_tendency =
+            std::move(next_fire_source);
+        m_fire_atmospheric_source_time =
+            next_fire_source_time;
 
         ++m_fire_step_index;
         if (m_fire_step_index

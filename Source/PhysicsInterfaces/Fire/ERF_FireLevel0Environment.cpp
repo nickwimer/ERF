@@ -218,6 +218,81 @@ validate_scope_and_layout (
 
 } // namespace
 
+
+std::vector<amrex::Real>
+erf_fire_level0_flat_vertical_faces_agl (
+    const ERFFireLevel0EnvironmentInputs& inputs)
+{
+    validate_scope_and_layout(inputs);
+
+    const amrex::Box& domain = inputs.geometry.Domain();
+    const amrex::Real ground =
+        flat_ground_height(inputs.z_phys_nd, domain);
+
+    const amrex::Box nodal_domain =
+        amrex::convert(
+            domain,
+            amrex::IntVect(1, 1, 1));
+    const amrex::FArrayBox coordinates =
+        replicated_host_copy(
+            inputs.z_phys_nd,
+            nodal_domain,
+            0);
+    const auto z = coordinates.const_array();
+
+    const int ilo = nodal_domain.smallEnd(0);
+    const int ihi = nodal_domain.bigEnd(0);
+    const int jlo = nodal_domain.smallEnd(1);
+    const int jhi = nodal_domain.bigEnd(1);
+    const int klo = nodal_domain.smallEnd(2);
+    const int khi = nodal_domain.bigEnd(2);
+
+    std::vector<amrex::Real> result(
+        static_cast<std::size_t>(
+            khi - klo + 1),
+        amrex::Real(0));
+
+    for (int k = klo; k <= khi; ++k) {
+        const amrex::Real plane_height =
+            z(ilo, jlo, k);
+        require(
+            std::isfinite(plane_height),
+            "fire level-0 nodal height must be finite");
+
+        for (int j = jlo; j <= jhi; ++j) {
+            for (int i = ilo; i <= ihi; ++i) {
+                if (!std::isfinite(z(i, j, k))
+                    || z(i, j, k) != plane_height) {
+                    throw std::invalid_argument(
+                        "M9 Fire feedback requires horizontally uniform z_phys_nd planes");
+                }
+            }
+        }
+
+        const amrex::Real agl =
+            plane_height - ground;
+        require(
+            std::isfinite(agl),
+            "fire level-0 AGL face height must be finite");
+
+        const std::size_t index =
+            static_cast<std::size_t>(k - klo);
+        result[index] = agl;
+
+        if (index == 0) {
+            require(
+                agl == amrex::Real(0),
+                "fire level-0 first AGL face must be exactly zero");
+        } else {
+            require(
+                result[index] > result[index - 1],
+                "fire level-0 AGL faces must increase strictly");
+        }
+    }
+
+    return result;
+}
+
 FireFlatEnvironmentSampler
 freeze_erf_level0_environment (
     const ERFFireLevel0EnvironmentInputs& inputs,
