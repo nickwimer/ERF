@@ -61,6 +61,10 @@ target_sources(erf_fire_unit_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireSurfaceFeedback.cpp
 )
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireAtmosphericSource.cpp
+)
 
 add_executable(erf_fire_timestep_identity
   ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
