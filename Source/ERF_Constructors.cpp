@@ -13,10 +13,6 @@
 #include "AMReX_EB2_IF_Plane.H"
 #include "ERF_EBIFTerrain.H"
 
-#ifdef ERF_USE_FIRE
-#include <ERF_FireFlatEnvironmentSampler.H>
-#endif
-
 #include <cmath>
 
 using namespace amrex;
@@ -114,23 +110,192 @@ ERF::ERF_shared ()
 #ifdef ERF_USE_FIRE
     {
         ParmParse pp_fire("fire");
-        pp_fire.query(
-            "environment_read",
-            m_fire_environment_read_enabled);
 
-        if (m_fire_environment_read_enabled) {
-            const bool have_reference_height = pp_fire.query(
-                "reference_height_agl_m",
-                m_fire_reference_height_agl_m);
-            if (!have_reference_height) {
+        bool legacy_environment_read = false;
+        if (pp_fire.query(
+                "environment_read",
+                legacy_environment_read)) {
+            Error(
+                "fire.environment_read is obsolete; use "
+                "fire.enabled and fire.coupling_mode");
+        }
+
+        pp_fire.query(
+            "enabled",
+            m_fire_runtime_options.enabled);
+
+        if (m_fire_runtime_options.enabled) {
+            if (!restart_chkfile.empty()) {
                 Error(
-                    "fire.environment_read requires "
-                    "fire.reference_height_agl_m");
+                    "fire.enabled does not yet support ERF checkpoint restart");
             }
-            if (!std::isfinite(m_fire_reference_height_agl_m)
-                || m_fire_reference_height_agl_m < amrex::Real(0)) {
+            if (ParallelDescriptor::NProcs() != 1) {
+                Error(
+                    "M7e fire runtime currently requires one MPI rank");
+            }
+            if (max_level != 0) {
+                Error(
+                    "M7e fire runtime currently requires amr.max_level = 0");
+            }
+
+            std::string coupling_mode;
+            if (!pp_fire.query("coupling_mode", coupling_mode)) {
+                Error(
+                    "fire.enabled requires fire.coupling_mode");
+            }
+            if (coupling_mode == "one_way") {
+                m_fire_runtime_options.coupling_mode =
+                    ERFFire::ERFFireCouplingMode::OneWay;
+            } else if (coupling_mode == "two_way") {
+                Error(
+                    "fire.coupling_mode = two_way is reserved but not implemented; "
+                    "use one_way for the M7e checkpoint");
+            } else {
+                Error(
+                    "fire.coupling_mode must be one_way or two_way");
+            }
+
+            std::string wind_mode;
+            if (!pp_fire.query("wind_mode", wind_mode)) {
+                Error(
+                    "fire.enabled requires fire.wind_mode");
+            }
+            if (wind_mode != "direct_reference") {
+                Error(
+                    "M7e supports only fire.wind_mode = direct_reference");
+            }
+            m_fire_runtime_options.wind_mode =
+                ERFFire::ERFFireWindMode::DirectReference;
+
+            if (!pp_fire.query(
+                    "reference_height_agl_m",
+                    m_fire_runtime_options.reference_height_agl_m)) {
+                Error(
+                    "fire.enabled requires fire.reference_height_agl_m");
+            }
+
+            if (!pp_fire.query(
+                    "fuel_model",
+                    m_fire_runtime_options.fuel_model)) {
+                Error(
+                    "fire.enabled requires fire.fuel_model");
+            }
+            if (m_fire_runtime_options.fuel_model != "FM1") {
+                Error(
+                    "M7e supports only fire.fuel_model = FM1");
+            }
+
+            if (!pp_fire.query(
+                    "dead_fuel_moisture_fraction",
+                    m_fire_runtime_options.dead_fuel_moisture_fraction)) {
+                Error(
+                    "fire.enabled requires fire.dead_fuel_moisture_fraction");
+            }
+
+            Vector<Real> ignition_center(2);
+            if (!pp_fire.queryarr(
+                    "ignition_center_m",
+                    ignition_center,
+                    0,
+                    2)) {
+                Error(
+                    "fire.enabled requires two values in fire.ignition_center_m");
+            }
+            m_fire_runtime_options.ignition_center_x_m =
+                ignition_center[0];
+            m_fire_runtime_options.ignition_center_y_m =
+                ignition_center[1];
+
+            if (!pp_fire.query(
+                    "ignition_radius_m",
+                    m_fire_runtime_options.ignition_radius_m)) {
+                Error(
+                    "fire.enabled requires fire.ignition_radius_m");
+            }
+            pp_fire.query(
+                "ignition_vertex_count",
+                m_fire_runtime_options.ignition_vertex_count);
+
+            if (!pp_fire.query(
+                    "remesh_min_edge_length_m",
+                    m_fire_runtime_options.remesh_min_edge_length_m)
+                || !pp_fire.query(
+                    "remesh_max_edge_length_m",
+                    m_fire_runtime_options.remesh_max_edge_length_m)
+                || !pp_fire.query(
+                    "remesh_max_chord_error_m",
+                    m_fire_runtime_options.remesh_max_chord_error_m)) {
+                Error(
+                    "fire.enabled requires remesh_min_edge_length_m, "
+                    "remesh_max_edge_length_m, and remesh_max_chord_error_m");
+            }
+
+            pp_fire.query(
+                "arrival_time_tolerance_s",
+                m_fire_runtime_options.arrival_time_tolerance_s);
+            pp_fire.query(
+                "output_dir",
+                m_fire_runtime_options.output_dir);
+            pp_fire.query(
+                "output_interval_steps",
+                m_fire_runtime_options.output_interval_steps);
+
+            const auto finite_nonnegative = [] (Real value) {
+                return std::isfinite(value)
+                    && value >= Real(0.0);
+            };
+            const auto finite_positive = [] (Real value) {
+                return std::isfinite(value)
+                    && value > Real(0.0);
+            };
+
+            if (!finite_nonnegative(
+                    m_fire_runtime_options.reference_height_agl_m)) {
                 Error(
                     "fire.reference_height_agl_m must be finite and nonnegative");
+            }
+            if (!finite_nonnegative(
+                    m_fire_runtime_options.dead_fuel_moisture_fraction)) {
+                Error(
+                    "fire.dead_fuel_moisture_fraction must be finite and nonnegative");
+            }
+            if (!std::isfinite(
+                    m_fire_runtime_options.ignition_center_x_m)
+                || !std::isfinite(
+                    m_fire_runtime_options.ignition_center_y_m)
+                || !finite_positive(
+                    m_fire_runtime_options.ignition_radius_m)) {
+                Error(
+                    "fire ignition center must be finite and radius must be positive");
+            }
+            if (m_fire_runtime_options.ignition_vertex_count < 8) {
+                Error(
+                    "fire.ignition_vertex_count must be at least 8");
+            }
+            if (!finite_positive(
+                    m_fire_runtime_options.remesh_min_edge_length_m)
+                || !finite_positive(
+                    m_fire_runtime_options.remesh_max_edge_length_m)
+                || m_fire_runtime_options.remesh_min_edge_length_m
+                    > Real(0.5)
+                        * m_fire_runtime_options.remesh_max_edge_length_m
+                || !finite_nonnegative(
+                    m_fire_runtime_options.remesh_max_chord_error_m)) {
+                Error(
+                    "invalid fire remesh length/chord-error configuration");
+            }
+            if (!finite_positive(
+                    m_fire_runtime_options.arrival_time_tolerance_s)) {
+                Error(
+                    "fire.arrival_time_tolerance_s must be finite and positive");
+            }
+            if (m_fire_runtime_options.output_dir.empty()) {
+                Error(
+                    "fire.output_dir must not be empty");
+            }
+            if (m_fire_runtime_options.output_interval_steps <= 0) {
+                Error(
+                    "fire.output_interval_steps must be positive");
             }
         }
     }

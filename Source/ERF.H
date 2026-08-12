@@ -80,10 +80,8 @@
 #endif
 
 #ifdef ERF_USE_FIRE
-namespace ERFFire
-{
-class FireFlatEnvironmentSampler;
-}
+#include <ERF_FireRuntimeOptions.H>
+#include <ERF_FireSpreadRuntime.H>
 #endif
 
 #include <iostream>
@@ -152,9 +150,9 @@ public:
     double EvolveOneStep (double time, double dt_request);
 
 #ifdef ERF_USE_FIRE
-    bool FireEnvironmentReadEnabled () const noexcept
+    bool FireEnabled () const noexcept
     {
-        return m_fire_environment_read_enabled;
+        return m_fire_runtime_options.enabled;
     }
 
     const ERFFire::FireFlatEnvironmentSampler* FireEnvironmentSnapshot () const noexcept
@@ -165,6 +163,11 @@ public:
     double FireEnvironmentSnapshotTime () const noexcept
     {
         return m_fire_environment_snapshot_time;
+    }
+
+    const ERFFire::ERFFireSpreadRuntime* FireSpreadRuntime () const noexcept
+    {
+        return m_fire_spread_runtime.get();
     }
 #endif
 
@@ -735,12 +738,14 @@ public:
 private:
 
 #ifdef ERF_USE_FIRE
-    bool m_fire_environment_read_enabled = false;
-    amrex::Real m_fire_reference_height_agl_m = amrex::Real(0);
+    ERFFire::ERFFireRuntimeOptions m_fire_runtime_options{};
     double m_fire_environment_snapshot_time =
         std::numeric_limits<double>::quiet_NaN();
     std::unique_ptr<ERFFire::FireFlatEnvironmentSampler>
         m_fire_environment_snapshot;
+    std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
+        m_fire_spread_runtime;
+    int m_fire_step_index = 0;
 #endif
 
     ///////////////////////////

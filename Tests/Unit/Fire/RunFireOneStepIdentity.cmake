@@ -15,7 +15,7 @@ function(run_identity_case mode label checkpoint_var)
   execute_process(
     COMMAND "${IDENTITY_EXE}"
             "${IDENTITY_INPUT}"
-            "fire.environment_read=${mode}"
+            "fire.enabled=${mode}"
             "erf.check_file=chk"
     WORKING_DIRECTORY "${case_dir}"
     RESULT_VARIABLE run_result
@@ -25,7 +25,7 @@ function(run_identity_case mode label checkpoint_var)
 
   if(NOT run_result EQUAL 0)
     message(FATAL_ERROR
-      "ERF fire identity child failed for environment_read=${mode}\n"
+      "ERF fire identity child failed for fire.enabled=${mode}\n"
       "stdout:\n${run_output}\n"
       "stderr:\n${run_error}")
   endif()
@@ -33,16 +33,33 @@ function(run_identity_case mode label checkpoint_var)
   if(NOT run_output MATCHES "ERF_FIRE_IDENTITY_CHILD_OK=1")
     message(FATAL_ERROR
       "ERF fire identity child did not report successful completion "
-      "for environment_read=${mode}\n"
+      "for fire.enabled=${mode}\n"
       "stdout:\n${run_output}\n"
       "stderr:\n${run_error}")
+  endif()
+
+  if(mode EQUAL 1)
+    foreach(required_file IN ITEMS
+        summary.csv
+        perimeter_000000.csv
+        perimeter_000005.csv
+        raster_000000.csv
+        raster_000005.csv)
+      if(NOT EXISTS "${case_dir}/fire_output/${required_file}")
+        message(FATAL_ERROR
+          "enabled one-way fire run did not produce ${required_file}")
+      endif()
+    endforeach()
+  elseif(EXISTS "${case_dir}/fire_output")
+    message(FATAL_ERROR
+      "disabled fire control unexpectedly produced fire_output")
   endif()
 
   file(GLOB checkpoint_dirs LIST_DIRECTORIES true "${case_dir}/chk*")
   list(LENGTH checkpoint_dirs checkpoint_count)
   if(NOT checkpoint_count EQUAL 1)
     message(FATAL_ERROR
-      "expected exactly one identity checkpoint for environment_read=${mode}, "
+      "expected exactly one identity checkpoint for fire.enabled=${mode}, "
       "found ${checkpoint_count}: ${checkpoint_dirs}")
   endif()
 
@@ -80,7 +97,7 @@ function(collect_prognostic_files checkpoint_dir output_var)
 endfunction()
 
 run_identity_case(0 control control_checkpoint)
-run_identity_case(1 fire_read fire_checkpoint)
+run_identity_case(1 one_way fire_checkpoint)
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E compare_files
@@ -90,7 +107,7 @@ execute_process(
 )
 if(NOT header_compare_result EQUAL 0)
   message(FATAL_ERROR
-    "fire environment read changed one-step checkpoint time/layout metadata")
+    "one-way Fire changed multi-step checkpoint time/layout metadata")
 endif()
 
 collect_prognostic_files("${control_checkpoint}" control_files)
@@ -98,9 +115,9 @@ collect_prognostic_files("${fire_checkpoint}" fire_files)
 
 if(NOT "${control_files}" STREQUAL "${fire_files}")
   message(FATAL_ERROR
-    "control and fire-read checkpoints have different prognostic file sets:\n"
+    "control and one-way Fire checkpoints have different prognostic file sets:\n"
     "control=${control_files}\n"
-    "fire_read=${fire_files}")
+    "one_way=${fire_files}")
 endif()
 
 foreach(relative_file IN LISTS control_files)
@@ -112,9 +129,9 @@ foreach(relative_file IN LISTS control_files)
   )
   if(NOT compare_result EQUAL 0)
     message(FATAL_ERROR
-      "fire environment read changed one-step prognostic bits in ${relative_file}")
+      "one-way Fire changed atmospheric prognostic bits in ${relative_file}")
   endif()
 endforeach()
 
 message(STATUS
-  "Fire one-way read identity PASS: checkpoint prognostic files are bitwise equal")
+  "Fire one-way spread identity PASS: Fire advances while atmospheric checkpoint prognostic files remain bitwise equal")

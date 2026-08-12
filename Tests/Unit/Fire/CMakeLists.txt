@@ -60,14 +60,14 @@ build_erf_exe(erf_fire_timestep_identity NO_ERF_MAIN)
 add_dependencies(erf_fire_unit_tests erf_fire_timestep_identity)
 
 add_test(
-  NAME FireTimeStepIntegration.OneWayReadPreservesPrognosticBits
+  NAME FireTimeStepIntegration.OneWaySpreadPreservesPrognosticBits
   COMMAND ${CMAKE_COMMAND}
     -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
 )
 set_tests_properties(
-  FireTimeStepIntegration.OneWayReadPreservesPrognosticBits
+  FireTimeStepIntegration.OneWaySpreadPreservesPrognosticBits
   PROPERTIES
     LABELS unit
     TIMEOUT 900

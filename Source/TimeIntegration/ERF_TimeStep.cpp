@@ -5,6 +5,8 @@
 
 #ifdef ERF_USE_FIRE
 #include <ERF_FireLevel0Environment.H>
+#include <ERF_FireRuntimeInit.H>
+#include <ERF_FireSpreadOutput.H>
 #endif
 
 using namespace amrex;
@@ -144,10 +146,15 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
     }
 
 #ifdef ERF_USE_FIRE
-    // Freeze one immutable atmospheric t^n snapshot after the existing
-    // level-0 FillPatch and before time labels or prognostic state advance.
-    // Future fire RK/current-point sampling reuses this same snapshot.
-    if (lev == 0 && m_fire_environment_read_enabled) {
+    // One-way Fire checkpoint sequencing:
+    //   FillPatch atmosphere at t^n
+    //   -> freeze one immutable t^n environment snapshot
+    //   -> advance the coupling-neutral Fire state across dt[0]
+    //   -> continue the ordinary ERF atmospheric Advance with no Fire source.
+    //
+    // The same frozen snapshot is spatially sampled at every current and RK
+    // midpoint Fire vertex. No WAF or Fire-to-atmosphere feedback is applied.
+    if (lev == 0 && m_fire_runtime_options.enabled) {
         ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
             geom[0],
             U_new,
@@ -163,10 +170,44 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
                 ERFFire::freeze_erf_level0_environment(
                     fire_inputs,
-                    m_fire_reference_height_agl_m));
+                    m_fire_runtime_options.reference_height_agl_m));
 
         m_fire_environment_snapshot = std::move(next_snapshot);
         m_fire_environment_snapshot_time = time;
+
+        if (!m_fire_spread_runtime) {
+            m_fire_spread_runtime =
+                ERFFire::make_erf_fire_spread_runtime(
+                    m_fire_runtime_options,
+                    geom[0],
+                    static_cast<Real>(time));
+            m_fire_step_index = 0;
+
+            ERFFire::write_erf_fire_spread_snapshot(
+                *m_fire_spread_runtime,
+                m_fire_runtime_options.output_dir,
+                m_fire_step_index);
+        }
+
+        if (m_fire_spread_runtime->current_time_s()
+            != static_cast<Real>(time)) {
+            Error(
+                "ERF-Fire runtime clock is not synchronized with level-0 t^n");
+        }
+
+        (void)m_fire_spread_runtime->advance_direct_reference_wind(
+            *m_fire_environment_snapshot,
+            static_cast<Real>(dt[0]));
+
+        ++m_fire_step_index;
+        if (m_fire_step_index
+                % m_fire_runtime_options.output_interval_steps
+            == 0) {
+            ERFFire::write_erf_fire_spread_snapshot(
+                *m_fire_spread_runtime,
+                m_fire_runtime_options.output_dir,
+                m_fire_step_index);
+        }
     }
 #endif
 

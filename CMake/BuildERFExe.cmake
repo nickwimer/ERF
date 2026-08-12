@@ -25,6 +25,8 @@ function(erf_add_fire_sources target)
 
   target_sources(${target} PRIVATE
     ${FIRE_IFACE_DIR}/ERF_FireLevel0Environment.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireRuntimeInit.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireSpreadOutput.cpp
     ${FIRE_IFACE_DIR}/ERF_FireSpreadRuntime.cpp
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeter.cpp
     ${FIRE_SRC_DIR}/Front/ERF_VectorPerimeterPropagator.cpp
