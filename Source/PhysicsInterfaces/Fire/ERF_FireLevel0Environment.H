@@ -2,6 +2,7 @@
 #define ERF_FIRE_LEVEL0_ENVIRONMENT_H_
 
 #include <Environment/ERF_FireFlatEnvironmentSampler.H>
+#include <Environment/ERF_FireTerrainSurface.H>
 #include <ERF_DataStruct.H>
 
 #include <AMReX_Geometry.H>
@@ -13,13 +14,13 @@ namespace ERFFire
 {
 
 /**
- * Read-only ERF level-0 fields needed to freeze one flat-grid atmospheric
- * environment snapshot for the fire model.
+ * Read-only ERF level-0 fields needed by Fire environment/geometry adapters.
  *
  * The adapter intentionally receives the relevant solver-scope metadata
- * explicitly instead of owning or depending on an ERF object. Supports
- * only one configured AMR level and physically flat ConstantDz/StretchedDz
- * grids.
+ * explicitly instead of owning or depending on an ERF object. The existing
+ * wind snapshot remains restricted to physically flat ConstantDz/StretchedDz
+ * grids. Terrain-surface extraction additionally supports static-fitted
+ * VariableDz geometry at level 0.
  */
 struct ERFFireLevel0EnvironmentInputs
 {
@@ -33,6 +34,18 @@ struct ERFFireLevel0EnvironmentInputs
     BuildingsType buildings_type{BuildingsType::None};
     int configured_max_level{0};
 };
+
+/**
+ * Extract the level-0 bottom nodal surface into the coupling-neutral bilinear
+ * Fire terrain representation.
+ *
+ * VariableDz is accepted only for StaticFittedMesh. Moving fitted terrain, EB,
+ * immersed forcing, buildings, and configured AMR levels above zero remain
+ * outside the current scope.
+ */
+[[nodiscard]] FireTerrainSurface
+make_erf_level0_terrain_surface (
+    const ERFFireLevel0EnvironmentInputs& inputs);
 
 /**
  * Freeze the already-fillpatched ERF level-0 horizontal wind at one

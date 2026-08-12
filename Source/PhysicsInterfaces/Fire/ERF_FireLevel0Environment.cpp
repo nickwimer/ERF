@@ -156,42 +156,58 @@ horizontal_velocity_plane_box (
 }
 
 void
-validate_scope_and_layout (
+validate_common_level0_coordinate_scope (
     const ERFFireLevel0EnvironmentInputs& inputs)
 {
     require(
         inputs.configured_max_level == 0,
-        "M7 fire environment supports only configurations with max_level = 0");
-
-    require(
-        inputs.mesh_type != MeshType::VariableDz,
-        "M7 fire environment defers VariableDz / terrain-fitted sampling");
+        "Fire level-0 coupling supports only configurations with max_level = 0");
 
     require(
         inputs.terrain_type != TerrainType::EB,
-        "M7 fire environment does not support EB terrain");
+        "Fire level-0 coupling does not support EB terrain");
     require(
         inputs.terrain_type != TerrainType::ImmersedForcing,
-        "M7 fire environment does not support immersed-forcing terrain");
+        "Fire level-0 coupling does not support immersed-forcing terrain");
     require(
         inputs.terrain_type != TerrainType::MovingFittedMesh,
-        "M7 fire environment does not support moving fitted terrain");
+        "Fire level-0 coupling does not support moving fitted terrain");
     require(
         inputs.buildings_type == BuildingsType::None,
-        "M7 fire environment does not support immersed buildings");
+        "Fire level-0 coupling does not support immersed buildings");
 
     const amrex::Box& domain = inputs.geometry.Domain();
     require(
         domain.cellCentered(),
-        "fire environment requires a cell-centered ERF geometry domain");
+        "Fire level-0 coupling requires a cell-centered ERF geometry domain");
 
+    const amrex::Box expected_zcc = domain;
+    const amrex::Box expected_znd =
+        amrex::convert(domain, amrex::IntVect(1, 1, 1));
+
+    require_level0_layout(
+        inputs.z_phys_cc, expected_zcc,
+        "fire z_phys_cc BoxArray does not cover the level-0 cell domain");
+    require_level0_layout(
+        inputs.z_phys_nd, expected_znd,
+        "fire z_phys_nd BoxArray does not cover the level-0 nodal domain");
+}
+
+void
+validate_flat_scope_and_layout (
+    const ERFFireLevel0EnvironmentInputs& inputs)
+{
+    validate_common_level0_coordinate_scope(inputs);
+
+    require(
+        inputs.mesh_type != MeshType::VariableDz,
+        "flat Fire environment defers VariableDz / terrain-fitted wind sampling");
+
+    const amrex::Box& domain = inputs.geometry.Domain();
     const amrex::Box expected_u =
         amrex::convert(domain, amrex::IntVect(1, 0, 0));
     const amrex::Box expected_v =
         amrex::convert(domain, amrex::IntVect(0, 1, 0));
-    const amrex::Box expected_zcc = domain;
-    const amrex::Box expected_znd =
-        amrex::convert(domain, amrex::IntVect(1, 1, 1));
 
     require_level0_layout(
         inputs.x_velocity, expected_u,
@@ -199,12 +215,6 @@ validate_scope_and_layout (
     require_level0_layout(
         inputs.y_velocity, expected_v,
         "fire y-velocity BoxArray does not cover the level-0 y-face domain");
-    require_level0_layout(
-        inputs.z_phys_cc, expected_zcc,
-        "fire z_phys_cc BoxArray does not cover the level-0 cell domain");
-    require_level0_layout(
-        inputs.z_phys_nd, expected_znd,
-        "fire z_phys_nd BoxArray does not cover the level-0 nodal domain");
 
     const amrex::IntVect x_ng = inputs.x_velocity.nGrowVect();
     const amrex::IntVect y_ng = inputs.y_velocity.nGrowVect();
@@ -216,14 +226,91 @@ validate_scope_and_layout (
         "fire y-velocity snapshot requires at least one filled ghost cell");
 }
 
+void
+validate_terrain_surface_scope_and_layout (
+    const ERFFireLevel0EnvironmentInputs& inputs)
+{
+    validate_common_level0_coordinate_scope(inputs);
+
+    if (inputs.mesh_type == MeshType::VariableDz) {
+        require(
+            inputs.terrain_type == TerrainType::StaticFittedMesh,
+            "VariableDz Fire terrain extraction requires static fitted terrain");
+    }
+}
+
 } // namespace
+
+
+FireTerrainSurface
+make_erf_level0_terrain_surface (
+    const ERFFireLevel0EnvironmentInputs& inputs)
+{
+    validate_terrain_surface_scope_and_layout(inputs);
+
+    const amrex::Box& domain = inputs.geometry.Domain();
+    amrex::Box bottom =
+        amrex::convert(
+            domain,
+            amrex::IntVect(1, 1, 1));
+    bottom.setRange(2, bottom.smallEnd(2));
+
+    const amrex::FArrayBox surface =
+        replicated_host_copy(
+            inputs.z_phys_nd,
+            bottom,
+            0);
+    const auto z = surface.const_array();
+
+    const auto prob_lo =
+        inputs.geometry.ProbLoArray();
+    const auto cell_size =
+        inputs.geometry.CellSizeArray();
+
+    const std::size_t nx =
+        static_cast<std::size_t>(
+            domain.length(0));
+    const std::size_t ny =
+        static_cast<std::size_t>(
+            domain.length(1));
+
+    FireCartesianRasterGeometry2D horizontal_geometry{
+        nx,
+        ny,
+        prob_lo[0],
+        prob_lo[1],
+        cell_size[0],
+        cell_size[1]};
+
+    std::vector<amrex::Real> nodal_ground_height_m;
+    nodal_ground_height_m.reserve(
+        (nx + 1) * (ny + 1));
+
+    const int ilo = bottom.smallEnd(0);
+    const int jlo = bottom.smallEnd(1);
+    const int k = bottom.smallEnd(2);
+
+    for (std::size_t j = 0; j <= ny; ++j) {
+        for (std::size_t i = 0; i <= nx; ++i) {
+            nodal_ground_height_m.push_back(
+                z(
+                    ilo + static_cast<int>(i),
+                    jlo + static_cast<int>(j),
+                    k));
+        }
+    }
+
+    return FireTerrainSurface(
+        horizontal_geometry,
+        std::move(nodal_ground_height_m));
+}
 
 
 std::vector<amrex::Real>
 erf_fire_level0_flat_vertical_faces_agl (
     const ERFFireLevel0EnvironmentInputs& inputs)
 {
-    validate_scope_and_layout(inputs);
+    validate_flat_scope_and_layout(inputs);
 
     const amrex::Box& domain = inputs.geometry.Domain();
     const amrex::Real ground =
@@ -298,7 +385,7 @@ freeze_erf_level0_environment (
     const ERFFireLevel0EnvironmentInputs& inputs,
     amrex::Real reference_height_agl_m)
 {
-    validate_scope_and_layout(inputs);
+    validate_flat_scope_and_layout(inputs);
 
     if (!std::isfinite(reference_height_agl_m) ||
         reference_height_agl_m < amrex::Real(0)) {
