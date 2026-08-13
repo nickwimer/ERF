@@ -126,9 +126,11 @@ public:
      * Advance one fire step using sampled reference wind directly as the
      * Rothermel model wind.
      *
-     * This is an explicit controlled-case coupling mode, not a WAF model.
-     * This overload uses exactly zero terrain slope. The atmospheric wind
-     * vector is the map-plane push-to direction.
+     * This is an explicit controlled-case compatibility mode, not a WAF model:
+     * the sampled reference-wind vector is an identity mapping to the Rothermel
+     * model/midflame-wind input. This overload uses exactly zero terrain slope.
+     * The atmospheric wind vector is the map-plane push-to direction. Any wind
+     * adjustment must occur before Rothermel/Richards evaluation.
      *
      * Strong exception guarantee: persistent perimeter/raster/combustion/time
      * state is committed only after propagation, arrival, burned-history,
@@ -145,7 +147,8 @@ public:
      * Fire remains a map-plane model: terrain contributes the local
      * horizontal gradient (dh/dx, dh/dy), its magnitude is the Rothermel
      * slope tangent, and its normalized direction is the Richards upslope
-     * direction. No terrain-surface arclength rescaling or WAF is applied.
+     * direction. No terrain-surface arclength rescaling or WAF is applied;
+     * the sampled reference wind is used unchanged as model/midflame wind.
      */
     [[nodiscard]] ERFFireStepDiagnostics
     advance_direct_reference_wind(

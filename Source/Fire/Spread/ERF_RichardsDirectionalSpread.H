@@ -87,6 +87,10 @@ struct RichardsDirectionalSpread
  * The effective midflame wind used only for ellipse shape is obtained by
  * inverting the same audited Rothermel wind-factor relation.
  */
+// Current wind-input contract: Richards' effective midflame wind is a
+// resultant-equivalent diagnostic after Rothermel wind/slope vectoring. It is
+// neither the atmospheric/reference wind nor a WAF target. Apply any WAF to
+// the reference-wind vector before Rothermel evaluation.
 [[nodiscard]] RichardsDirectionalSpread make_richards_directional_spread(
     const RothermelResult& behavior,
     const FireVec2& wind_push_unit,

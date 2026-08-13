@@ -14,6 +14,13 @@ enum class ERFFireCouplingMode
     TwoWay
 };
 
+/**
+ * ERF-to-Fire wind-input policy.
+ *
+ * DirectReference is the existing compatibility/control mode: horizontal wind
+ * sampled at reference_height_agl_m is used unchanged as the Rothermel
+ * model/midflame wind. It is intentionally not a WAF model.
+ */
 enum class ERFFireWindMode
 {
     DirectReference
@@ -32,6 +39,8 @@ struct ERFFireRuntimeOptions
     ERFFireCouplingMode coupling_mode{ERFFireCouplingMode::OneWay};
     ERFFireWindMode wind_mode{ERFFireWindMode::DirectReference};
 
+    // User-configured AGL sampling height for the ERF horizontal reference
+    // wind. No 20-ft, 10-m, or midflame standard is implied by this field.
     amrex::Real reference_height_agl_m{};
 
     std::string fuel_model{"FM1"};

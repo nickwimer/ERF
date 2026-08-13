@@ -12,8 +12,8 @@ namespace ERFFire
  * model_wind_speed_mps is the non-negative wind speed consumed by the
  * Rothermel wind-factor equation. Rothermel (1972) defines that input at
  * midflame height. This behavior module performs no wind-adjustment-factor or
- * ERF-height conversion; a later coupling layer must provide the appropriate
- * model wind.
+ * ERF-height conversion; upstream Fire-side wind preprocessing must provide
+ * the appropriate model wind before this calculation.
  *
  * slope_tangent_magnitude is |rise/run|. Direction/sign is deliberately not
  * collapsed into this scalar behavior object; the later directional-spread

@@ -74,9 +74,10 @@ freeze_erf_level0_environment (
  * used to construct face heights. The returned sampler owns its host data and
  * never references ERF MultiFabs after this function returns.
  *
- * The one-way VariableDz driver uses this snapshot together with the
- * independently extracted FireTerrainSurface. This routine itself remains
- * limited to wind reduction and applies neither slope forcing nor feedback.
+ * The VariableDz driver uses this snapshot together with the independently
+ * extracted FireTerrainSurface for both supported coupling modes. This routine
+ * only freezes/samples the configured local-AGL horizontal reference wind; it
+ * applies no WAF, slope forcing, combustion, or atmospheric feedback.
  */
 FireFlatEnvironmentSampler
 freeze_erf_level0_terrain_reference_wind_environment (
