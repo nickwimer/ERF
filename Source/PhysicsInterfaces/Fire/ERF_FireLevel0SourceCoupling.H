@@ -40,7 +40,7 @@ make_erf_fire_level0_source_tendency(
 
 /**
  * Build one native ERF level-0 source tendency for static-fitted VariableDz
- * terrain without activating the two-way driver.
+ * terrain.
  *
  * Each horizontal Fire cell owns one local AGL column. Local vertical faces
  * are the four-corner averages of z_phys_nd at each native vertical face,
@@ -56,9 +56,10 @@ make_erf_fire_level0_source_tendency(
  * factor is introduced. t^n pressure diagnosis and the native rho_d*theta_d
  * and rho_d*q_v source formulas are identical to the flat projector.
  *
- * This routine provides projection infrastructure only. The ERF timestep
- * continues to reject two-way VariableDz coupling until the terrain source
- * projector is wired into the coupled driver and that path is validated.
+ * The VariableDz two-way driver uses this projector after advancing the
+ * coupling-neutral Fire candidate and constructing the step-integrated
+ * combustion feedback. one_way coupling never installs this atmospheric
+ * source.
  */
 [[nodiscard]] std::unique_ptr<amrex::MultiFab>
 make_erf_fire_level0_terrain_source_tendency(

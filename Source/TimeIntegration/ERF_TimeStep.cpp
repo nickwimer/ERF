@@ -159,9 +159,10 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
     //   -> ordinary ERF Advance.
     //
     // one_way follows the same Fire evolution path but installs no atmospheric
-    // source. VariableDz one_way freezes local-AGL wind and map-plane terrain
-    // slope. VariableDz two_way remains rejected until terrain-aware source
-    // deposition is implemented. No WAF is applied.
+    // source. VariableDz freezes local-AGL wind and uses map-plane terrain
+    // slope in both coupling modes. VariableDz two_way projects the same
+    // combustion feedback through local terrain-following AGL columns using
+    // authoritative detJ_cc physical volumes. No WAF is applied.
     if (lev == 0 && m_fire_runtime_options.enabled) {
         ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
             geom[0],
@@ -245,16 +246,31 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                     m_fire_spread_runtime->combustion_raster(),
                     next_fire_runtime.combustion_raster());
 
-            next_fire_source =
-                ERFFire::make_erf_fire_level0_source_tendency(
-                    feedback,
-                    fire_inputs,
-                    S_new,
-                    solverChoice.moisture_type,
-                    static_cast<Real>(dt[0]),
-                    ERFFire::ERFFireAtmosphericSourceOptions{
-                        m_fire_runtime_options
-                            .feedback_extinction_depth_m});
+            const ERFFire::ERFFireAtmosphericSourceOptions
+                source_options{
+                    m_fire_runtime_options
+                        .feedback_extinction_depth_m};
+
+            if (solverChoice.mesh_type == MeshType::VariableDz) {
+                next_fire_source =
+                    ERFFire::make_erf_fire_level0_terrain_source_tendency(
+                        feedback,
+                        fire_inputs,
+                        *detJ_cc[0],
+                        S_new,
+                        solverChoice.moisture_type,
+                        static_cast<Real>(dt[0]),
+                        source_options);
+            } else {
+                next_fire_source =
+                    ERFFire::make_erf_fire_level0_source_tendency(
+                        feedback,
+                        fire_inputs,
+                        S_new,
+                        solverChoice.moisture_type,
+                        static_cast<Real>(dt[0]),
+                        source_options);
+            }
             next_fire_source_time = time;
         }
 

@@ -7,8 +7,12 @@ endif()
 
 file(REAL_PATH "." test_root)
 
+if(NOT DEFINED TWO_WAY_CASE_PREFIX OR "${TWO_WAY_CASE_PREFIX}" STREQUAL "")
+  set(TWO_WAY_CASE_PREFIX "fire_two_way")
+endif()
+
 function(run_case mode label checkpoint_var output_var)
-  set(case_dir "${test_root}/fire_two_way_${label}")
+  set(case_dir "${test_root}/${TWO_WAY_CASE_PREFIX}_${label}")
   file(REMOVE_RECURSE "${case_dir}")
   file(MAKE_DIRECTORY "${case_dir}")
 
