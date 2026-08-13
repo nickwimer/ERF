@@ -1,4 +1,5 @@
 #include <ERF_FireSpreadRuntime.H>
+#include <ERF_FireRuntimeOptions.H>
 #include <ERF_FireTerrainSurface.H>
 #include <ERF_FireCombustion.H>
 
@@ -121,7 +122,8 @@ make_uniform_sampler(
     Real dy,
     std::size_t nx,
     std::size_t ny,
-    FireVec2 wind_mps)
+    FireVec2 wind_mps,
+    Real reference_height_agl_m = Real(0.5))
 {
     FireFlatEnvironmentLayout2D layout(
         xlo, ylo, dx, dy, nx, ny);
@@ -131,7 +133,7 @@ make_uniform_sampler(
         layout.v_storage_size(), wind_mps.y);
     return FireFlatEnvironmentSampler(
         std::move(layout),
-        Real(0.5),
+        reference_height_agl_m,
         std::move(u),
         std::move(v));
 }
@@ -1061,6 +1063,222 @@ TEST(
         EXPECT_EQ(
             runtime.perimeter()
                 .vertices_m()[i].y,
+            before_vertices[i].y);
+    }
+}
+TEST(FireSpreadRuntime, UnityExplicitWafMatchesDirectReferenceExactly)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16, 16,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    const FirePerimeter initial =
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0));
+
+    ERFFireSpreadRuntime direct_runtime(
+        initial,
+        Real(0.0),
+        make_config(geometry));
+    ERFFireSpreadRuntime waf_runtime = direct_runtime;
+
+    const auto environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            16, 16,
+            FireVec2{Real(1.0), Real(0.25)},
+            ERFFire::explicit_waf_20ft_reference_height_agl_m);
+
+    const auto direct_diagnostics =
+        direct_runtime.advance_direct_reference_wind(
+            environment, Real(1.0));
+    const auto waf_diagnostics =
+        waf_runtime.advance_explicit_waf_20ft(
+            environment, Real(1.0), Real(1.0));
+
+    EXPECT_EQ(
+        waf_runtime.current_time_s(),
+        direct_runtime.current_time_s());
+    EXPECT_EQ(
+        waf_diagnostics.burned_area_m2,
+        direct_diagnostics.burned_area_m2);
+    EXPECT_EQ(
+        waf_diagnostics.arrived_cell_count,
+        direct_diagnostics.arrived_cell_count);
+    EXPECT_EQ(
+        waf_diagnostics.remaining_dry_fuel_kg,
+        direct_diagnostics.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        waf_diagnostics.consumed_dry_fuel_kg,
+        direct_diagnostics.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        waf_diagnostics.sensible_energy_j,
+        direct_diagnostics.sensible_energy_j);
+    EXPECT_EQ(
+        waf_diagnostics.water_released_kg,
+        direct_diagnostics.water_released_kg);
+
+    ASSERT_EQ(
+        waf_runtime.perimeter().size(),
+        direct_runtime.perimeter().size());
+    for (std::size_t i = 0;
+         i < direct_runtime.perimeter().size();
+         ++i) {
+        EXPECT_EQ(
+            waf_runtime.perimeter().vertices_m()[i].x,
+            direct_runtime.perimeter().vertices_m()[i].x);
+        EXPECT_EQ(
+            waf_runtime.perimeter().vertices_m()[i].y,
+            direct_runtime.perimeter().vertices_m()[i].y);
+    }
+}
+
+TEST(FireSpreadRuntime, ZeroExplicitWafMatchesZeroWindDirectRuntimeExactly)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16, 16,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    const FirePerimeter initial =
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0));
+
+    ERFFireSpreadRuntime direct_runtime(
+        initial,
+        Real(0.0),
+        make_config(geometry));
+    ERFFireSpreadRuntime waf_runtime = direct_runtime;
+
+    const auto zero_environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            16, 16,
+            FireVec2{Real(0.0), Real(0.0)},
+            ERFFire::explicit_waf_20ft_reference_height_agl_m);
+    const auto reference_environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            16, 16,
+            FireVec2{Real(3.0), Real(-4.0)},
+            ERFFire::explicit_waf_20ft_reference_height_agl_m);
+
+    const auto direct_diagnostics =
+        direct_runtime.advance_direct_reference_wind(
+            zero_environment, Real(1.0));
+    const auto waf_diagnostics =
+        waf_runtime.advance_explicit_waf_20ft(
+            reference_environment, Real(0.0), Real(1.0));
+
+    EXPECT_EQ(
+        waf_diagnostics.burned_area_m2,
+        direct_diagnostics.burned_area_m2);
+    EXPECT_EQ(
+        waf_diagnostics.arrived_cell_count,
+        direct_diagnostics.arrived_cell_count);
+    EXPECT_EQ(
+        waf_diagnostics.consumed_dry_fuel_kg,
+        direct_diagnostics.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        waf_diagnostics.sensible_energy_j,
+        direct_diagnostics.sensible_energy_j);
+    EXPECT_EQ(
+        waf_diagnostics.water_released_kg,
+        direct_diagnostics.water_released_kg);
+
+    ASSERT_EQ(
+        waf_runtime.perimeter().size(),
+        direct_runtime.perimeter().size());
+    for (std::size_t i = 0;
+         i < direct_runtime.perimeter().size();
+         ++i) {
+        EXPECT_EQ(
+            waf_runtime.perimeter().vertices_m()[i].x,
+            direct_runtime.perimeter().vertices_m()[i].x);
+        EXPECT_EQ(
+            waf_runtime.perimeter().vertices_m()[i].y,
+            direct_runtime.perimeter().vertices_m()[i].y);
+    }
+}
+
+TEST(FireSpreadRuntime, InvalidExplicitWafIsRejectedTransactionally)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16, 16,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    const FirePerimeter initial =
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0));
+
+    ERFFireSpreadRuntime runtime(
+        initial,
+        Real(0.0),
+        make_config(geometry));
+    const auto environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            16, 16,
+            FireVec2{Real(1.0), Real(0.0)},
+            ERFFire::explicit_waf_20ft_reference_height_agl_m);
+
+    const auto before_vertices =
+        runtime.perimeter().vertices_m();
+    const Real before_burned =
+        runtime.burned_fraction_raster().burned_area_m2();
+    const std::size_t before_arrived =
+        runtime.first_arrival_raster().arrived_cell_count();
+    const auto before_combustion =
+        runtime.combustion_raster().totals();
+
+    EXPECT_THROW(
+        (void)runtime.advance_explicit_waf_20ft(
+            environment, Real(-0.01), Real(1.0)),
+        std::invalid_argument);
+
+    EXPECT_EQ(runtime.current_time_s(), Real(0.0));
+    EXPECT_EQ(
+        runtime.burned_fraction_raster().burned_area_m2(),
+        before_burned);
+    EXPECT_EQ(
+        runtime.first_arrival_raster().arrived_cell_count(),
+        before_arrived);
+
+    const auto after_combustion =
+        runtime.combustion_raster().totals();
+    EXPECT_EQ(
+        after_combustion.remaining_dry_fuel_kg,
+        before_combustion.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.consumed_dry_fuel_kg,
+        before_combustion.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        after_combustion.sensible_energy_j,
+        before_combustion.sensible_energy_j);
+    EXPECT_EQ(
+        after_combustion.water_released_kg,
+        before_combustion.water_released_kg);
+
+    ASSERT_EQ(
+        runtime.perimeter().vertices_m().size(),
+        before_vertices.size());
+    for (std::size_t i = 0;
+         i < before_vertices.size();
+         ++i) {
+        EXPECT_EQ(
+            runtime.perimeter().vertices_m()[i].x,
+            before_vertices[i].x);
+        EXPECT_EQ(
+            runtime.perimeter().vertices_m()[i].y,
             before_vertices[i].y);
     }
 }

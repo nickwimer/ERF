@@ -17,14 +17,20 @@ enum class ERFFireCouplingMode
 /**
  * ERF-to-Fire wind-input policy.
  *
- * DirectReference is the existing compatibility/control mode: horizontal wind
- * sampled at reference_height_agl_m is used unchanged as the Rothermel
- * model/midflame wind. It is intentionally not a WAF model.
+ * DirectReference is the compatibility/control mode: horizontal wind sampled
+ * at reference_height_agl_m is used unchanged as the Rothermel model/midflame
+ * wind. ExplicitWaf20ft samples the horizontal reference wind at exactly
+ * 20 ft = 6.096 m local AGL and applies wind_adjustment_factor to the complete
+ * vector before Rothermel/Richards evaluation.
  */
 enum class ERFFireWindMode
 {
-    DirectReference
+    DirectReference,
+    ExplicitWaf20ft
 };
+
+inline constexpr amrex::Real explicit_waf_20ft_reference_height_agl_m =
+    amrex::Real(6.096);
 
 /**
  * ERF-facing runtime configuration for level-0 Fire coupling.
@@ -39,9 +45,13 @@ struct ERFFireRuntimeOptions
     ERFFireCouplingMode coupling_mode{ERFFireCouplingMode::OneWay};
     ERFFireWindMode wind_mode{ERFFireWindMode::DirectReference};
 
-    // User-configured AGL sampling height for the ERF horizontal reference
-    // wind. No 20-ft, 10-m, or midflame standard is implied by this field.
+    // DirectReference-only AGL sampling height for the ERF horizontal
+    // reference wind. It does not redefine the explicit 20-ft WAF height.
     amrex::Real reference_height_agl_m{};
+
+    // ExplicitWaf20ft-only scalar mapping from the sampled 20-ft reference
+    // vector to the Rothermel model/midflame-wind vector.
+    amrex::Real wind_adjustment_factor{amrex::Real(1.0)};
 
     std::string fuel_model{"FM1"};
     amrex::Real dead_fuel_moisture_fraction{};

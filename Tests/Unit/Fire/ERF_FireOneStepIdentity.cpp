@@ -1,5 +1,6 @@
 #include <ERF.H>
 #include <ERF_FireFlatEnvironmentSampler.H>
+#include <ERF_FireRuntimeOptions.H>
 #include <ERF_FireSpreadRuntime.H>
 
 #include <AMReX_ParmParse.H>
@@ -29,10 +30,20 @@ main (int argc, char** argv)
             expect_fire_enabled
             && expected_coupling_mode == "two_way";
 
-        amrex::Real expected_reference_height_agl_m = amrex::Real(0);
+        std::string expected_wind_mode{"direct_reference"};
         pp_fire.query(
-            "reference_height_agl_m",
-            expected_reference_height_agl_m);
+            "wind_mode",
+            expected_wind_mode);
+
+        amrex::Real expected_reference_height_agl_m = amrex::Real(0);
+        if (expected_wind_mode == "explicit_waf_20ft") {
+            expected_reference_height_agl_m =
+                ERFFire::explicit_waf_20ft_reference_height_agl_m;
+        } else {
+            pp_fire.query(
+                "reference_height_agl_m",
+                expected_reference_height_agl_m);
+        }
 
         bool expect_constant_reference_wind = true;
         pp_fire.query(

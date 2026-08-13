@@ -182,18 +182,52 @@ ERF::ERF_shared ()
                 Error(
                     "fire.enabled requires fire.wind_mode");
             }
-            if (wind_mode != "direct_reference") {
-                Error(
-                    "Supports only fire.wind_mode = direct_reference");
-            }
-            m_fire_runtime_options.wind_mode =
-                ERFFire::ERFFireWindMode::DirectReference;
 
-            if (!pp_fire.query(
-                    "reference_height_agl_m",
-                    m_fire_runtime_options.reference_height_agl_m)) {
+            if (wind_mode == "direct_reference") {
+                m_fire_runtime_options.wind_mode =
+                    ERFFire::ERFFireWindMode::DirectReference;
+
+                if (!pp_fire.query(
+                        "reference_height_agl_m",
+                        m_fire_runtime_options.reference_height_agl_m)) {
+                    Error(
+                        "fire.wind_mode = direct_reference requires "
+                        "fire.reference_height_agl_m");
+                }
+
+                Real unused_wind_adjustment_factor{};
+                if (pp_fire.query(
+                        "wind_adjustment_factor",
+                        unused_wind_adjustment_factor)) {
+                    Error(
+                        "fire.wind_adjustment_factor is valid only with "
+                        "fire.wind_mode = explicit_waf_20ft");
+                }
+            } else if (wind_mode == "explicit_waf_20ft") {
+                m_fire_runtime_options.wind_mode =
+                    ERFFire::ERFFireWindMode::ExplicitWaf20ft;
+
+                if (!pp_fire.query(
+                        "wind_adjustment_factor",
+                        m_fire_runtime_options.wind_adjustment_factor)) {
+                    Error(
+                        "fire.wind_mode = explicit_waf_20ft requires "
+                        "fire.wind_adjustment_factor");
+                }
+
+                Real unused_reference_height_agl_m{};
+                if (pp_fire.query(
+                        "reference_height_agl_m",
+                        unused_reference_height_agl_m)) {
+                    Error(
+                        "fire.reference_height_agl_m is valid only with "
+                        "fire.wind_mode = direct_reference; explicit_waf_20ft "
+                        "always samples 20 ft = 6.096 m local AGL");
+                }
+            } else {
                 Error(
-                    "fire.enabled requires fire.reference_height_agl_m");
+                    "fire.wind_mode must be direct_reference or "
+                    "explicit_waf_20ft");
             }
 
             if (!pp_fire.query(
@@ -277,10 +311,23 @@ ERF::ERF_shared ()
                     && value > Real(0.0);
             };
 
-            if (!finite_nonnegative(
-                    m_fire_runtime_options.reference_height_agl_m)) {
-                Error(
-                    "fire.reference_height_agl_m must be finite and nonnegative");
+            if (m_fire_runtime_options.wind_mode
+                    == ERFFire::ERFFireWindMode::DirectReference) {
+                if (!finite_nonnegative(
+                        m_fire_runtime_options.reference_height_agl_m)) {
+                    Error(
+                        "fire.reference_height_agl_m must be finite and nonnegative");
+                }
+            } else {
+                if (!std::isfinite(
+                        m_fire_runtime_options.wind_adjustment_factor)
+                    || m_fire_runtime_options.wind_adjustment_factor
+                        < Real(0.0)
+                    || m_fire_runtime_options.wind_adjustment_factor
+                        > Real(1.0)) {
+                    Error(
+                        "fire.wind_adjustment_factor must be finite and in [0,1]");
+                }
             }
             if (!finite_nonnegative(
                     m_fire_runtime_options.dead_fuel_moisture_fraction)) {

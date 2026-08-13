@@ -76,7 +76,7 @@ freeze_erf_level0_environment (
  *
  * The VariableDz driver uses this snapshot together with the independently
  * extracted FireTerrainSurface for both supported coupling modes. This routine
- * only freezes/samples the configured local-AGL horizontal reference wind; it
+ * only freezes/samples the mode-selected local-AGL horizontal reference wind; it
  * applies no WAF, slope forcing, combustion, or atmospheric feedback.
  */
 FireFlatEnvironmentSampler

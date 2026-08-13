@@ -1,5 +1,6 @@
 #include "ERF_FireSpreadRuntime.H"
 
+#include <ERF_FireWindAdjustment.H>
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelModel.H>
 #include <ERF_VectorPerimeterPropagator.H>
@@ -154,9 +155,11 @@ ERFFireSpreadRuntime::advance_direct_reference_wind(
     const FireFlatEnvironmentSampler& environment,
     amrex::Real dt_s)
 {
-    return advance_direct_reference_wind_impl(
+    return advance_wind_impl(
         environment,
         nullptr,
+        WindInputMode::DirectReference,
+        amrex::Real(1.0),
         dt_s);
 }
 
@@ -171,18 +174,64 @@ ERFFireSpreadRuntime::advance_direct_reference_wind(
         terrain,
         config_.raster_geometry);
 
-    return advance_direct_reference_wind_impl(
+    return advance_wind_impl(
         environment,
         &terrain,
+        WindInputMode::DirectReference,
+        amrex::Real(1.0),
         dt_s);
 }
 
 ERFFireStepDiagnostics
-ERFFireSpreadRuntime::advance_direct_reference_wind_impl(
+ERFFireSpreadRuntime::advance_explicit_waf_20ft(
     const FireFlatEnvironmentSampler& environment,
-    const FireTerrainSurface* terrain_surface,
+    amrex::Real wind_adjustment_factor,
     amrex::Real dt_s)
 {
+    return advance_wind_impl(
+        environment,
+        nullptr,
+        WindInputMode::ExplicitWaf20ft,
+        wind_adjustment_factor,
+        dt_s);
+}
+
+ERFFireStepDiagnostics
+ERFFireSpreadRuntime::advance_explicit_waf_20ft(
+    const FireFlatEnvironmentSampler& environment,
+    const FireTerrainSurface& terrain,
+    amrex::Real wind_adjustment_factor,
+    amrex::Real dt_s)
+{
+    require_terrain_runtime_geometry(
+        environment,
+        terrain,
+        config_.raster_geometry);
+
+    return advance_wind_impl(
+        environment,
+        &terrain,
+        WindInputMode::ExplicitWaf20ft,
+        wind_adjustment_factor,
+        dt_s);
+}
+
+ERFFireStepDiagnostics
+ERFFireSpreadRuntime::advance_wind_impl(
+    const FireFlatEnvironmentSampler& environment,
+    const FireTerrainSurface* terrain_surface,
+    WindInputMode wind_input_mode,
+    amrex::Real wind_adjustment_factor,
+    amrex::Real dt_s)
+{
+    if (wind_input_mode == WindInputMode::ExplicitWaf20ft) {
+        require(
+            std::isfinite(wind_adjustment_factor)
+                && wind_adjustment_factor >= amrex::Real(0.0)
+                && wind_adjustment_factor <= amrex::Real(1.0),
+            "fire explicit 20-ft wind adjustment factor must be finite and in [0,1]");
+    }
+
     require(
         std::isfinite(dt_s) && dt_s > amrex::Real(0.0),
         "fire spread dt must be finite and positive");
@@ -197,19 +246,38 @@ ERFFireSpreadRuntime::advance_direct_reference_wind_impl(
             "fire spread end time must be finite and representably later");
     }
 
-    const auto normal_speed = [this, &environment, terrain_surface](
-        const FireVec2& position_m,
-        const FireVec2& outward_normal,
-        amrex::Real) -> amrex::Real
+    const auto normal_speed =
+        [this,
+         &environment,
+         terrain_surface,
+         wind_input_mode,
+         wind_adjustment_factor](
+            const FireVec2& position_m,
+            const FireVec2& outward_normal,
+            amrex::Real) -> amrex::Real
     {
         const FireEnvironmentSample sample =
             environment.sample(position_m.x, position_m.y);
-        const FireVec2 wind_mps = sample.horizontal_wind_mps;
-        const amrex::Real speed_mps = norm(wind_mps);
+        const FireVec2 reference_wind_mps =
+            sample.horizontal_wind_mps;
 
+        if (!std::isfinite(reference_wind_mps.x)
+            || !std::isfinite(reference_wind_mps.y)) {
+            throw std::overflow_error(
+                "fire spread sampled reference wind is not finite");
+        }
+
+        const FireVec2 wind_mps =
+            wind_input_mode == WindInputMode::ExplicitWaf20ft
+                ? fire_midflame_wind_from_20ft_reference(
+                    reference_wind_mps,
+                    wind_adjustment_factor)
+                : reference_wind_mps;
+
+        const amrex::Real speed_mps = norm(wind_mps);
         if (!std::isfinite(speed_mps)) {
             throw std::overflow_error(
-                "fire spread sampled wind magnitude is not finite");
+                "fire spread model wind magnitude is not finite");
         }
 
         FireVec2 terrain_gradient_m_per_m{};

@@ -152,3 +152,116 @@ set_tests_properties(
     TIMEOUT 900
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+add_test(
+  NAME FireTimeStepIntegration.OneWayExplicitWafPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
+    -DIDENTITY_CASE_PREFIX=fire_waf_identity
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayExplicitWafPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayExplicitWafFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackWaf.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_waf
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayExplicitWafFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.OneWayTerrainExplicitWafPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrainWaf.inputs
+    -DIDENTITY_CASE_PREFIX=fire_terrain_waf_identity
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayTerrainExplicitWafPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayTerrainExplicitWafFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrainWaf.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain_waf
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayTerrainExplicitWafFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireWindModeIntegration.FlatIdentityAndReduction
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
+    -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
+    -DWIND_MODE_CASE_PREFIX=fire_wind_mode_flat
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireWindModeComparison.cmake
+)
+set_tests_properties(
+  FireWindModeIntegration.FlatIdentityAndReduction
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireWindModeIntegration.TerrainIdentityAndReduction
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
+    -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrainWaf.inputs
+    -DWIND_MODE_CASE_PREFIX=fire_wind_mode_terrain
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireWindModeComparison.cmake
+)
+set_tests_properties(
+  FireWindModeIntegration.TerrainIdentityAndReduction
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireWindModeIntegration.RuntimeInputValidation
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
+    -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireWindModeValidation.cmake
+)
+set_tests_properties(
+  FireWindModeIntegration.RuntimeInputValidation
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 300
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)

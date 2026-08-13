@@ -159,10 +159,13 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
     //   -> ordinary ERF Advance.
     //
     // one_way follows the same Fire evolution path but installs no atmospheric
-    // source. VariableDz freezes local-AGL wind and uses map-plane terrain
-    // slope in both coupling modes. VariableDz two_way projects the same
-    // combustion feedback through local terrain-following AGL columns using
-    // authoritative detJ_cc physical volumes. No WAF is applied.
+    // source. The selected wind mode chooses either the configured DirectReference
+    // AGL height or the canonical 20-ft (6.096 m) local-AGL snapshot; the latter
+    // is reduced by its explicit WAF inside the coupling-neutral spread runtime
+    // before Rothermel wind/slope combination. VariableDz uses the same policy
+    // with map-plane terrain slope in both coupling modes. VariableDz two_way
+    // projects the same combustion feedback through local terrain-following AGL
+    // columns using authoritative detJ_cc physical volumes.
     if (lev == 0 && m_fire_runtime_options.enabled) {
         ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
             geom[0],
@@ -180,6 +183,12 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
         std::unique_ptr<ERFFire::FireFlatEnvironmentSampler>
             next_snapshot;
 
+        const Real fire_reference_height_agl_m =
+            m_fire_runtime_options.wind_mode
+                    == ERFFire::ERFFireWindMode::ExplicitWaf20ft
+                ? ERFFire::explicit_waf_20ft_reference_height_agl_m
+                : m_fire_runtime_options.reference_height_agl_m;
+
         if (solverChoice.mesh_type == MeshType::VariableDz) {
             next_terrain_surface =
                 std::make_unique<ERFFire::FireTerrainSurface>(
@@ -189,13 +198,13 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
                     ERFFire::freeze_erf_level0_terrain_reference_wind_environment(
                         fire_inputs,
-                        m_fire_runtime_options.reference_height_agl_m));
+                        fire_reference_height_agl_m));
         } else {
             next_snapshot =
                 std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
                     ERFFire::freeze_erf_level0_environment(
                         fire_inputs,
-                        m_fire_runtime_options.reference_height_agl_m));
+                        fire_reference_height_agl_m));
         }
 
         m_fire_environment_snapshot = std::move(next_snapshot);
@@ -224,15 +233,34 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
         ERFFire::ERFFireSpreadRuntime next_fire_runtime =
             *m_fire_spread_runtime;
 
-        if (next_terrain_surface) {
-            (void)next_fire_runtime.advance_direct_reference_wind(
-                *m_fire_environment_snapshot,
-                *next_terrain_surface,
-                static_cast<Real>(dt[0]));
+        if (m_fire_runtime_options.wind_mode
+                == ERFFire::ERFFireWindMode::DirectReference) {
+            if (next_terrain_surface) {
+                (void)next_fire_runtime.advance_direct_reference_wind(
+                    *m_fire_environment_snapshot,
+                    *next_terrain_surface,
+                    static_cast<Real>(dt[0]));
+            } else {
+                (void)next_fire_runtime.advance_direct_reference_wind(
+                    *m_fire_environment_snapshot,
+                    static_cast<Real>(dt[0]));
+            }
+        } else if (m_fire_runtime_options.wind_mode
+                   == ERFFire::ERFFireWindMode::ExplicitWaf20ft) {
+            if (next_terrain_surface) {
+                (void)next_fire_runtime.advance_explicit_waf_20ft(
+                    *m_fire_environment_snapshot,
+                    *next_terrain_surface,
+                    m_fire_runtime_options.wind_adjustment_factor,
+                    static_cast<Real>(dt[0]));
+            } else {
+                (void)next_fire_runtime.advance_explicit_waf_20ft(
+                    *m_fire_environment_snapshot,
+                    m_fire_runtime_options.wind_adjustment_factor,
+                    static_cast<Real>(dt[0]));
+            }
         } else {
-            (void)next_fire_runtime.advance_direct_reference_wind(
-                *m_fire_environment_snapshot,
-                static_cast<Real>(dt[0]));
+            Error("unsupported ERF-Fire wind mode");
         }
 
         std::unique_ptr<MultiFab> next_fire_source;

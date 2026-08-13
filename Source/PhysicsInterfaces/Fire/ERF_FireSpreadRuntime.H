@@ -70,10 +70,12 @@ struct ERFFireStepDiagnostics
  * Cell-resolved combustion state is synchronized with burned history and is
  * advanced from the same fixed-topology physical sweep before remeshing.
  *
- * Each advance_direct_reference_wind() call consumes one immutable atmospheric
- * snapshot for the whole fire step. The RK2 normal-speed callback samples that
- * same snapshot at each current and midpoint vertex location. No atmospheric
- * state is retained or modified.
+ * Each advance call consumes one immutable atmospheric snapshot for the whole
+ * fire step. The RK2 normal-speed callback samples that same snapshot at each
+ * current and midpoint vertex location. Public entry points make wind
+ * preprocessing explicit: DirectReference is identity, while ExplicitWaf20ft
+ * applies the scalar 20-ft-to-midflame transform before Rothermel evaluation.
+ * No atmospheric state is retained or modified.
  *
  * Coupling direction is deliberately not encoded in this class. ERF may use
  * the same fire-state evolution path in one-way or two-way mode; atmospheric
@@ -156,11 +158,40 @@ public:
         const FireTerrainSurface& terrain,
         amrex::Real dt_s);
 
-private:
+    /**
+     * Advance one Fire step from a 20-ft reference-wind snapshot using an
+     * explicit scalar WAF before Rothermel/Richards evaluation.
+     *
+     * The environment must have been sampled at 20 ft = 6.096 m local AGL by
+     * the ERF-facing integration layer. The complete map-plane reference-wind
+     * vector is scaled; terrain slope, when supplied, remains independent.
+     */
     [[nodiscard]] ERFFireStepDiagnostics
-    advance_direct_reference_wind_impl(
+    advance_explicit_waf_20ft(
+        const FireFlatEnvironmentSampler& environment,
+        amrex::Real wind_adjustment_factor,
+        amrex::Real dt_s);
+
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_explicit_waf_20ft(
+        const FireFlatEnvironmentSampler& environment,
+        const FireTerrainSurface& terrain,
+        amrex::Real wind_adjustment_factor,
+        amrex::Real dt_s);
+
+private:
+    enum class WindInputMode
+    {
+        DirectReference,
+        ExplicitWaf20ft
+    };
+
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_wind_impl(
         const FireFlatEnvironmentSampler& environment,
         const FireTerrainSurface* terrain_surface,
+        WindInputMode wind_input_mode,
+        amrex::Real wind_adjustment_factor,
         amrex::Real dt_s);
 
     ERFFireSpreadConfig config_;
