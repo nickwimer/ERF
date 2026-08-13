@@ -63,6 +63,10 @@ target_sources(erf_fire_unit_tests
 )
 target_sources(erf_fire_unit_tests
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireWindScience.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireCombustion.cpp
 )
 target_sources(erf_fire_unit_tests
