@@ -146,25 +146,106 @@ diagnose_level0_pressure_pa(
     return pressure_pa;
 }
 
+
+void
+validate_terrain_source_scope_and_layout(
+    const ERFFireLevel0EnvironmentInputs& inputs,
+    const amrex::MultiFab& detJ_cc)
+{
+    require(
+        inputs.configured_max_level == 0,
+        "ERF Fire terrain source supports only configured max_level = 0");
+    require(
+        inputs.mesh_type == MeshType::VariableDz,
+        "ERF Fire terrain source requires VariableDz");
+    require(
+        inputs.terrain_type == TerrainType::StaticFittedMesh,
+        "ERF Fire terrain source requires static fitted terrain");
+    require(
+        inputs.buildings_type == BuildingsType::None,
+        "ERF Fire terrain source does not support immersed buildings");
+
+    const amrex::Box& domain =
+        inputs.geometry.Domain();
+    require(
+        domain.cellCentered(),
+        "ERF Fire terrain source requires a cell-centered level-0 domain");
+
+    const amrex::Box expected_znd =
+        amrex::convert(
+            domain,
+            amrex::IntVect(1, 1, 1));
+
+    require(
+        inputs.z_phys_cc.boxArray().ixType()
+                == domain.ixType()
+            && amrex::match(
+                inputs.z_phys_cc.boxArray(),
+                amrex::BoxArray(domain)),
+        "ERF Fire terrain source z_phys_cc does not cover level 0");
+    require(
+        inputs.z_phys_nd.boxArray().ixType()
+                == expected_znd.ixType()
+            && amrex::match(
+                inputs.z_phys_nd.boxArray(),
+                amrex::BoxArray(expected_znd)),
+        "ERF Fire terrain source z_phys_nd does not cover the level-0 nodal domain");
+    require(
+        detJ_cc.boxArray().ixType()
+                == domain.ixType()
+            && amrex::match(
+                detJ_cc.boxArray(),
+                amrex::BoxArray(domain)),
+        "ERF Fire terrain source detJ_cc does not cover level 0");
+    require(
+        inputs.z_phys_cc.nComp() >= 1
+            && inputs.z_phys_nd.nComp() >= 1
+            && detJ_cc.nComp() >= 1,
+        "ERF Fire terrain source geometry fields require at least one component");
+}
+
+amrex::Real
+terrain_cell_vertical_face_height_m(
+    const amrex::Array4<const amrex::Real>& z,
+    int i,
+    int j,
+    int k)
+{
+    const amrex::Real value =
+        amrex::Real(0.25)
+        * (z(i, j, k)
+           + z(i + 1, j, k)
+           + z(i, j + 1, k)
+           + z(i + 1, j + 1, k));
+
+    require(
+        std::isfinite(value),
+        "ERF Fire terrain source vertical face height must be finite");
+    return value;
+}
+
 std::unique_ptr<amrex::MultiFab>
-map_source_field_to_multifab(
-    const ERFFireAtmosphericSourceField& source,
+map_native_source_values_to_multifab(
+    const std::vector<amrex::Real>& host_values,
     const amrex::Geometry& geometry,
     const amrex::MultiFab& conserved_state_tn)
 {
-    const amrex::Box& domain = geometry.Domain();
+    const amrex::Box& domain =
+        geometry.Domain();
     const std::size_t nx =
-        static_cast<std::size_t>(domain.length(0));
+        static_cast<std::size_t>(
+            domain.length(0));
     const std::size_t ny =
-        static_cast<std::size_t>(domain.length(1));
+        static_cast<std::size_t>(
+            domain.length(1));
     const std::size_t nz =
-        static_cast<std::size_t>(domain.length(2));
+        static_cast<std::size_t>(
+            domain.length(2));
 
     require(
-        source.nx() == nx
-            && source.ny() == ny
-            && source.nz() == nz,
-        "ERF Fire source field dimensions do not match level 0");
+        host_values.size()
+            == nx * ny * nz * std::size_t(2),
+        "ERF Fire native source host-value size mismatch");
 
     auto result =
         std::make_unique<amrex::MultiFab>(
@@ -173,24 +254,6 @@ map_source_field_to_multifab(
             conserved_state_tn.nComp(),
             0);
     result->setVal(amrex::Real(0));
-
-    std::vector<amrex::Real> host_values(
-        source.cell_count() * std::size_t(2),
-        amrex::Real(0));
-
-    for (std::size_t k = 0; k < nz; ++k) {
-        for (std::size_t j = 0; j < ny; ++j) {
-            for (std::size_t i = 0; i < nx; ++i) {
-                const std::size_t flat =
-                    (k * ny + j) * nx + i;
-                const auto& cell = source.cell(i, j, k);
-                host_values[2 * flat] =
-                    cell.rhotheta_tendency_kg_K_m3_s;
-                host_values[2 * flat + 1] =
-                    cell.rhoqv_tendency_kg_m3_s;
-            }
-        }
-    }
 
     amrex::Gpu::DeviceVector<amrex::Real>
         device_values(host_values.size());
@@ -202,9 +265,12 @@ map_source_field_to_multifab(
 
     const amrex::Real* values =
         device_values.data();
-    const int ilo = domain.smallEnd(0);
-    const int jlo = domain.smallEnd(1);
-    const int klo = domain.smallEnd(2);
+    const int ilo =
+        domain.smallEnd(0);
+    const int jlo =
+        domain.smallEnd(1);
+    const int klo =
+        domain.smallEnd(2);
     const std::size_t nx_device = nx;
     const std::size_t ny_device = ny;
 
@@ -213,19 +279,24 @@ map_source_field_to_multifab(
              amrex::TilingIfNotGPU());
          mfi.isValid();
          ++mfi) {
-        const amrex::Box box = mfi.tilebox();
-        const auto array = result->array(mfi);
+        const amrex::Box box =
+            mfi.tilebox();
+        const auto array =
+            result->array(mfi);
 
         amrex::ParallelFor(
             box,
             [=] AMREX_GPU_DEVICE (
                 int i, int j, int k) noexcept {
                 const std::size_t ii =
-                    static_cast<std::size_t>(i - ilo);
+                    static_cast<std::size_t>(
+                        i - ilo);
                 const std::size_t jj =
-                    static_cast<std::size_t>(j - jlo);
+                    static_cast<std::size_t>(
+                        j - jlo);
                 const std::size_t kk =
-                    static_cast<std::size_t>(k - klo);
+                    static_cast<std::size_t>(
+                        k - klo);
                 const std::size_t flat =
                     (kk * ny_device + jj)
                     * nx_device + ii;
@@ -239,6 +310,55 @@ map_source_field_to_multifab(
 
     amrex::Gpu::streamSynchronize();
     return result;
+}
+
+std::unique_ptr<amrex::MultiFab>
+map_source_field_to_multifab(
+    const ERFFireAtmosphericSourceField& source,
+    const amrex::Geometry& geometry,
+    const amrex::MultiFab& conserved_state_tn)
+{
+    const amrex::Box& domain =
+        geometry.Domain();
+    const std::size_t nx =
+        static_cast<std::size_t>(
+            domain.length(0));
+    const std::size_t ny =
+        static_cast<std::size_t>(
+            domain.length(1));
+    const std::size_t nz =
+        static_cast<std::size_t>(
+            domain.length(2));
+
+    require(
+        source.nx() == nx
+            && source.ny() == ny
+            && source.nz() == nz,
+        "ERF Fire source field dimensions do not match level 0");
+
+    std::vector<amrex::Real> host_values(
+        source.cell_count() * std::size_t(2),
+        amrex::Real(0));
+
+    for (std::size_t k = 0; k < nz; ++k) {
+        for (std::size_t j = 0; j < ny; ++j) {
+            for (std::size_t i = 0; i < nx; ++i) {
+                const std::size_t flat =
+                    (k * ny + j) * nx + i;
+                const auto& cell =
+                    source.cell(i, j, k);
+                host_values[2 * flat] =
+                    cell.rhotheta_tendency_kg_K_m3_s;
+                host_values[2 * flat + 1] =
+                    cell.rhoqv_tendency_kg_m3_s;
+            }
+        }
+    }
+
+    return map_native_source_values_to_multifab(
+        host_values,
+        geometry,
+        conserved_state_tn);
 }
 
 } // namespace
@@ -281,5 +401,202 @@ make_erf_fire_level0_source_tendency(
         environment_inputs.geometry,
         conserved_state_tn);
 }
+
+std::unique_ptr<amrex::MultiFab>
+make_erf_fire_level0_terrain_source_tendency(
+    const FireSurfaceFeedbackRaster& feedback,
+    const ERFFireLevel0EnvironmentInputs& environment_inputs,
+    const amrex::MultiFab& detJ_cc,
+    const amrex::MultiFab& conserved_state_tn,
+    MoistureType moisture_type,
+    amrex::Real dt_s,
+    ERFFireAtmosphericSourceOptions options)
+{
+    require(
+        same_horizontal_geometry(
+            feedback.geometry(),
+            environment_inputs.geometry),
+        "ERF Fire feedback raster does not match level-0 horizontal geometry");
+
+    validate_terrain_source_scope_and_layout(
+        environment_inputs,
+        detJ_cc);
+
+    const std::vector<amrex::Real> pressure_pa =
+        diagnose_level0_pressure_pa(
+            environment_inputs.geometry,
+            conserved_state_tn,
+            moisture_type);
+
+    const amrex::Box& domain =
+        environment_inputs.geometry.Domain();
+    const amrex::Box nodal_domain =
+        amrex::convert(
+            domain,
+            amrex::IntVect(1, 1, 1));
+
+    amrex::FArrayBox z_host(
+        nodal_domain,
+        1,
+        amrex::The_Pinned_Arena());
+    environment_inputs.z_phys_nd.copyTo(
+        z_host,
+        0,
+        0,
+        1,
+        0);
+
+    amrex::FArrayBox detJ_host(
+        domain,
+        1,
+        amrex::The_Pinned_Arena());
+    detJ_cc.copyTo(
+        detJ_host,
+        0,
+        0,
+        1,
+        0);
+
+    const auto z =
+        z_host.const_array();
+    const auto detJ =
+        detJ_host.const_array();
+
+    const std::size_t nx =
+        static_cast<std::size_t>(
+            domain.length(0));
+    const std::size_t ny =
+        static_cast<std::size_t>(
+            domain.length(1));
+    const std::size_t nz =
+        static_cast<std::size_t>(
+            domain.length(2));
+
+    const auto cell_size =
+        environment_inputs.geometry.CellSizeArray();
+    const amrex::Real computational_volume_m3 =
+        cell_size[0]
+        * cell_size[1]
+        * cell_size[2];
+
+    require(
+        std::isfinite(computational_volume_m3)
+            && computational_volume_m3 > amrex::Real(0),
+        "ERF Fire terrain source computational cell volume must be finite and positive");
+
+    const int ilo =
+        domain.smallEnd(0);
+    const int jlo =
+        domain.smallEnd(1);
+    const int klo =
+        domain.smallEnd(2);
+
+    std::vector<amrex::Real> host_values(
+        nx * ny * nz * std::size_t(2),
+        amrex::Real(0));
+    std::vector<amrex::Real> vertical_faces_agl_m(
+        nz + 1,
+        amrex::Real(0));
+    std::vector<amrex::Real> physical_cell_volume_m3(
+        nz,
+        amrex::Real(0));
+    std::vector<amrex::Real> column_pressure_pa(
+        nz,
+        amrex::Real(0));
+
+    for (std::size_t j = 0; j < ny; ++j) {
+        for (std::size_t i = 0; i < nx; ++i) {
+            const int ii =
+                ilo + static_cast<int>(i);
+            const int jj =
+                jlo + static_cast<int>(j);
+
+            const amrex::Real ground_height_m =
+                terrain_cell_vertical_face_height_m(
+                    z,
+                    ii,
+                    jj,
+                    klo);
+            vertical_faces_agl_m[0] =
+                amrex::Real(0);
+
+            for (std::size_t kf = 1;
+                 kf <= nz;
+                 ++kf) {
+                const amrex::Real physical_height_m =
+                    terrain_cell_vertical_face_height_m(
+                        z,
+                        ii,
+                        jj,
+                        klo + static_cast<int>(kf));
+                const amrex::Real agl_m =
+                    physical_height_m
+                    - ground_height_m;
+
+                require(
+                    std::isfinite(agl_m),
+                    "ERF Fire terrain source AGL face height must be finite");
+                vertical_faces_agl_m[kf] =
+                    agl_m;
+            }
+
+            for (std::size_t k = 0; k < nz; ++k) {
+                const int kk =
+                    klo + static_cast<int>(k);
+                const amrex::Real jacobian =
+                    detJ(ii, jj, kk);
+
+                require(
+                    std::isfinite(jacobian)
+                        && jacobian > amrex::Real(0),
+                    "ERF Fire terrain source detJ_cc must be finite and positive");
+
+                const amrex::Real volume_m3 =
+                    computational_volume_m3
+                    * jacobian;
+                if (!std::isfinite(volume_m3)
+                    || !(volume_m3 > amrex::Real(0))) {
+                    throw std::overflow_error(
+                        "ERF Fire terrain source physical cell volume is invalid");
+                }
+
+                physical_cell_volume_m3[k] =
+                    volume_m3;
+
+                const std::size_t flat =
+                    (k * ny + j) * nx + i;
+                column_pressure_pa[k] =
+                    pressure_pa[flat];
+            }
+
+            const std::vector<ERFFireAtmosphericSourceCell>
+                column =
+                    make_erf_fire_atmospheric_source_column(
+                        feedback.cell(i, j),
+                        vertical_faces_agl_m,
+                        physical_cell_volume_m3,
+                        column_pressure_pa,
+                        dt_s,
+                        options);
+
+            for (std::size_t k = 0; k < nz; ++k) {
+                const std::size_t flat =
+                    (k * ny + j) * nx + i;
+                host_values[2 * flat] =
+                    column[k]
+                        .rhotheta_tendency_kg_K_m3_s;
+                host_values[2 * flat + 1] =
+                    column[k]
+                        .rhoqv_tendency_kg_m3_s;
+            }
+        }
+    }
+
+    return map_native_source_values_to_multifab(
+        host_values,
+        environment_inputs.geometry,
+        conserved_state_tn);
+}
+
 
 } // namespace ERFFire

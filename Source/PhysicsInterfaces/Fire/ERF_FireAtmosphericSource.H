@@ -40,14 +40,36 @@ struct ERFFireAtmosphericSourceCell
     amrex::Real rhoqv_tendency_kg_m3_s{};
 };
 
+
+/**
+ * Project one horizontal Fire feedback cell through one atmospheric column.
+ *
+ * vertical_face_height_agl_m contains nz+1 local AGL faces.
+ * physical_cell_volume_m3 and pressure_pa each contain nz entries for those
+ * same cells. The exponential deposition shape is normalized over this finite
+ * local column; the caller owns the geometry-to-volume mapping.
+ *
+ * This is the common thermodynamic projection used by both flat and
+ * terrain-following ERF adapters. It does not mutate ERF state.
+ */
+[[nodiscard]] std::vector<ERFFireAtmosphericSourceCell>
+make_erf_fire_atmospheric_source_column(
+    const FireSurfaceFeedbackCell& surface_feedback,
+    const std::vector<amrex::Real>& vertical_face_height_agl_m,
+    const std::vector<amrex::Real>& physical_cell_volume_m3,
+    const std::vector<amrex::Real>& pressure_pa,
+    amrex::Real dt_s,
+    ERFFireAtmosphericSourceOptions options = {});
+
 /**
  * Three-dimensional, cell-centered Fire source field in native ERF tendency
  * units.
  *
  * Horizontal geometry must match the Fire feedback raster one-for-one.
  * vertical_face_height_agl_m has nz+1 common, horizontally flat AGL faces.
- * Currently supports only flat ConstantDz or physically flat StretchedDz columns;
- * terrain-varying columns remain deferred.
+ * This owning field remains the flat ConstantDz/StretchedDz representation.
+ * Terrain-varying level-0 columns use
+ * make_erf_fire_atmospheric_source_column() through the terrain adapter.
  */
 class ERFFireAtmosphericSourceField
 {

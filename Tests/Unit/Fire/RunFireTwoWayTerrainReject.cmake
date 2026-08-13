@@ -31,12 +31,12 @@ endif()
 
 set(combined_output "${run_output}\n${run_error}")
 if(NOT combined_output MATCHES
-    "two_way currently defers VariableDz terrain feedback")
+    "Fire two-way coupling with VariableDz terrain remains")
   message(FATAL_ERROR
-    "two-way terrain rejection did not report the M10b2 scope reason\n"
+    "two-way terrain rejection did not report the current driver-scope reason\n"
     "stdout:\n${run_output}\n"
     "stderr:\n${run_error}")
 endif()
 
 message(STATUS
-  "Fire two-way terrain rejection PASS: VariableDz feedback remains deferred to M10c")
+  "Fire two-way terrain rejection PASS: VariableDz feedback remains deferred to M10d")

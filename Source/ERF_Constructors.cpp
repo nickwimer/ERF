@@ -166,9 +166,9 @@ ERF::ERF_shared ()
                     == ERFFire::ERFFireCouplingMode::TwoWay) {
                 if (solverChoice.mesh_type == MeshType::VariableDz) {
                     Error(
-                        "Fire two-way coupling currently defers "
-                        "VariableDz terrain feedback; use one_way until "
-                        "terrain-aware source deposition is implemented");
+                        "Fire two-way coupling with VariableDz terrain remains "
+                        "disabled until terrain source projection is wired into "
+                        "the coupled driver; use one_way");
                 }
                 if (solverChoice.moisture_type
                     != MoistureType::MoistNoCondensation) {

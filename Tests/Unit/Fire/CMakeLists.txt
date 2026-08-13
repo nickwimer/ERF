@@ -134,14 +134,14 @@ set_tests_properties(
 )
 
 add_test(
-  NAME FireTimeStepIntegration.TwoWayTerrainIsRejectedUntilM10c
+  NAME FireTimeStepIntegration.TwoWayTerrainIsRejectedUntilM10d
   COMMAND ${CMAKE_COMMAND}
     -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTERRAIN_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayTerrainReject.cmake
 )
 set_tests_properties(
-  FireTimeStepIntegration.TwoWayTerrainIsRejectedUntilM10c
+  FireTimeStepIntegration.TwoWayTerrainIsRejectedUntilM10d
   PROPERTIES
     LABELS unit
     TIMEOUT 900

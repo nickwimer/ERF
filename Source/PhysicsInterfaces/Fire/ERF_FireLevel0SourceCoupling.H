@@ -16,8 +16,8 @@ namespace ERFFire
 {
 
 /**
- * Build one native ERF level-0 conserved-variable source MultiFab from a
- * step-integrated Fire surface-feedback increment.
+ * Build one flat-grid native ERF level-0 conserved-variable source MultiFab
+ * from a step-integrated Fire surface-feedback increment.
  *
  * The atmosphere state is the already-fillpatched t^n conserved state used for
  * this explicit coupling step. Total pressure is diagnosed from ERF's dry
@@ -37,6 +37,39 @@ make_erf_fire_level0_source_tendency(
     MoistureType moisture_type,
     amrex::Real dt_s,
     ERFFireAtmosphericSourceOptions options = {});
+
+/**
+ * Build one native ERF level-0 source tendency for static-fitted VariableDz
+ * terrain without activating the two-way driver.
+ *
+ * Each horizontal Fire cell owns one local AGL column. Local vertical faces
+ * are the four-corner averages of z_phys_nd at each native vertical face,
+ * referenced to that column's bottom face. The exponential deposition shape is
+ * normalized independently in every column.
+ *
+ * Physical cell volume is authoritative from
+ *
+ *   V_phys = dx * dy * dz_computational * detJ_cc
+ *
+ * in the current Cartesian/map-plane Fire scope. Fire feedback remains an
+ * extensive quantity per horizontal map-plane cell; no terrain-surface area
+ * factor is introduced. t^n pressure diagnosis and the native rho_d*theta_d
+ * and rho_d*q_v source formulas are identical to the flat projector.
+ *
+ * This routine provides projection infrastructure only. The ERF timestep
+ * continues to reject two-way VariableDz coupling until the terrain source
+ * projector is wired into the coupled driver and that path is validated.
+ */
+[[nodiscard]] std::unique_ptr<amrex::MultiFab>
+make_erf_fire_level0_terrain_source_tendency(
+    const FireSurfaceFeedbackRaster& feedback,
+    const ERFFireLevel0EnvironmentInputs& environment_inputs,
+    const amrex::MultiFab& detJ_cc,
+    const amrex::MultiFab& conserved_state_tn,
+    MoistureType moisture_type,
+    amrex::Real dt_s,
+    ERFFireAtmosphericSourceOptions options = {});
+
 
 } // namespace ERFFire
 
