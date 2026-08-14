@@ -87,9 +87,16 @@ if(NOT analysis_output MATCHES "BUOYANT_ACCELERATION_PASS=1")
     "stderr:\n${analysis_error}")
 endif()
 
+if(NOT analysis_output MATCHES "STRONG_UPDRAFT_EXTENT_PASS=1")
+  message(FATAL_ERROR
+    "Analyzer did not report strong-updraft extent success\n"
+    "stdout:\n${analysis_output}\n"
+    "stderr:\n${analysis_error}")
+endif()
+
 string(STRIP "${analysis_output}" analysis_output_stripped)
 message(STATUS "${analysis_output_stripped}")
 message(STATUS
-  "Developed buoyant acceleration PASS: "
-  "peak and energetic upward response grow strongly from 1 s to 5 s, "
-  "with significant updraft above the analytic source z95")
+  "Developed buoyancy PASS: "
+  "the coupled atmosphere accelerates strongly and sustains "
+  "operationally strong updraft above the analytic source z95")

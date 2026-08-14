@@ -54,9 +54,16 @@ struct BuoyancyMetrics
     amrex::Real delta_w_l2_volume_integral_m5ps2{};
     amrex::Real w_response_z50_m{};
     amrex::Real w_response_z95_m{};
+    amrex::Real w2_response_z50_m{};
+    amrex::Real w2_response_z95_m{};
     amrex::Real positive_w_fraction_above_source_z95{};
+    amrex::Real w2_fraction_above_source_z95{};
     amrex::Real max_delta_w_above_source_z95_mps{};
     amrex::Real w_threshold_top_m{};
+    amrex::Real w_threshold_0p05_top_m{-amrex::Real(1.0)};
+    amrex::Real w_threshold_0p10_top_m{-amrex::Real(1.0)};
+    amrex::Real w_threshold_0p25_top_m{-amrex::Real(1.0)};
+    amrex::Real w_threshold_0p50_top_m{-amrex::Real(1.0)};
     amrex::Real positive_theta_volume_integral_K_m3{};
 };
 
@@ -149,6 +156,9 @@ analyze_pair(
     std::vector<amrex::Real> positive_w_by_k(
         static_cast<std::size_t>(nz),
         amrex::Real(0.0));
+    std::vector<amrex::Real> w2_by_k(
+        static_cast<std::size_t>(nz),
+        amrex::Real(0.0));
     std::vector<amrex::Real> layer_max_w(
         static_cast<std::size_t>(nz),
         -std::numeric_limits<amrex::Real>::infinity());
@@ -211,8 +221,11 @@ analyze_pair(
                     layer_max_w[n] =
                         std::max(layer_max_w[n], delta_w);
 
-                    metrics.delta_w_l2_volume_integral_m5ps2 +=
+                    const amrex::Real w2_contribution =
                         delta_w * delta_w * cell_volume;
+                    metrics.delta_w_l2_volume_integral_m5ps2 +=
+                        w2_contribution;
+                    w2_by_k[n] += w2_contribution;
 
                     if (delta_w > amrex::Real(0.0)) {
                         const amrex::Real contribution =
@@ -289,28 +302,82 @@ analyze_pair(
     metrics.w_response_z95_m =
         response_height(amrex::Real(0.95));
 
+    auto w2_response_height =
+        [&](amrex::Real quantile)
+    {
+        const amrex::Real target =
+            quantile * metrics.delta_w_l2_volume_integral_m5ps2;
+        amrex::Real cumulative = amrex::Real(0.0);
+
+        for (int n = 0; n < nz; ++n) {
+            const amrex::Real layer =
+                w2_by_k[static_cast<std::size_t>(n)];
+            const amrex::Real next = cumulative + layer;
+
+            if (next >= target && layer > amrex::Real(0.0)) {
+                const amrex::Real within_layer =
+                    std::clamp(
+                        (target - cumulative) / layer,
+                        amrex::Real(0.0),
+                        amrex::Real(1.0));
+                return lo[2] + (amrex::Real(n) + within_layer) * dz;
+            }
+            cumulative = next;
+        }
+        return hi[2];
+    };
+
+    metrics.w2_response_z50_m =
+        w2_response_height(amrex::Real(0.50));
+    metrics.w2_response_z95_m =
+        w2_response_height(amrex::Real(0.95));
+
     amrex::Real positive_w_above_source = amrex::Real(0.0);
+    amrex::Real w2_above_source = amrex::Real(0.0);
     for (int n = 0; n < nz; ++n) {
         const amrex::Real z_center =
             lo[2] + (amrex::Real(n) + amrex::Real(0.5)) * dz;
         if (z_center >= source_z95_m) {
             positive_w_above_source +=
                 positive_w_by_k[static_cast<std::size_t>(n)];
+            w2_above_source +=
+                w2_by_k[static_cast<std::size_t>(n)];
         }
-        if (layer_max_w[static_cast<std::size_t>(n)]
-            >= response_threshold_mps) {
+
+        const amrex::Real layer_max =
+            layer_max_w[static_cast<std::size_t>(n)];
+
+        if (layer_max >= response_threshold_mps) {
             metrics.w_threshold_top_m = z_center;
+        }
+        if (layer_max >= amrex::Real(0.05)) {
+            metrics.w_threshold_0p05_top_m = z_center;
+        }
+        if (layer_max >= amrex::Real(0.10)) {
+            metrics.w_threshold_0p10_top_m = z_center;
+        }
+        if (layer_max >= amrex::Real(0.25)) {
+            metrics.w_threshold_0p25_top_m = z_center;
+        }
+        if (layer_max >= amrex::Real(0.50)) {
+            metrics.w_threshold_0p50_top_m = z_center;
         }
     }
 
     metrics.positive_w_fraction_above_source_z95 =
         positive_w_above_source
         / metrics.positive_w_volume_integral_m4ps;
+    metrics.w2_fraction_above_source_z95 =
+        w2_above_source
+        / metrics.delta_w_l2_volume_integral_m5ps2;
 
     require(
         std::isfinite(metrics.peak_delta_w_z_m)
             && std::isfinite(metrics.w_response_z50_m)
             && std::isfinite(metrics.w_response_z95_m)
+            && std::isfinite(metrics.w2_response_z50_m)
+            && std::isfinite(metrics.w2_response_z95_m)
+            && std::isfinite(metrics.w2_fraction_above_source_z95)
             && std::isfinite(
                 metrics.positive_w_fraction_above_source_z95)
             && std::isfinite(
@@ -347,14 +414,28 @@ print_metrics(
         << metrics.w_response_z50_m
         << " w_response_z95_m="
         << metrics.w_response_z95_m
+        << " w2_response_z50_m="
+        << metrics.w2_response_z50_m
+        << " w2_response_z95_m="
+        << metrics.w2_response_z95_m
         << " source_z95_m="
         << source_z95(metrics.top_m)
         << " positive_w_fraction_above_source_z95="
         << metrics.positive_w_fraction_above_source_z95
+        << " w2_fraction_above_source_z95="
+        << metrics.w2_fraction_above_source_z95
         << " max_delta_w_above_source_z95_mps="
         << metrics.max_delta_w_above_source_z95_mps
         << " w_threshold_0p01_top_m="
         << metrics.w_threshold_top_m
+        << " w_threshold_0p05_top_m="
+        << metrics.w_threshold_0p05_top_m
+        << " w_threshold_0p10_top_m="
+        << metrics.w_threshold_0p10_top_m
+        << " w_threshold_0p25_top_m="
+        << metrics.w_threshold_0p25_top_m
+        << " w_threshold_0p50_top_m="
+        << metrics.w_threshold_0p50_top_m
         << " positive_theta_volume_integral_K_m3="
         << metrics.positive_theta_volume_integral_K_m3
         << "\n";
@@ -424,8 +505,29 @@ main(int argc, char** argv)
                 > early.positive_theta_volume_integral_K_m3,
             "Positive thermal response did not grow from 1 s to 5 s");
 
+        const amrex::Real late_source_z95_m =
+            source_z95(late.top_m);
+
+        require(
+            late.max_delta_w_above_source_z95_mps
+                >= amrex::Real(0.15),
+            "Late updraft above the source z95 does not reach 0.15 m/s");
+        require(
+            late.w_threshold_0p10_top_m
+                >= late_source_z95_m + amrex::Real(15.0),
+            "0.10 m/s updraft does not extend at least 15 m above the source z95");
+        require(
+            late.w_threshold_0p05_top_m
+                >= late_source_z95_m + amrex::Real(30.0),
+            "0.05 m/s updraft does not extend at least 30 m above the source z95");
+        require(
+            late.w_threshold_0p05_top_m
+                >= late.w_threshold_0p10_top_m,
+            "Strong-updraft threshold heights are not ordered");
+
         amrex::Print()
-            << "BUOYANT_ACCELERATION_PASS=1\n";
+            << "BUOYANT_ACCELERATION_PASS=1\n"
+            << "STRONG_UPDRAFT_EXTENT_PASS=1\n";
     } catch (const std::exception& error) {
         amrex::Print()
             << "Developed-buoyancy analysis error: "
