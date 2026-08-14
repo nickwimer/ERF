@@ -309,3 +309,36 @@ set_tests_properties(
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 # FIRE_ATMOSPHERIC_RESPONSE_END
+
+
+# FIRE_ATMOSPHERIC_RESPONSE_SENSITIVITY_BEGIN
+add_executable(erf_fire_atmospheric_response_sensitivity_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseSensitivityAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_atmospheric_response_sensitivity_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(
+  erf_fire_atmospheric_response_sensitivity_analysis)
+add_dependencies(
+  erf_fire_unit_tests
+  erf_fire_atmospheric_response_sensitivity_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.ExtinctionDepthSensitivity
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_response_sensitivity_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericResponseSensitivity.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.ExtinctionDepthSensitivity
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+# FIRE_ATMOSPHERIC_RESPONSE_SENSITIVITY_END
