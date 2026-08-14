@@ -433,10 +433,32 @@ add_test(
     -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
     -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_background_wind_analysis>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWind.inputs
+    -DCASE_PREFIX=fire_background_wind
+    -DIGNITION_X_M=32.0
+    -DIGNITION_Y_M=32.0
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireBackgroundWind.cmake
 )
 set_tests_properties(
   FireAtmosphericResponse.BackgroundWindClosedLoop
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireAtmosphericResponse.TerrainBackgroundWindClosedLoop
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_background_wind_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainBackgroundWind.inputs
+    -DCASE_PREFIX=fire_terrain_background_wind
+    -DIGNITION_X_M=20.0
+    -DIGNITION_Y_M=32.0
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireBackgroundWind.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.TerrainBackgroundWindClosedLoop
   PROPERTIES
     LABELS unit
     TIMEOUT 900

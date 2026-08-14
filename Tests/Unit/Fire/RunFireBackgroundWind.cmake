@@ -7,12 +7,21 @@ endif()
 if(NOT DEFINED RESPONSE_INPUT OR "${RESPONSE_INPUT}" STREQUAL "")
   message(FATAL_ERROR "RESPONSE_INPUT is required")
 endif()
+if(NOT DEFINED CASE_PREFIX OR "${CASE_PREFIX}" STREQUAL "")
+  message(FATAL_ERROR "CASE_PREFIX is required")
+endif()
+if(NOT DEFINED IGNITION_X_M OR "${IGNITION_X_M}" STREQUAL "")
+  message(FATAL_ERROR "IGNITION_X_M is required")
+endif()
+if(NOT DEFINED IGNITION_Y_M OR "${IGNITION_Y_M}" STREQUAL "")
+  message(FATAL_ERROR "IGNITION_Y_M is required")
+endif()
 
 file(REAL_PATH "." test_root)
 
 function(run_case mode label output_var)
   set(case_dir
-      "${test_root}/fire_background_wind_${label}")
+      "${test_root}/${CASE_PREFIX}_${label}")
   file(REMOVE_RECURSE "${case_dir}")
   file(MAKE_DIRECTORY "${case_dir}")
 
@@ -91,8 +100,8 @@ execute_process(
   COMMAND "${ANALYSIS_EXE}"
           "analysis.one_way_perimeter=${one_way_fire_output}/perimeter_000200.csv"
           "analysis.two_way_perimeter=${two_way_fire_output}/perimeter_000200.csv"
-          "analysis.ignition_x_m=32.0"
-          "analysis.ignition_y_m=32.0"
+          "analysis.ignition_x_m=${IGNITION_X_M}"
+          "analysis.ignition_y_m=${IGNITION_Y_M}"
   WORKING_DIRECTORY "${test_root}"
   RESULT_VARIABLE analysis_result
   OUTPUT_VARIABLE analysis_output
