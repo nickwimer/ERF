@@ -61,12 +61,66 @@ endfunction()
 run_case(one_way one_way early_one_way late_one_way)
 run_case(two_way two_way early_two_way late_two_way)
 
+set(one_way_fire_output
+    "${test_root}/fire_developed_buoyancy_one_way/fire_output_one_way")
+set(two_way_fire_output
+    "${test_root}/fire_developed_buoyancy_two_way/fire_output_two_way")
+
+foreach(required_name IN ITEMS
+    perimeter_000000.csv
+    raster_000000.csv
+    perimeter_000100.csv
+    raster_000100.csv
+    perimeter_000500.csv
+    raster_000500.csv)
+  if(NOT EXISTS "${one_way_fire_output}/${required_name}")
+    message(FATAL_ERROR
+      "one-way developed-buoyancy run is missing ${required_name}")
+  endif()
+  if(NOT EXISTS "${two_way_fire_output}/${required_name}")
+    message(FATAL_ERROR
+      "two-way developed-buoyancy run is missing ${required_name}")
+  endif()
+endforeach()
+
+foreach(initial_name IN ITEMS
+    perimeter_000000.csv
+    raster_000000.csv)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+            "${one_way_fire_output}/${initial_name}"
+            "${two_way_fire_output}/${initial_name}"
+    RESULT_VARIABLE initial_compare)
+  if(NOT initial_compare EQUAL 0)
+    message(FATAL_ERROR
+      "initial one-way/two-way Fire ${initial_name} differs")
+  endif()
+endforeach()
+
+foreach(diverged_name IN ITEMS
+    perimeter_000100.csv
+    raster_000100.csv
+    perimeter_000500.csv
+    raster_000500.csv)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+            "${one_way_fire_output}/${diverged_name}"
+            "${two_way_fire_output}/${diverged_name}"
+    RESULT_VARIABLE diverged_compare)
+  if(diverged_compare EQUAL 0)
+    message(FATAL_ERROR
+      "one-way/two-way Fire ${diverged_name} did not diverge")
+  endif()
+endforeach()
+
 execute_process(
   COMMAND "${ANALYSIS_EXE}"
           "analysis.early_one_way=${early_one_way}"
           "analysis.early_two_way=${early_two_way}"
           "analysis.late_one_way=${late_one_way}"
           "analysis.late_two_way=${late_two_way}"
+          "analysis.one_way_final_perimeter=${one_way_fire_output}/perimeter_000500.csv"
+          "analysis.two_way_final_perimeter=${two_way_fire_output}/perimeter_000500.csv"
   WORKING_DIRECTORY "${test_root}"
   RESULT_VARIABLE analysis_result
   OUTPUT_VARIABLE analysis_output
@@ -94,9 +148,16 @@ if(NOT analysis_output MATCHES "STRONG_UPDRAFT_EXTENT_PASS=1")
     "stderr:\n${analysis_error}")
 endif()
 
+if(NOT analysis_output MATCHES "FIRE_LOOP_CLOSURE_PASS=1")
+  message(FATAL_ERROR
+    "Analyzer did not report Fire loop-closure success\n"
+    "stdout:\n${analysis_output}\n"
+    "stderr:\n${analysis_error}")
+endif()
+
 string(STRIP "${analysis_output}" analysis_output_stripped)
 message(STATUS "${analysis_output_stripped}")
 message(STATUS
-  "Developed buoyancy PASS: "
-  "the coupled atmosphere accelerates strongly and sustains "
-  "operationally strong updraft above the analytic source z95")
+  "Developed buoyancy / Fire loop closure PASS: "
+  "the atmosphere accelerates strongly, sustains aloft updraft, "
+  "and two-way feedback changes subsequent Fire evolution")

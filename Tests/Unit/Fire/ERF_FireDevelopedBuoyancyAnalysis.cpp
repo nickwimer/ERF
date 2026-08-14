@@ -6,9 +6,13 @@
 #include <AMReX_Print.H>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
+#include <fstream>
 #include <iomanip>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -66,6 +70,158 @@ struct BuoyancyMetrics
     amrex::Real w_threshold_0p50_top_m{-amrex::Real(1.0)};
     amrex::Real positive_theta_volume_integral_K_m3{};
 };
+
+std::vector<std::string>
+split_csv_line(const std::string& line)
+{
+    std::vector<std::string> fields;
+    std::string field;
+    std::stringstream stream(line);
+    while (std::getline(stream, field, ',')) {
+        fields.push_back(field);
+    }
+    return fields;
+}
+
+std::string
+normalized_column_name(std::string value)
+{
+    std::string result;
+    result.reserve(value.size());
+    for (char ch : value) {
+        if (ch != '_' && ch != ' ') {
+            result.push_back(
+                static_cast<char>(
+                    std::tolower(
+                        static_cast<unsigned char>(ch))));
+        }
+    }
+    return result;
+}
+
+struct PerimeterGeometryMetrics
+{
+    std::size_t vertices{};
+    amrex::Real area_m2{};
+    amrex::Real perimeter_m{};
+    amrex::Real centroid_x_m{};
+    amrex::Real centroid_y_m{};
+    amrex::Real mean_radius_m{};
+};
+
+PerimeterGeometryMetrics
+read_perimeter_geometry(const std::string& path)
+{
+    std::ifstream input(path);
+    require(
+        input.good(),
+        "Could not open Fire perimeter CSV " + path);
+
+    std::string line;
+    require(
+        static_cast<bool>(std::getline(input, line)),
+        "Fire perimeter CSV is empty " + path);
+
+    const auto header = split_csv_line(line);
+
+    int x_col = -1;
+    int y_col = -1;
+    for (std::size_t n = 0; n < header.size(); ++n) {
+        const std::string name =
+            normalized_column_name(header[n]);
+        if (name == "xm" || name == "x") {
+            x_col = static_cast<int>(n);
+        }
+        if (name == "ym" || name == "y") {
+            y_col = static_cast<int>(n);
+        }
+    }
+
+    require(
+        x_col >= 0 && y_col >= 0,
+        "Perimeter CSV must contain x_m/y_m columns");
+
+    std::vector<std::array<amrex::Real, 2>> points;
+    while (std::getline(input, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const auto fields = split_csv_line(line);
+        const int required_col = std::max(x_col, y_col);
+        require(
+            static_cast<int>(fields.size()) > required_col,
+            "Perimeter CSV row is missing coordinates");
+
+        const amrex::Real x =
+            static_cast<amrex::Real>(
+                std::stod(fields[static_cast<std::size_t>(x_col)]));
+        const amrex::Real y =
+            static_cast<amrex::Real>(
+                std::stod(fields[static_cast<std::size_t>(y_col)]));
+        require(
+            std::isfinite(x) && std::isfinite(y),
+            "Perimeter CSV contains non-finite coordinates");
+        points.push_back({x, y});
+    }
+
+    require(
+        points.size() >= 3,
+        "Perimeter CSV requires at least three vertices");
+
+    if (points.front() == points.back()) {
+        points.pop_back();
+    }
+
+    require(
+        points.size() >= 3,
+        "Perimeter CSV collapsed below three unique vertices");
+
+    amrex::Real twice_area = amrex::Real(0.0);
+    amrex::Real centroid_x_numerator = amrex::Real(0.0);
+    amrex::Real centroid_y_numerator = amrex::Real(0.0);
+    amrex::Real perimeter = amrex::Real(0.0);
+
+    for (std::size_t n = 0; n < points.size(); ++n) {
+        const auto& p0 = points[n];
+        const auto& p1 = points[(n + 1) % points.size()];
+        const amrex::Real cross =
+            p0[0] * p1[1] - p1[0] * p0[1];
+        twice_area += cross;
+        centroid_x_numerator += (p0[0] + p1[0]) * cross;
+        centroid_y_numerator += (p0[1] + p1[1]) * cross;
+
+        const amrex::Real dx = p1[0] - p0[0];
+        const amrex::Real dy = p1[1] - p0[1];
+        perimeter += std::hypot(dx, dy);
+    }
+
+    require(
+        std::abs(twice_area) > amrex::Real(0.0),
+        "Perimeter polygon has zero signed area");
+
+    const amrex::Real centroid_x =
+        centroid_x_numerator / (amrex::Real(3.0) * twice_area);
+    const amrex::Real centroid_y =
+        centroid_y_numerator / (amrex::Real(3.0) * twice_area);
+
+    amrex::Real radius_sum = amrex::Real(0.0);
+    for (const auto& point : points) {
+        radius_sum +=
+            std::hypot(
+                point[0] - centroid_x,
+                point[1] - centroid_y);
+    }
+
+    PerimeterGeometryMetrics result;
+    result.vertices = points.size();
+    result.area_m2 = amrex::Real(0.5) * std::abs(twice_area);
+    result.perimeter_m = perimeter;
+    result.centroid_x_m = centroid_x;
+    result.centroid_y_m = centroid_y;
+    result.mean_radius_m =
+        radius_sum / static_cast<amrex::Real>(points.size());
+    return result;
+}
 
 amrex::Real
 source_z95(amrex::Real top_m)
@@ -456,11 +612,15 @@ main(int argc, char** argv)
         std::string early_two_way;
         std::string late_one_way;
         std::string late_two_way;
+        std::string one_way_final_perimeter;
+        std::string two_way_final_perimeter;
 
         pp.get("early_one_way", early_one_way);
         pp.get("early_two_way", early_two_way);
         pp.get("late_one_way", late_one_way);
         pp.get("late_two_way", late_two_way);
+        pp.get("one_way_final_perimeter", one_way_final_perimeter);
+        pp.get("two_way_final_perimeter", two_way_final_perimeter);
 
         const BuoyancyMetrics early =
             analyze_pair(early_one_way, early_two_way);
@@ -525,9 +685,46 @@ main(int argc, char** argv)
                 >= late.w_threshold_0p10_top_m,
             "Strong-updraft threshold heights are not ordered");
 
+        const PerimeterGeometryMetrics one_fire =
+            read_perimeter_geometry(one_way_final_perimeter);
+        const PerimeterGeometryMetrics two_fire =
+            read_perimeter_geometry(two_way_final_perimeter);
+
+        require(
+            one_fire.vertices == two_fire.vertices,
+            "Final one-way/two-way perimeter vertex counts differ");
+
+        const amrex::Real area_difference_m2 =
+            two_fire.area_m2 - one_fire.area_m2;
+        const amrex::Real mean_radius_difference_m =
+            two_fire.mean_radius_m - one_fire.mean_radius_m;
+
+        require(
+            std::abs(area_difference_m2) >= amrex::Real(0.1),
+            "Final Fire perimeter enclosed-area difference is below 0.1 m^2");
+        require(
+            std::abs(mean_radius_difference_m) >= amrex::Real(0.002),
+            "Final Fire perimeter mean-radius difference is below 2 mm");
+
+        amrex::Print()
+            << std::setprecision(17)
+            << "LOOP_CLOSURE_METRICS"
+            << " one_area_m2=" << one_fire.area_m2
+            << " two_area_m2=" << two_fire.area_m2
+            << " delta_area_m2=" << area_difference_m2
+            << " one_perimeter_m=" << one_fire.perimeter_m
+            << " two_perimeter_m=" << two_fire.perimeter_m
+            << " delta_perimeter_m="
+            << two_fire.perimeter_m - one_fire.perimeter_m
+            << " one_mean_radius_m=" << one_fire.mean_radius_m
+            << " two_mean_radius_m=" << two_fire.mean_radius_m
+            << " delta_mean_radius_m=" << mean_radius_difference_m
+            << "\n";
+
         amrex::Print()
             << "BUOYANT_ACCELERATION_PASS=1\n"
-            << "STRONG_UPDRAFT_EXTENT_PASS=1\n";
+            << "STRONG_UPDRAFT_EXTENT_PASS=1\n"
+            << "FIRE_LOOP_CLOSURE_PASS=1\n";
     } catch (const std::exception& error) {
         amrex::Print()
             << "Developed-buoyancy analysis error: "
