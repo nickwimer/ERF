@@ -34,6 +34,7 @@ erf.v = 0
 erf.plot_file_1 = plt
 erf.plot_int_1 = 100
 erf.plot_vars_1 = density rhotheta rhoQ1 z_velocity theta
+erf.plot_face_vels = true
 erf.plot_int_2 = -1
 erf.check_int = -1
 

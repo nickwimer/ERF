@@ -1,3 +1,5 @@
+#include "ERF_FireFlatEnvironmentSampler.H"
+
 #include <AMReX.H>
 #include <AMReX_Arena.H>
 #include <AMReX_FArrayBox.H>
@@ -545,6 +547,344 @@ print_radial_wind_metrics(
         << "\n";
 }
 
+ERFFire::FireFlatEnvironmentSampler
+make_exact_flat_fire_sampler(
+    const std::string& regular_plot_path,
+    const std::string& u_plot_path,
+    const std::string& v_plot_path,
+    amrex::Real reference_height_m)
+{
+    amrex::PlotFileData regular_plot(regular_plot_path);
+    amrex::PlotFileData u_plot(u_plot_path);
+    amrex::PlotFileData v_plot(v_plot_path);
+
+    require(
+        regular_plot.finestLevel() == 0
+            && u_plot.finestLevel() == 0
+            && v_plot.finestLevel() == 0,
+        "Exact Fire sampler requires level-0-only plotfiles");
+    require(
+        regular_plot.spaceDim() == 3
+            && u_plot.spaceDim() == 3
+            && v_plot.spaceDim() == 3,
+        "Exact Fire sampler requires 3-D plotfiles");
+
+    require(
+        has_variable(u_plot.varNames(), "x_velocity_stag"),
+        "Exact Fire sampler staggered-u plotfile is missing x_velocity_stag");
+    require(
+        has_variable(v_plot.varNames(), "y_velocity_stag"),
+        "Exact Fire sampler staggered-v plotfile is missing y_velocity_stag");
+
+    const auto cell_domain = regular_plot.probDomain(0);
+    const auto expected_u =
+        amrex::convert(cell_domain, amrex::IntVect(1, 0, 0));
+    const auto expected_v =
+        amrex::convert(cell_domain, amrex::IntVect(0, 1, 0));
+
+    auto u_mf = u_plot.get(0, "x_velocity_stag");
+    auto v_mf = v_plot.get(0, "y_velocity_stag");
+
+    const amrex::Box u_domain = u_mf.boxArray().minimalBox();
+    const amrex::Box v_domain = v_mf.boxArray().minimalBox();
+
+    require(
+        u_domain == expected_u,
+        "Staggered-u plotfile layout does not match the ERF x-face domain");
+    require(
+        v_domain == expected_v,
+        "Staggered-v plotfile layout does not match the ERF y-face domain");
+
+    const auto dx = regular_plot.cellSize(0);
+    const auto prob_lo = regular_plot.probLo();
+    const auto u_dx = u_plot.cellSize(0);
+    const auto v_dx = v_plot.cellSize(0);
+    const auto u_lo = u_plot.probLo();
+    const auto v_lo = v_plot.probLo();
+
+    for (int dir = 0; dir < 3; ++dir) {
+        require(
+            std::abs(dx[dir] - u_dx[dir])
+                    <= scaled_tolerance(dx[dir])
+                && std::abs(dx[dir] - v_dx[dir])
+                    <= scaled_tolerance(dx[dir]),
+            "Regular and staggered plotfile cell sizes differ");
+        require(
+            std::abs(prob_lo[dir] - u_lo[dir])
+                    <= scaled_tolerance(prob_lo[dir])
+                && std::abs(prob_lo[dir] - v_lo[dir])
+                    <= scaled_tolerance(prob_lo[dir]),
+            "Regular and staggered plotfile lower bounds differ");
+    }
+
+    amrex::FArrayBox u_host(
+        u_domain, 1, amrex::The_Pinned_Arena());
+    amrex::FArrayBox v_host(
+        v_domain, 1, amrex::The_Pinned_Arena());
+
+    u_mf.copyTo(u_host, 0, 0, 1, 0);
+    v_mf.copyTo(v_host, 0, 0, 1, 0);
+
+    const auto u = u_host.const_array();
+    const auto v = v_host.const_array();
+
+    const std::size_t nx =
+        static_cast<std::size_t>(cell_domain.length(0));
+    const std::size_t ny =
+        static_cast<std::size_t>(cell_domain.length(1));
+    const std::size_t nz =
+        static_cast<std::size_t>(cell_domain.length(2));
+
+    ERFFire::FireFlatEnvironmentLayout2D layout(
+        prob_lo[0],
+        prob_lo[1],
+        dx[0],
+        dx[1],
+        nx,
+        ny);
+
+    std::vector<amrex::Real> z_cell_center_m(nz);
+    for (std::size_t n = 0; n < nz; ++n) {
+        z_cell_center_m[n] =
+            prob_lo[2]
+            + (static_cast<amrex::Real>(n) + amrex::Real(0.5))
+                * dx[2];
+    }
+
+    const ERFFire::FireVerticalLinearBracket bracket =
+        ERFFire::fire_vertical_linear_bracket(
+            z_cell_center_m,
+            reference_height_m);
+
+    const int k0 = cell_domain.smallEnd(2);
+    const int lower_k =
+        k0 + static_cast<int>(bracket.lower_k);
+    const int upper_k =
+        k0 + static_cast<int>(bracket.upper_k);
+
+    std::vector<amrex::Real> u_snapshot(
+        layout.u_storage_size(),
+        amrex::Real(0.0));
+    std::vector<amrex::Real> v_snapshot(
+        layout.v_storage_size(),
+        amrex::Real(0.0));
+
+    const int u_ilo = u_domain.smallEnd(0);
+    const int u_jlo = u_domain.smallEnd(1);
+    for (std::size_t j = 0; j < ny; ++j) {
+        for (std::size_t i = 0; i <= nx; ++i) {
+            const int src_i =
+                u_ilo + static_cast<int>(i);
+            const int src_j =
+                u_jlo + static_cast<int>(j);
+            const amrex::Real value =
+                ERFFire::fire_vertical_linear_interpolate(
+                    u(src_i, src_j, lower_k),
+                    u(src_i, src_j, upper_k),
+                    bracket);
+            u_snapshot[
+                layout.u_storage_index(
+                    static_cast<int>(i),
+                    static_cast<int>(j))] = value;
+        }
+    }
+
+    const int v_ilo = v_domain.smallEnd(0);
+    const int v_jlo = v_domain.smallEnd(1);
+    for (std::size_t j = 0; j <= ny; ++j) {
+        for (std::size_t i = 0; i < nx; ++i) {
+            const int src_i =
+                v_ilo + static_cast<int>(i);
+            const int src_j =
+                v_jlo + static_cast<int>(j);
+            const amrex::Real value =
+                ERFFire::fire_vertical_linear_interpolate(
+                    v(src_i, src_j, lower_k),
+                    v(src_i, src_j, upper_k),
+                    bracket);
+            v_snapshot[
+                layout.v_storage_index(
+                    static_cast<int>(i),
+                    static_cast<int>(j))] = value;
+        }
+    }
+
+    return ERFFire::FireFlatEnvironmentSampler(
+        std::move(layout),
+        reference_height_m,
+        std::move(u_snapshot),
+        std::move(v_snapshot));
+}
+
+RadialWindMetrics
+analyze_exact_fire_sampler_radial_wind(
+    const std::string& one_regular_plot,
+    const std::string& one_u_plot,
+    const std::string& one_v_plot,
+    const std::string& two_regular_plot,
+    const std::string& two_u_plot,
+    const std::string& two_v_plot,
+    const std::string& reference_perimeter,
+    amrex::Real reference_height_m)
+{
+    const auto one_sampler =
+        make_exact_flat_fire_sampler(
+            one_regular_plot,
+            one_u_plot,
+            one_v_plot,
+            reference_height_m);
+    const auto two_sampler =
+        make_exact_flat_fire_sampler(
+            two_regular_plot,
+            two_u_plot,
+            two_v_plot,
+            reference_height_m);
+
+    const auto points =
+        read_perimeter_points(reference_perimeter);
+    const auto geometry =
+        read_perimeter_geometry(reference_perimeter);
+
+    const auto& layout = one_sampler.layout();
+    require(
+        layout.xlo_m() == two_sampler.layout().xlo_m()
+            && layout.ylo_m() == two_sampler.layout().ylo_m()
+            && layout.xhi_m() == two_sampler.layout().xhi_m()
+            && layout.yhi_m() == two_sampler.layout().yhi_m()
+            && layout.dx_m() == two_sampler.layout().dx_m()
+            && layout.dy_m() == two_sampler.layout().dy_m(),
+        "One-way/two-way exact Fire sampler layouts differ");
+
+    RadialWindMetrics metrics;
+    metrics.samples = points.size();
+    metrics.reference_height_m = reference_height_m;
+
+    amrex::Real radial_square_sum = amrex::Real(0.0);
+    amrex::Real tangential_square_sum = amrex::Real(0.0);
+    std::size_t inward_count = 0;
+
+    for (const auto& point : points) {
+        require(
+            point[0] >= layout.xlo_m() + amrex::Real(2.0) * layout.dx_m()
+                && point[0]
+                    <= layout.xhi_m() - amrex::Real(2.0) * layout.dx_m()
+                && point[1]
+                    >= layout.ylo_m() + amrex::Real(2.0) * layout.dy_m()
+                && point[1]
+                    <= layout.yhi_m() - amrex::Real(2.0) * layout.dy_m(),
+            "Reference perimeter is too close to the domain boundary");
+
+        const amrex::Real rx =
+            point[0] - geometry.centroid_x_m;
+        const amrex::Real ry =
+            point[1] - geometry.centroid_y_m;
+        const amrex::Real radius = std::hypot(rx, ry);
+        require(
+            radius > amrex::Real(0.0),
+            "Perimeter point coincides with its centroid");
+
+        const amrex::Real nx = rx / radius;
+        const amrex::Real ny = ry / radius;
+        const amrex::Real tx = -ny;
+        const amrex::Real ty = nx;
+
+        const auto one_sample =
+            one_sampler.sample(point[0], point[1]);
+        const auto two_sample =
+            two_sampler.sample(point[0], point[1]);
+
+        const amrex::Real one_radial =
+            one_sample.horizontal_wind_mps.x * nx
+            + one_sample.horizontal_wind_mps.y * ny;
+        const amrex::Real two_radial =
+            two_sample.horizontal_wind_mps.x * nx
+            + two_sample.horizontal_wind_mps.y * ny;
+        const amrex::Real delta_radial =
+            two_radial - one_radial;
+
+        const amrex::Real one_tangential =
+            one_sample.horizontal_wind_mps.x * tx
+            + one_sample.horizontal_wind_mps.y * ty;
+        const amrex::Real two_tangential =
+            two_sample.horizontal_wind_mps.x * tx
+            + two_sample.horizontal_wind_mps.y * ty;
+        const amrex::Real delta_tangential =
+            two_tangential - one_tangential;
+
+        require(
+            std::isfinite(one_radial)
+                && std::isfinite(two_radial)
+                && std::isfinite(delta_radial)
+                && std::isfinite(delta_tangential),
+            "Exact Fire sampler produced non-finite perimeter wind");
+
+        metrics.one_mean_radial_mps += one_radial;
+        metrics.two_mean_radial_mps += two_radial;
+        metrics.delta_mean_radial_mps += delta_radial;
+        radial_square_sum += delta_radial * delta_radial;
+        tangential_square_sum +=
+            delta_tangential * delta_tangential;
+        metrics.delta_min_radial_mps =
+            std::min(metrics.delta_min_radial_mps, delta_radial);
+        metrics.delta_max_radial_mps =
+            std::max(metrics.delta_max_radial_mps, delta_radial);
+        if (delta_radial < amrex::Real(0.0)) {
+            ++inward_count;
+        }
+    }
+
+    const amrex::Real inverse_n =
+        amrex::Real(1.0)
+        / static_cast<amrex::Real>(metrics.samples);
+    metrics.one_mean_radial_mps *= inverse_n;
+    metrics.two_mean_radial_mps *= inverse_n;
+    metrics.delta_mean_radial_mps *= inverse_n;
+    metrics.delta_rms_radial_mps =
+        std::sqrt(radial_square_sum * inverse_n);
+    metrics.delta_rms_tangential_mps =
+        std::sqrt(tangential_square_sum * inverse_n);
+    metrics.inward_fraction =
+        static_cast<amrex::Real>(inward_count) * inverse_n;
+
+    return metrics;
+}
+
+void
+print_exact_fire_sampler_metrics(
+    const char* phase,
+    const RadialWindMetrics& metrics,
+    const RadialWindMetrics& cell_centered_metrics)
+{
+    amrex::Print()
+        << std::setprecision(17)
+        << "EXACT_FIRE_SAMPLER_METRICS"
+        << " phase=" << phase
+        << " samples=" << metrics.samples
+        << " reference_height_m=" << metrics.reference_height_m
+        << " one_mean_radial_mps="
+        << metrics.one_mean_radial_mps
+        << " two_mean_radial_mps="
+        << metrics.two_mean_radial_mps
+        << " delta_mean_radial_mps="
+        << metrics.delta_mean_radial_mps
+        << " delta_rms_radial_mps="
+        << metrics.delta_rms_radial_mps
+        << " delta_min_radial_mps="
+        << metrics.delta_min_radial_mps
+        << " delta_max_radial_mps="
+        << metrics.delta_max_radial_mps
+        << " inward_fraction="
+        << metrics.inward_fraction
+        << " delta_rms_tangential_mps="
+        << metrics.delta_rms_tangential_mps
+        << " cell_center_delta_mean_radial_mps="
+        << cell_centered_metrics.delta_mean_radial_mps
+        << " exact_minus_cell_center_delta_mean_mps="
+        << metrics.delta_mean_radial_mps
+            - cell_centered_metrics.delta_mean_radial_mps
+        << "\n";
+}
+
 amrex::Real
 source_z95(amrex::Real top_m)
 {
@@ -567,10 +907,10 @@ analyze_pair(
 
     require(
         one_way.finestLevel() == 0 && two_way.finestLevel() == 0,
-        "M12c1 analyzer requires level-0-only plotfiles");
+        "Analyzer requires level-0-only plotfiles");
     require(
         one_way.spaceDim() == 3 && two_way.spaceDim() == 3,
-        "M12c1 analyzer requires 3-D plotfiles");
+        "Analyzer requires 3-D plotfiles");
 
     const amrex::Real time_scale =
         std::max(
@@ -938,6 +1278,14 @@ main(int argc, char** argv)
         std::string two_way_final_perimeter;
         std::string early_reference_perimeter;
         std::string late_reference_perimeter;
+        std::string early_one_way_u;
+        std::string early_one_way_v;
+        std::string early_two_way_u;
+        std::string early_two_way_v;
+        std::string late_one_way_u;
+        std::string late_one_way_v;
+        std::string late_two_way_u;
+        std::string late_two_way_v;
 
         pp.get("early_one_way", early_one_way);
         pp.get("early_two_way", early_two_way);
@@ -947,6 +1295,14 @@ main(int argc, char** argv)
         pp.get("two_way_final_perimeter", two_way_final_perimeter);
         pp.get("early_reference_perimeter", early_reference_perimeter);
         pp.get("late_reference_perimeter", late_reference_perimeter);
+        pp.get("early_one_way_u", early_one_way_u);
+        pp.get("early_one_way_v", early_one_way_v);
+        pp.get("early_two_way_u", early_two_way_u);
+        pp.get("early_two_way_v", early_two_way_v);
+        pp.get("late_one_way_u", late_one_way_u);
+        pp.get("late_one_way_v", late_one_way_v);
+        pp.get("late_two_way_u", late_two_way_u);
+        pp.get("late_two_way_v", late_two_way_v);
 
         const BuoyancyMetrics early =
             analyze_pair(early_one_way, early_two_way);
@@ -980,6 +1336,69 @@ main(int argc, char** argv)
 
         print_radial_wind_metrics("early", early_radial);
         print_radial_wind_metrics("late", late_radial);
+
+        const RadialWindMetrics early_exact_sampler =
+            analyze_exact_fire_sampler_radial_wind(
+                early_one_way,
+                early_one_way_u,
+                early_one_way_v,
+                early_two_way,
+                early_two_way_u,
+                early_two_way_v,
+                early_reference_perimeter,
+                amrex::Real(10.0));
+        const RadialWindMetrics late_exact_sampler =
+            analyze_exact_fire_sampler_radial_wind(
+                late_one_way,
+                late_one_way_u,
+                late_one_way_v,
+                late_two_way,
+                late_two_way_u,
+                late_two_way_v,
+                late_reference_perimeter,
+                amrex::Real(10.0));
+
+        print_exact_fire_sampler_metrics(
+            "early",
+            early_exact_sampler,
+            early_radial);
+        print_exact_fire_sampler_metrics(
+            "late",
+            late_exact_sampler,
+            late_radial);
+
+        require(
+            std::abs(early_exact_sampler.one_mean_radial_mps)
+                <= amrex::Real(1.0e-12)
+                && std::abs(late_exact_sampler.one_mean_radial_mps)
+                    <= amrex::Real(1.0e-12),
+            "Exact Fire sampler one-way control developed nonzero mean radial flow");
+        require(
+            early_exact_sampler.delta_mean_radial_mps
+                >= amrex::Real(0.06),
+            "Exact Fire sampler early radial response is not sufficiently outward");
+        require(
+            early_exact_sampler.inward_fraction
+                <= amrex::Real(0.05),
+            "Exact Fire sampler early response is not predominantly outward");
+        require(
+            late_exact_sampler.delta_mean_radial_mps
+                <= -amrex::Real(0.12),
+            "Exact Fire sampler late radial response is not sufficiently inward");
+        require(
+            late_exact_sampler.inward_fraction
+                >= amrex::Real(0.95),
+            "Exact Fire sampler late response is not predominantly inward");
+        require(
+            early_exact_sampler.delta_rms_radial_mps
+                >= amrex::Real(10.0)
+                    * early_exact_sampler.delta_rms_tangential_mps,
+            "Exact Fire sampler early horizontal feedback is not radially dominant");
+        require(
+            late_exact_sampler.delta_rms_radial_mps
+                >= amrex::Real(10.0)
+                    * late_exact_sampler.delta_rms_tangential_mps,
+            "Exact Fire sampler late horizontal feedback is not radially dominant");
 
         require(
             std::abs(early_radial.one_mean_radial_mps)
@@ -1100,7 +1519,8 @@ main(int argc, char** argv)
             << "BUOYANT_ACCELERATION_PASS=1\n"
             << "STRONG_UPDRAFT_EXTENT_PASS=1\n"
             << "FIRE_LOOP_CLOSURE_PASS=1\n"
-            << "RADIAL_FLOW_REVERSAL_PASS=1\n";
+            << "RADIAL_FLOW_REVERSAL_PASS=1\n"
+            << "EXACT_FIRE_SAMPLER_REVERSAL_PASS=1\n";
     } catch (const std::exception& error) {
         amrex::Print()
             << "Developed-buoyancy analysis error: "

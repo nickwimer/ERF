@@ -386,6 +386,12 @@ target_link_libraries(
   PRIVATE
     AMReX::amrex
 )
+target_include_directories(
+  erf_fire_developed_buoyancy_analysis
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/Source/Fire
+    ${PROJECT_SOURCE_DIR}/Source/Fire/Environment
+)
 set_erf_compile_flags(erf_fire_developed_buoyancy_analysis)
 add_dependencies(
   erf_fire_unit_tests

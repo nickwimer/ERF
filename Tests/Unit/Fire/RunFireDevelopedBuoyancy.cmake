@@ -46,6 +46,7 @@ function(run_case mode label early_plot_var late_plot_var)
   file(GLOB plot_dirs
     LIST_DIRECTORIES true
     "${case_dir}/plt*")
+  list(FILTER plot_dirs INCLUDE REGEX "/plt[0-9]+$")
   list(SORT plot_dirs)
   list(LENGTH plot_dirs plot_count)
   if(plot_count LESS 2)
@@ -60,6 +61,35 @@ endfunction()
 
 run_case(one_way one_way early_one_way late_one_way)
 run_case(two_way two_way early_two_way late_two_way)
+
+set(one_way_case_dir
+    "${test_root}/fire_developed_buoyancy_one_way")
+set(two_way_case_dir
+    "${test_root}/fire_developed_buoyancy_two_way")
+
+set(early_one_way_u "${one_way_case_dir}/pltU00100")
+set(early_one_way_v "${one_way_case_dir}/pltV00100")
+set(early_two_way_u "${two_way_case_dir}/pltU00100")
+set(early_two_way_v "${two_way_case_dir}/pltV00100")
+set(late_one_way_u "${one_way_case_dir}/pltU00500")
+set(late_one_way_v "${one_way_case_dir}/pltV00500")
+set(late_two_way_u "${two_way_case_dir}/pltU00500")
+set(late_two_way_v "${two_way_case_dir}/pltV00500")
+
+foreach(face_plot IN ITEMS
+    "${early_one_way_u}"
+    "${early_one_way_v}"
+    "${early_two_way_u}"
+    "${early_two_way_v}"
+    "${late_one_way_u}"
+    "${late_one_way_v}"
+    "${late_two_way_u}"
+    "${late_two_way_v}")
+  if(NOT EXISTS "${face_plot}/Header")
+    message(FATAL_ERROR
+      "Developed-buoyancy run is missing staggered plotfile ${face_plot}")
+  endif()
+endforeach()
 
 set(one_way_fire_output
     "${test_root}/fire_developed_buoyancy_one_way/fire_output_one_way")
@@ -123,6 +153,14 @@ execute_process(
           "analysis.two_way_final_perimeter=${two_way_fire_output}/perimeter_000500.csv"
           "analysis.early_reference_perimeter=${two_way_fire_output}/perimeter_000100.csv"
           "analysis.late_reference_perimeter=${two_way_fire_output}/perimeter_000500.csv"
+          "analysis.early_one_way_u=${early_one_way_u}"
+          "analysis.early_one_way_v=${early_one_way_v}"
+          "analysis.early_two_way_u=${early_two_way_u}"
+          "analysis.early_two_way_v=${early_two_way_v}"
+          "analysis.late_one_way_u=${late_one_way_u}"
+          "analysis.late_one_way_v=${late_one_way_v}"
+          "analysis.late_two_way_u=${late_two_way_u}"
+          "analysis.late_two_way_v=${late_two_way_v}"
   WORKING_DIRECTORY "${test_root}"
   RESULT_VARIABLE analysis_result
   OUTPUT_VARIABLE analysis_output
@@ -164,9 +202,16 @@ if(NOT analysis_output MATCHES "RADIAL_FLOW_REVERSAL_PASS=1")
     "stderr:\n${analysis_error}")
 endif()
 
+if(NOT analysis_output MATCHES "EXACT_FIRE_SAMPLER_REVERSAL_PASS=1")
+  message(FATAL_ERROR
+    "Analyzer did not report exact Fire-sampler reversal success\n"
+    "stdout:\n${analysis_output}\n"
+    "stderr:\n${analysis_error}")
+endif()
+
 string(STRIP "${analysis_output}" analysis_output_stripped)
 message(STATUS "${analysis_output_stripped}")
 message(STATUS
   "Developed buoyancy / Fire loop closure PASS: "
-  "two-way heating drives an early outward and later inward "
-  "radially dominant near-fire horizontal-flow response")
+  "the production flat Fire sampler sees an early outward and later inward "
+  "radially dominant two-way horizontal-flow response")
