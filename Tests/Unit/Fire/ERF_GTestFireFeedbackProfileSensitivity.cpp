@@ -181,6 +181,28 @@ recovered_layer_fractions(
     return result;
 }
 
+
+std::vector<Real>
+recovered_heat_layer_fractions(
+    const std::vector<ERFFireAtmosphericSourceCell>& source,
+    const std::vector<Real>& volume_m3,
+    const std::vector<Real>& pressure_pa,
+    Real step_dt_s,
+    const FireSurfaceFeedbackCell& release)
+{
+    std::vector<Real> result(source.size(), Real(0.0));
+    for (std::size_t k = 0; k < source.size(); ++k) {
+        result[k] =
+            source[k].rhotheta_tendency_kg_K_m3_s
+            * Cp_d
+            * exner_from_pressure(pressure_pa[k])
+            * volume_m3[k]
+            * step_dt_s
+            / release.sensible_energy_j;
+    }
+    return result;
+}
+
 Real
 expected_layer_fraction(
     Real zlo_m,
@@ -337,6 +359,23 @@ TEST(
                 Real(0.0));
         EXPECT_NEAR(fraction_sum, Real(1.0), Real(4.0e-13));
 
+        const auto heat_fractions =
+            recovered_heat_layer_fractions(
+                source,
+                volume_m3,
+                pressure_pa,
+                dt_s,
+                release);
+        const Real heat_fraction_sum =
+            std::accumulate(
+                heat_fractions.begin(),
+                heat_fractions.end(),
+                Real(0.0));
+        EXPECT_NEAR(
+            heat_fraction_sum,
+            Real(1.0),
+            Real(4.0e-13));
+
         for (std::size_t k = 0; k < fractions.size(); ++k) {
             EXPECT_NEAR(
                 fractions[k],
@@ -345,6 +384,18 @@ TEST(
                     faces_m[k + 1],
                     faces_m.back(),
                     H_m),
+                Real(4.0e-13));
+            EXPECT_NEAR(
+                heat_fractions[k],
+                expected_layer_fraction(
+                    faces_m[k],
+                    faces_m[k + 1],
+                    faces_m.back(),
+                    H_m),
+                Real(4.0e-13));
+            EXPECT_NEAR(
+                heat_fractions[k],
+                fractions[k],
                 Real(4.0e-13));
         }
 

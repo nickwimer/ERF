@@ -273,3 +273,39 @@ set_tests_properties(
     TIMEOUT 300
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+
+# FIRE_ATMOSPHERIC_RESPONSE_BEGIN
+add_executable(erf_fire_atmospheric_response
+  ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+)
+build_erf_exe(erf_fire_atmospheric_response)
+add_dependencies(erf_fire_unit_tests erf_fire_atmospheric_response)
+
+add_executable(erf_fire_atmospheric_response_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_atmospheric_response_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(erf_fire_atmospheric_response_analysis)
+add_dependencies(erf_fire_unit_tests erf_fire_atmospheric_response_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.FlatGravityOnCheckpoint
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_response_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericResponse.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.FlatGravityOnCheckpoint
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+# FIRE_ATMOSPHERIC_RESPONSE_END
