@@ -413,3 +413,32 @@ set_tests_properties(
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 # FIRE_DEVELOPED_BUOYANCY_END
+
+add_executable(erf_fire_background_wind_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWindAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_background_wind_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(erf_fire_background_wind_analysis)
+add_dependencies(
+  erf_fire_unit_tests
+  erf_fire_background_wind_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.BackgroundWindClosedLoop
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_background_wind_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWind.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireBackgroundWind.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.BackgroundWindClosedLoop
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
