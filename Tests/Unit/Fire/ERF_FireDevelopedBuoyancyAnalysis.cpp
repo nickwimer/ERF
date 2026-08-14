@@ -1,4 +1,6 @@
 #include <AMReX.H>
+#include <AMReX_Arena.H>
+#include <AMReX_FArrayBox.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_ParmParse.H>
@@ -109,8 +111,8 @@ struct PerimeterGeometryMetrics
     amrex::Real mean_radius_m{};
 };
 
-PerimeterGeometryMetrics
-read_perimeter_geometry(const std::string& path)
+std::vector<std::array<amrex::Real, 2>>
+read_perimeter_points(const std::string& path)
 {
     std::ifstream input(path);
     require(
@@ -176,6 +178,43 @@ read_perimeter_geometry(const std::string& path)
         points.size() >= 3,
         "Perimeter CSV collapsed below three unique vertices");
 
+    return points;
+}
+
+PerimeterGeometryMetrics
+read_perimeter_geometry(const std::string& path)
+{
+    std::ifstream input(path);
+    require(
+        input.good(),
+        "Could not open Fire perimeter CSV " + path);
+
+    std::string line;
+    require(
+        static_cast<bool>(std::getline(input, line)),
+        "Fire perimeter CSV is empty " + path);
+
+    const auto header = split_csv_line(line);
+
+    int x_col = -1;
+    int y_col = -1;
+    for (std::size_t n = 0; n < header.size(); ++n) {
+        const std::string name =
+            normalized_column_name(header[n]);
+        if (name == "xm" || name == "x") {
+            x_col = static_cast<int>(n);
+        }
+        if (name == "ym" || name == "y") {
+            y_col = static_cast<int>(n);
+        }
+    }
+
+    require(
+        x_col >= 0 && y_col >= 0,
+        "Perimeter CSV must contain x_m/y_m columns");
+
+    const auto points = read_perimeter_points(path);
+
     amrex::Real twice_area = amrex::Real(0.0);
     amrex::Real centroid_x_numerator = amrex::Real(0.0);
     amrex::Real centroid_y_numerator = amrex::Real(0.0);
@@ -221,6 +260,289 @@ read_perimeter_geometry(const std::string& path)
     result.mean_radius_m =
         radius_sum / static_cast<amrex::Real>(points.size());
     return result;
+}
+
+struct RadialWindMetrics
+{
+    std::size_t samples{};
+    amrex::Real reference_height_m{};
+    amrex::Real one_mean_radial_mps{};
+    amrex::Real two_mean_radial_mps{};
+    amrex::Real delta_mean_radial_mps{};
+    amrex::Real delta_rms_radial_mps{};
+    amrex::Real delta_min_radial_mps{
+        std::numeric_limits<amrex::Real>::infinity()};
+    amrex::Real delta_max_radial_mps{
+        -std::numeric_limits<amrex::Real>::infinity()};
+    amrex::Real inward_fraction{};
+    amrex::Real delta_rms_tangential_mps{};
+};
+
+amrex::Real
+sample_cell_centered_trilinear(
+    const amrex::Array4<const amrex::Real>& values,
+    const amrex::Box& domain,
+    const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM>& prob_lo,
+    const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM>& dx,
+    amrex::Real x,
+    amrex::Real y,
+    amrex::Real z)
+{
+    const std::array<amrex::Real, 3> position{x, y, z};
+    std::array<int, 3> lower{};
+    std::array<amrex::Real, 3> upper_weight{};
+
+    for (int dir = 0; dir < 3; ++dir) {
+        const amrex::Real logical =
+            (position[static_cast<std::size_t>(dir)] - prob_lo[dir])
+                / dx[dir]
+            - amrex::Real(0.5)
+            + amrex::Real(domain.smallEnd(dir));
+
+        const int lo_index =
+            static_cast<int>(std::floor(logical));
+        const amrex::Real weight =
+            logical - amrex::Real(lo_index);
+
+        require(
+            lo_index >= domain.smallEnd(dir)
+                && lo_index + 1 <= domain.bigEnd(dir),
+            "10-m perimeter sample lies outside plotfile cell-center support");
+
+        lower[static_cast<std::size_t>(dir)] = lo_index;
+        upper_weight[static_cast<std::size_t>(dir)] = weight;
+    }
+
+    amrex::Real result = amrex::Real(0.0);
+    for (int kk = 0; kk <= 1; ++kk) {
+        const amrex::Real wz =
+            kk == 0
+                ? amrex::Real(1.0) - upper_weight[2]
+                : upper_weight[2];
+        for (int jj = 0; jj <= 1; ++jj) {
+            const amrex::Real wy =
+                jj == 0
+                    ? amrex::Real(1.0) - upper_weight[1]
+                    : upper_weight[1];
+            for (int ii = 0; ii <= 1; ++ii) {
+                const amrex::Real wx =
+                    ii == 0
+                        ? amrex::Real(1.0) - upper_weight[0]
+                        : upper_weight[0];
+                result +=
+                    wx * wy * wz
+                    * values(
+                        lower[0] + ii,
+                        lower[1] + jj,
+                        lower[2] + kk);
+            }
+        }
+    }
+    return result;
+}
+
+RadialWindMetrics
+analyze_radial_wind(
+    const std::string& one_way_plot,
+    const std::string& two_way_plot,
+    const std::string& reference_perimeter,
+    amrex::Real reference_height_m)
+{
+    amrex::PlotFileData one_way(one_way_plot);
+    amrex::PlotFileData two_way(two_way_plot);
+
+    require(
+        one_way.finestLevel() == 0 && two_way.finestLevel() == 0,
+        "Radial-wind analysis requires level-0-only plotfiles");
+    require(
+        one_way.spaceDim() == 3 && two_way.spaceDim() == 3,
+        "Radial-wind analysis requires 3-D plotfiles");
+
+    const auto& one_names = one_way.varNames();
+    const auto& two_names = two_way.varNames();
+    for (const std::string& name : {"x_velocity", "y_velocity"}) {
+        require(
+            has_variable(one_names, name),
+            "One-way plotfile is missing " + name);
+        require(
+            has_variable(two_names, name),
+            "Two-way plotfile is missing " + name);
+    }
+
+    const auto domain = one_way.probDomain(0);
+    require(
+        domain == two_way.probDomain(0),
+        "Matched plotfile domains differ");
+
+    const auto one_dx_vector = one_way.cellSize(0);
+    const auto two_dx_vector = two_way.cellSize(0);
+    const auto one_lo_vector = one_way.probLo();
+    const auto two_lo_vector = two_way.probLo();
+
+    amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> dx{};
+    amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> prob_lo{};
+    for (int dir = 0; dir < 3; ++dir) {
+        require(
+            std::abs(one_dx_vector[dir] - two_dx_vector[dir])
+                <= scaled_tolerance(one_dx_vector[dir]),
+            "Matched plotfile cell sizes differ");
+        require(
+            std::abs(one_lo_vector[dir] - two_lo_vector[dir])
+                <= scaled_tolerance(one_lo_vector[dir]),
+            "Matched plotfile lower bounds differ");
+        dx[dir] = one_dx_vector[dir];
+        prob_lo[dir] = one_lo_vector[dir];
+    }
+
+    two_way.syncDistributionMap(one_way);
+
+    auto one_u = one_way.get(0, "x_velocity");
+    auto one_v = one_way.get(0, "y_velocity");
+    auto two_u = two_way.get(0, "x_velocity");
+    auto two_v = two_way.get(0, "y_velocity");
+
+    amrex::FArrayBox one_u_host(
+        domain, 1, amrex::The_Pinned_Arena());
+    amrex::FArrayBox one_v_host(
+        domain, 1, amrex::The_Pinned_Arena());
+    amrex::FArrayBox two_u_host(
+        domain, 1, amrex::The_Pinned_Arena());
+    amrex::FArrayBox two_v_host(
+        domain, 1, amrex::The_Pinned_Arena());
+
+    one_u.copyTo(one_u_host, 0, 0, 1, 0);
+    one_v.copyTo(one_v_host, 0, 0, 1, 0);
+    two_u.copyTo(two_u_host, 0, 0, 1, 0);
+    two_v.copyTo(two_v_host, 0, 0, 1, 0);
+
+    const auto one_u_arr = one_u_host.const_array();
+    const auto one_v_arr = one_v_host.const_array();
+    const auto two_u_arr = two_u_host.const_array();
+    const auto two_v_arr = two_v_host.const_array();
+
+    const auto points = read_perimeter_points(reference_perimeter);
+    const auto geometry = read_perimeter_geometry(reference_perimeter);
+
+    RadialWindMetrics metrics;
+    metrics.samples = points.size();
+    metrics.reference_height_m = reference_height_m;
+
+    amrex::Real radial_square_sum = amrex::Real(0.0);
+    amrex::Real tangential_square_sum = amrex::Real(0.0);
+    std::size_t inward_count = 0;
+
+    for (const auto& point : points) {
+        const amrex::Real rx =
+            point[0] - geometry.centroid_x_m;
+        const amrex::Real ry =
+            point[1] - geometry.centroid_y_m;
+        const amrex::Real radius = std::hypot(rx, ry);
+        require(
+            radius > amrex::Real(0.0),
+            "Perimeter point coincides with its centroid");
+
+        const amrex::Real nx = rx / radius;
+        const amrex::Real ny = ry / radius;
+        const amrex::Real tx = -ny;
+        const amrex::Real ty = nx;
+
+        const amrex::Real one_u_value =
+            sample_cell_centered_trilinear(
+                one_u_arr, domain, prob_lo, dx,
+                point[0], point[1], reference_height_m);
+        const amrex::Real one_v_value =
+            sample_cell_centered_trilinear(
+                one_v_arr, domain, prob_lo, dx,
+                point[0], point[1], reference_height_m);
+        const amrex::Real two_u_value =
+            sample_cell_centered_trilinear(
+                two_u_arr, domain, prob_lo, dx,
+                point[0], point[1], reference_height_m);
+        const amrex::Real two_v_value =
+            sample_cell_centered_trilinear(
+                two_v_arr, domain, prob_lo, dx,
+                point[0], point[1], reference_height_m);
+
+        const amrex::Real one_radial =
+            one_u_value * nx + one_v_value * ny;
+        const amrex::Real two_radial =
+            two_u_value * nx + two_v_value * ny;
+        const amrex::Real delta_radial =
+            two_radial - one_radial;
+
+        const amrex::Real one_tangential =
+            one_u_value * tx + one_v_value * ty;
+        const amrex::Real two_tangential =
+            two_u_value * tx + two_v_value * ty;
+        const amrex::Real delta_tangential =
+            two_tangential - one_tangential;
+
+        require(
+            std::isfinite(one_radial)
+                && std::isfinite(two_radial)
+                && std::isfinite(delta_radial)
+                && std::isfinite(delta_tangential),
+            "Reconstructed perimeter wind is non-finite");
+
+        metrics.one_mean_radial_mps += one_radial;
+        metrics.two_mean_radial_mps += two_radial;
+        metrics.delta_mean_radial_mps += delta_radial;
+        radial_square_sum += delta_radial * delta_radial;
+        tangential_square_sum +=
+            delta_tangential * delta_tangential;
+        metrics.delta_min_radial_mps =
+            std::min(metrics.delta_min_radial_mps, delta_radial);
+        metrics.delta_max_radial_mps =
+            std::max(metrics.delta_max_radial_mps, delta_radial);
+        if (delta_radial < amrex::Real(0.0)) {
+            ++inward_count;
+        }
+    }
+
+    const amrex::Real inverse_n =
+        amrex::Real(1.0)
+        / static_cast<amrex::Real>(metrics.samples);
+    metrics.one_mean_radial_mps *= inverse_n;
+    metrics.two_mean_radial_mps *= inverse_n;
+    metrics.delta_mean_radial_mps *= inverse_n;
+    metrics.delta_rms_radial_mps =
+        std::sqrt(radial_square_sum * inverse_n);
+    metrics.delta_rms_tangential_mps =
+        std::sqrt(tangential_square_sum * inverse_n);
+    metrics.inward_fraction =
+        static_cast<amrex::Real>(inward_count) * inverse_n;
+
+    return metrics;
+}
+
+void
+print_radial_wind_metrics(
+    const char* phase,
+    const RadialWindMetrics& metrics)
+{
+    amrex::Print()
+        << std::setprecision(17)
+        << "RADIAL_WIND_METRICS"
+        << " phase=" << phase
+        << " samples=" << metrics.samples
+        << " reference_height_m=" << metrics.reference_height_m
+        << " one_mean_radial_mps="
+        << metrics.one_mean_radial_mps
+        << " two_mean_radial_mps="
+        << metrics.two_mean_radial_mps
+        << " delta_mean_radial_mps="
+        << metrics.delta_mean_radial_mps
+        << " delta_rms_radial_mps="
+        << metrics.delta_rms_radial_mps
+        << " delta_min_radial_mps="
+        << metrics.delta_min_radial_mps
+        << " delta_max_radial_mps="
+        << metrics.delta_max_radial_mps
+        << " inward_fraction="
+        << metrics.inward_fraction
+        << " delta_rms_tangential_mps="
+        << metrics.delta_rms_tangential_mps
+        << "\n";
 }
 
 amrex::Real
@@ -614,6 +936,8 @@ main(int argc, char** argv)
         std::string late_two_way;
         std::string one_way_final_perimeter;
         std::string two_way_final_perimeter;
+        std::string early_reference_perimeter;
+        std::string late_reference_perimeter;
 
         pp.get("early_one_way", early_one_way);
         pp.get("early_two_way", early_two_way);
@@ -621,6 +945,8 @@ main(int argc, char** argv)
         pp.get("late_two_way", late_two_way);
         pp.get("one_way_final_perimeter", one_way_final_perimeter);
         pp.get("two_way_final_perimeter", two_way_final_perimeter);
+        pp.get("early_reference_perimeter", early_reference_perimeter);
+        pp.get("late_reference_perimeter", late_reference_perimeter);
 
         const BuoyancyMetrics early =
             analyze_pair(early_one_way, early_two_way);
@@ -638,6 +964,55 @@ main(int argc, char** argv)
 
         print_metrics("early", early);
         print_metrics("late", late);
+
+        const RadialWindMetrics early_radial =
+            analyze_radial_wind(
+                early_one_way,
+                early_two_way,
+                early_reference_perimeter,
+                amrex::Real(10.0));
+        const RadialWindMetrics late_radial =
+            analyze_radial_wind(
+                late_one_way,
+                late_two_way,
+                late_reference_perimeter,
+                amrex::Real(10.0));
+
+        print_radial_wind_metrics("early", early_radial);
+        print_radial_wind_metrics("late", late_radial);
+
+        require(
+            std::abs(early_radial.one_mean_radial_mps)
+                <= amrex::Real(1.0e-12)
+                && std::abs(late_radial.one_mean_radial_mps)
+                    <= amrex::Real(1.0e-12),
+            "One-way zero-wind control developed nonzero mean radial flow");
+        require(
+            early_radial.delta_mean_radial_mps
+                >= amrex::Real(0.05),
+            "Early two-way radial-flow response is not sufficiently outward");
+        require(
+            early_radial.inward_fraction
+                <= amrex::Real(0.05),
+            "Early perimeter response is not predominantly outward");
+        require(
+            late_radial.delta_mean_radial_mps
+                <= -amrex::Real(0.10),
+            "Late two-way radial-flow response is not sufficiently inward");
+        require(
+            late_radial.inward_fraction
+                >= amrex::Real(0.95),
+            "Late perimeter response is not predominantly inward");
+        require(
+            early_radial.delta_rms_radial_mps
+                >= amrex::Real(10.0)
+                    * early_radial.delta_rms_tangential_mps,
+            "Early horizontal feedback is not radially dominant");
+        require(
+            late_radial.delta_rms_radial_mps
+                >= amrex::Real(10.0)
+                    * late_radial.delta_rms_tangential_mps,
+            "Late horizontal feedback is not radially dominant");
 
         require(
             late.max_delta_w_mps >= amrex::Real(1.0),
@@ -724,7 +1099,8 @@ main(int argc, char** argv)
         amrex::Print()
             << "BUOYANT_ACCELERATION_PASS=1\n"
             << "STRONG_UPDRAFT_EXTENT_PASS=1\n"
-            << "FIRE_LOOP_CLOSURE_PASS=1\n";
+            << "FIRE_LOOP_CLOSURE_PASS=1\n"
+            << "RADIAL_FLOW_REVERSAL_PASS=1\n";
     } catch (const std::exception& error) {
         amrex::Print()
             << "Developed-buoyancy analysis error: "

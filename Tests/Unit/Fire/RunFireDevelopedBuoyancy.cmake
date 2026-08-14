@@ -121,6 +121,8 @@ execute_process(
           "analysis.late_two_way=${late_two_way}"
           "analysis.one_way_final_perimeter=${one_way_fire_output}/perimeter_000500.csv"
           "analysis.two_way_final_perimeter=${two_way_fire_output}/perimeter_000500.csv"
+          "analysis.early_reference_perimeter=${two_way_fire_output}/perimeter_000100.csv"
+          "analysis.late_reference_perimeter=${two_way_fire_output}/perimeter_000500.csv"
   WORKING_DIRECTORY "${test_root}"
   RESULT_VARIABLE analysis_result
   OUTPUT_VARIABLE analysis_output
@@ -155,9 +157,16 @@ if(NOT analysis_output MATCHES "FIRE_LOOP_CLOSURE_PASS=1")
     "stderr:\n${analysis_error}")
 endif()
 
+if(NOT analysis_output MATCHES "RADIAL_FLOW_REVERSAL_PASS=1")
+  message(FATAL_ERROR
+    "Analyzer did not report radial-flow reversal success\n"
+    "stdout:\n${analysis_output}\n"
+    "stderr:\n${analysis_error}")
+endif()
+
 string(STRIP "${analysis_output}" analysis_output_stripped)
 message(STATUS "${analysis_output_stripped}")
 message(STATUS
   "Developed buoyancy / Fire loop closure PASS: "
-  "the atmosphere accelerates strongly, sustains aloft updraft, "
-  "and two-way feedback changes subsequent Fire evolution")
+  "two-way heating drives an early outward and later inward "
+  "radially dominant near-fire horizontal-flow response")
