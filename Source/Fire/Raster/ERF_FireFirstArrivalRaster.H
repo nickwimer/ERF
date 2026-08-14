@@ -23,6 +23,16 @@ struct FireFirstArrivalRasterUpdate
     std::size_t newly_arrived_cell_count{};
 };
 
+struct FireFirstArrivalRasterState
+{
+    std::vector<std::uint8_t> arrived;
+    std::vector<amrex::Real> first_arrival_time_s;
+    bool has_initial_condition{false};
+    amrex::Real initial_condition_time_s{};
+    bool has_committed_sweep{false};
+    amrex::Real last_sweep_end_time_s{};
+};
+
 /**
  * Persistent first-positive-area arrival history on a Cartesian raster.
  *
@@ -42,6 +52,22 @@ class FireFirstArrivalRaster
 public:
     explicit FireFirstArrivalRaster(
         const FireCartesianRasterGeometry2D& geometry);
+
+    FireFirstArrivalRaster(
+        const FireCartesianRasterGeometry2D& geometry,
+        FireFirstArrivalRasterState state);
+
+    [[nodiscard]] FireFirstArrivalRasterState
+    snapshot_state() const
+    {
+        return {
+            arrived_,
+            first_arrival_time_s_,
+            has_initial_condition_,
+            initial_condition_time_s_,
+            has_committed_sweep_,
+            last_sweep_end_time_s_};
+    }
 
     [[nodiscard]] const FireCartesianRasterGeometry2D&
     geometry () const noexcept

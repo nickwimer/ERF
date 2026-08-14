@@ -26,6 +26,11 @@ struct FireRasterBurnedAreaUpdate
     amrex::Real newly_burned_area_m2{};
 };
 
+struct FireBurnedFractionRasterState
+{
+    std::vector<amrex::Real> burned_fraction;
+};
+
 /**
  * Persistent burned-area fraction on a uniform Cartesian raster.
  *
@@ -38,6 +43,16 @@ class FireBurnedFractionRaster
 public:
     explicit FireBurnedFractionRaster(
         const FireCartesianRasterGeometry2D& geometry);
+
+    FireBurnedFractionRaster(
+        const FireCartesianRasterGeometry2D& geometry,
+        FireBurnedFractionRasterState state);
+
+    [[nodiscard]] FireBurnedFractionRasterState
+    snapshot_state() const
+    {
+        return {burned_fraction_};
+    }
 
     [[nodiscard]] const FireCartesianRasterGeometry2D&
     geometry () const noexcept

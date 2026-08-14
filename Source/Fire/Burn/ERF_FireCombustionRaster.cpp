@@ -88,6 +88,43 @@ FireCombustionRaster::FireCombustionRaster(
     states_.assign(cell_count, FireCombustionState{});
 }
 
+FireCombustionRaster::FireCombustionRaster(
+    FireCartesianRasterGeometry2D geometry,
+    FireCombustionParameters parameters,
+    FireCombustionRasterOptions options,
+    FireCombustionRasterState state)
+    : FireCombustionRaster(
+          geometry,
+          parameters,
+          options)
+{
+    if (state.cells.size() != states_.size()) {
+        throw std::invalid_argument(
+            "restored fire combustion state has the wrong cell count");
+    }
+
+    for (const FireCombustionState& cell : state.cells) {
+        // Zero-time advance is the authoritative scalar state validator.
+        (void)advance_fire_combustion(
+            cell,
+            parameters_,
+            amrex::Real(0));
+
+        if (!state.initialized
+            && (cell.ignited_area_fraction != amrex::Real(0.0)
+                || cell.remaining_dry_fuel_kg_m2 != amrex::Real(0.0)
+                || cell.consumed_dry_fuel_kg_m2 != amrex::Real(0.0)
+                || cell.sensible_energy_j_m2 != amrex::Real(0.0)
+                || cell.water_released_kg_m2 != amrex::Real(0.0))) {
+            throw std::invalid_argument(
+                "uninitialized restored fire combustion state must be zero");
+        }
+    }
+
+    states_ = std::move(state.cells);
+    initialized_ = state.initialized;
+}
+
 std::size_t
 FireCombustionRaster::flat_index(
     std::size_t i,

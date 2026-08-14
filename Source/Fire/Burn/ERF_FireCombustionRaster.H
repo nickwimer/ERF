@@ -43,6 +43,12 @@ struct FireCombustionRasterAdvance
     amrex::Real water_released_increment_kg{};
 };
 
+struct FireCombustionRasterState
+{
+    std::vector<FireCombustionState> cells;
+    bool initialized{false};
+};
+
 /**
  * Cell-resolved combustion state on the same Cartesian geometry as burn
  * history.
@@ -64,6 +70,18 @@ public:
         FireCartesianRasterGeometry2D geometry,
         FireCombustionParameters parameters,
         FireCombustionRasterOptions options = {});
+
+    FireCombustionRaster(
+        FireCartesianRasterGeometry2D geometry,
+        FireCombustionParameters parameters,
+        FireCombustionRasterOptions options,
+        FireCombustionRasterState state);
+
+    [[nodiscard]] FireCombustionRasterState
+    snapshot_state() const
+    {
+        return {states_, initialized_};
+    }
 
     [[nodiscard]] const FireCartesianRasterGeometry2D&
     geometry() const noexcept

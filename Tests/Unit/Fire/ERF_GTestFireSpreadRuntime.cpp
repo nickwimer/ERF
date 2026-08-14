@@ -23,6 +23,7 @@ namespace
 using amrex::Real;
 using ERFFire::ERFFireSpreadConfig;
 using ERFFire::ERFFireSpreadRuntime;
+using ERFFire::ERFFireSpreadRuntimeState;
 using ERFFire::FireCartesianRasterGeometry2D;
 using ERFFire::FireCombustionRasterOptions;
 using ERFFire::FireFlatEnvironmentLayout2D;
@@ -353,6 +354,103 @@ make_planar_terrain(
     return ERFFire::FireTerrainSurface(
         geometry,
         std::move(nodal));
+}
+
+void
+expect_same_runtime_state(
+    const ERFFireSpreadRuntime& lhs,
+    const ERFFireSpreadRuntime& rhs)
+{
+    EXPECT_EQ(lhs.current_time_s(), rhs.current_time_s());
+
+    ASSERT_EQ(
+        lhs.perimeter().vertices_m().size(),
+        rhs.perimeter().vertices_m().size());
+    for (std::size_t index = 0;
+         index < lhs.perimeter().vertices_m().size();
+         ++index) {
+        EXPECT_EQ(
+            lhs.perimeter().vertices_m()[index].x,
+            rhs.perimeter().vertices_m()[index].x);
+        EXPECT_EQ(
+            lhs.perimeter().vertices_m()[index].y,
+            rhs.perimeter().vertices_m()[index].y);
+    }
+
+    const auto lhs_burned =
+        lhs.burned_fraction_raster().snapshot_state();
+    const auto rhs_burned =
+        rhs.burned_fraction_raster().snapshot_state();
+    ASSERT_EQ(
+        lhs_burned.burned_fraction.size(),
+        rhs_burned.burned_fraction.size());
+    for (std::size_t index = 0;
+         index < lhs_burned.burned_fraction.size();
+         ++index) {
+        EXPECT_EQ(
+            lhs_burned.burned_fraction[index],
+            rhs_burned.burned_fraction[index]);
+    }
+
+    const auto lhs_arrival =
+        lhs.first_arrival_raster().snapshot_state();
+    const auto rhs_arrival =
+        rhs.first_arrival_raster().snapshot_state();
+    EXPECT_EQ(
+        lhs_arrival.has_initial_condition,
+        rhs_arrival.has_initial_condition);
+    EXPECT_EQ(
+        lhs_arrival.initial_condition_time_s,
+        rhs_arrival.initial_condition_time_s);
+    EXPECT_EQ(
+        lhs_arrival.has_committed_sweep,
+        rhs_arrival.has_committed_sweep);
+    EXPECT_EQ(
+        lhs_arrival.last_sweep_end_time_s,
+        rhs_arrival.last_sweep_end_time_s);
+    EXPECT_EQ(lhs_arrival.arrived, rhs_arrival.arrived);
+    ASSERT_EQ(
+        lhs_arrival.first_arrival_time_s.size(),
+        rhs_arrival.first_arrival_time_s.size());
+    for (std::size_t index = 0;
+         index < lhs_arrival.first_arrival_time_s.size();
+         ++index) {
+        EXPECT_EQ(
+            lhs_arrival.first_arrival_time_s[index],
+            rhs_arrival.first_arrival_time_s[index]);
+    }
+
+    const auto lhs_combustion =
+        lhs.combustion_raster().snapshot_state();
+    const auto rhs_combustion =
+        rhs.combustion_raster().snapshot_state();
+    EXPECT_EQ(
+        lhs_combustion.initialized,
+        rhs_combustion.initialized);
+    ASSERT_EQ(
+        lhs_combustion.cells.size(),
+        rhs_combustion.cells.size());
+    for (std::size_t index = 0;
+         index < lhs_combustion.cells.size();
+         ++index) {
+        const auto& a = lhs_combustion.cells[index];
+        const auto& b = rhs_combustion.cells[index];
+        EXPECT_EQ(
+            a.ignited_area_fraction,
+            b.ignited_area_fraction);
+        EXPECT_EQ(
+            a.remaining_dry_fuel_kg_m2,
+            b.remaining_dry_fuel_kg_m2);
+        EXPECT_EQ(
+            a.consumed_dry_fuel_kg_m2,
+            b.consumed_dry_fuel_kg_m2);
+        EXPECT_EQ(
+            a.sensible_energy_j_m2,
+            b.sensible_energy_j_m2);
+        EXPECT_EQ(
+            a.water_released_kg_m2,
+            b.water_released_kg_m2);
+    }
 }
 
 } // namespace
@@ -1280,5 +1378,176 @@ TEST(FireSpreadRuntime, InvalidExplicitWafIsRejectedTransactionally)
         EXPECT_EQ(
             runtime.perimeter().vertices_m()[i].y,
             before_vertices[i].y);
+    }
+}
+
+TEST(FireSpreadRuntime, StateSnapshotRestorePreservesExactContinuation)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        24, 24,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+
+    ERFFireSpreadRuntime uninterrupted(
+        make_circle(
+            96,
+            FireVec2{Real(12.0), Real(12.0)},
+            Real(2.0)),
+        Real(0.0),
+        make_config(geometry));
+
+    const auto environment = make_affine_sampler();
+
+    (void)uninterrupted.advance_direct_reference_wind(
+        environment, Real(0.35));
+    (void)uninterrupted.advance_direct_reference_wind(
+        environment, Real(0.40));
+    (void)uninterrupted.advance_direct_reference_wind(
+        environment, Real(0.25));
+
+    const ERFFireSpreadRuntimeState saved =
+        uninterrupted.snapshot_state();
+
+    ERFFireSpreadRuntime restored =
+        ERFFireSpreadRuntime::restore_from_state(saved);
+
+    expect_same_runtime_state(uninterrupted, restored);
+
+    const auto uninterrupted_diagnostics =
+        uninterrupted.advance_direct_reference_wind(
+            environment, Real(0.30));
+    const auto restored_diagnostics =
+        restored.advance_direct_reference_wind(
+            environment, Real(0.30));
+
+    EXPECT_EQ(
+        uninterrupted_diagnostics.start_time_s,
+        restored_diagnostics.start_time_s);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.end_time_s,
+        restored_diagnostics.end_time_s);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.pre_remesh_vertex_count,
+        restored_diagnostics.pre_remesh_vertex_count);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.post_remesh_vertex_count,
+        restored_diagnostics.post_remesh_vertex_count);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.vertices_removed,
+        restored_diagnostics.vertices_removed);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.vertices_added,
+        restored_diagnostics.vertices_added);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.newly_arrived_cell_count,
+        restored_diagnostics.newly_arrived_cell_count);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.arrived_cell_count,
+        restored_diagnostics.arrived_cell_count);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.newly_burned_area_m2,
+        restored_diagnostics.newly_burned_area_m2);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.burned_area_m2,
+        restored_diagnostics.burned_area_m2);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.newly_consumed_dry_fuel_kg,
+        restored_diagnostics.newly_consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.remaining_dry_fuel_kg,
+        restored_diagnostics.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.consumed_dry_fuel_kg,
+        restored_diagnostics.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.sensible_energy_increment_j,
+        restored_diagnostics.sensible_energy_increment_j);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.sensible_energy_j,
+        restored_diagnostics.sensible_energy_j);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.water_released_increment_kg,
+        restored_diagnostics.water_released_increment_kg);
+    EXPECT_EQ(
+        uninterrupted_diagnostics.water_released_kg,
+        restored_diagnostics.water_released_kg);
+
+    expect_same_runtime_state(uninterrupted, restored);
+}
+
+TEST(FireSpreadRuntime, StateRestoreRejectsCorruptPersistentHistory)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16, 16,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+
+    ERFFireSpreadRuntime runtime(
+        make_circle(
+            64,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.0)),
+        Real(0.0),
+        make_config(geometry));
+
+    const auto environment =
+        make_uniform_sampler(
+            Real(0.0), Real(0.0),
+            Real(1.0), Real(1.0),
+            16, 16,
+            FireVec2{Real(1.0), Real(0.0)});
+
+    (void)runtime.advance_direct_reference_wind(
+        environment, Real(0.5));
+
+    const ERFFireSpreadRuntimeState valid =
+        runtime.snapshot_state();
+
+    {
+        auto corrupt = valid;
+        corrupt.burned_fraction.burned_fraction.pop_back();
+        EXPECT_THROW(
+            (void)ERFFireSpreadRuntime::restore_from_state(
+                std::move(corrupt)),
+            std::invalid_argument);
+    }
+
+    {
+        auto corrupt = valid;
+        corrupt.burned_fraction.burned_fraction[0] =
+            Real(1.01);
+        EXPECT_THROW(
+            (void)ERFFireSpreadRuntime::restore_from_state(
+                std::move(corrupt)),
+            std::invalid_argument);
+    }
+
+    {
+        auto corrupt = valid;
+        corrupt.first_arrival.arrived[0] =
+            std::uint8_t(2);
+        EXPECT_THROW(
+            (void)ERFFireSpreadRuntime::restore_from_state(
+                std::move(corrupt)),
+            std::invalid_argument);
+    }
+
+    {
+        auto corrupt = valid;
+        corrupt.combustion.cells[0]
+            .remaining_dry_fuel_kg_m2 += Real(1.0);
+        EXPECT_THROW(
+            (void)ERFFireSpreadRuntime::restore_from_state(
+                std::move(corrupt)),
+            std::invalid_argument);
+    }
+
+    {
+        auto corrupt = valid;
+        corrupt.current_time_s += Real(0.25);
+        EXPECT_THROW(
+            (void)ERFFireSpreadRuntime::restore_from_state(
+                std::move(corrupt)),
+            std::invalid_argument);
     }
 }

@@ -12,6 +12,7 @@
 #include <AMReX_REAL.H>
 
 #include <cstddef>
+#include <vector>
 
 namespace ERFFire
 {
@@ -33,6 +34,16 @@ struct ERFFireSpreadConfig
     FirePerimeterRemeshOptions remesh_options{};
     FireCartesianRasterGeometry2D raster_geometry{};
     amrex::Real arrival_time_tolerance_s{amrex::Real(1.0e-6)};
+};
+
+struct ERFFireSpreadRuntimeState
+{
+    ERFFireSpreadConfig config{};
+    std::vector<FireVec2> perimeter_vertices_m;
+    FireBurnedFractionRasterState burned_fraction;
+    FireFirstArrivalRasterState first_arrival;
+    FireCombustionRasterState combustion;
+    amrex::Real current_time_s{};
 };
 
 struct ERFFireStepDiagnostics
@@ -124,6 +135,12 @@ public:
         return config_;
     }
 
+    [[nodiscard]] ERFFireSpreadRuntimeState
+    snapshot_state() const;
+
+    [[nodiscard]] static ERFFireSpreadRuntime
+    restore_from_state(ERFFireSpreadRuntimeState state);
+
     /**
      * Advance one fire step using sampled reference wind directly as the
      * Rothermel model wind.
@@ -180,6 +197,12 @@ public:
         amrex::Real dt_s);
 
 private:
+    struct RestoreStateTag {};
+
+    ERFFireSpreadRuntime(
+        ERFFireSpreadRuntimeState state,
+        RestoreStateTag);
+
     enum class WindInputMode
     {
         DirectReference,

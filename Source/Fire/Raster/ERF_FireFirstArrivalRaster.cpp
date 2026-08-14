@@ -3,6 +3,7 @@
 #include <ERF_FireCellArrival.H>
 #include <ERF_FireCellCoverage.H>
 
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -23,6 +24,101 @@ FireFirstArrivalRaster::FireFirstArrivalRaster (
     first_arrival_time_s_.assign(
         cell_count,
         amrex::Real(0.0));
+}
+
+FireFirstArrivalRaster::FireFirstArrivalRaster (
+    const FireCartesianRasterGeometry2D& geometry,
+    FireFirstArrivalRasterState state)
+    : geometry_(geometry)
+{
+    const std::size_t cell_count =
+        detail::validate_fire_cartesian_raster_geometry(
+            geometry_);
+
+    if (state.arrived.size() != cell_count
+        || state.first_arrival_time_s.size() != cell_count) {
+        throw std::invalid_argument(
+            "restored fire first-arrival state has the wrong cell count");
+    }
+
+    if (state.has_initial_condition) {
+        if (!std::isfinite(state.initial_condition_time_s)
+            || state.initial_condition_time_s < amrex::Real(0.0)) {
+            throw std::invalid_argument(
+                "restored fire first-arrival initial time must be finite and nonnegative");
+        }
+    } else if (state.has_committed_sweep) {
+        throw std::invalid_argument(
+            "restored fire first-arrival state cannot have sweeps without an initial condition");
+    }
+
+    if (state.has_committed_sweep) {
+        if (!std::isfinite(state.last_sweep_end_time_s)
+            || state.last_sweep_end_time_s
+                < state.initial_condition_time_s) {
+            throw std::invalid_argument(
+                "restored fire first-arrival sweep time is invalid");
+        }
+    } else if (!std::isfinite(state.last_sweep_end_time_s)) {
+        throw std::invalid_argument(
+            "restored fire first-arrival stored sweep time must be finite");
+    }
+
+    std::size_t arrived_count = 0;
+    for (std::size_t index = 0; index < cell_count; ++index) {
+        const std::uint8_t mask = state.arrived[index];
+        const amrex::Real arrival_time =
+            state.first_arrival_time_s[index];
+
+        if (mask != std::uint8_t(0)
+            && mask != std::uint8_t(1)) {
+            throw std::invalid_argument(
+                "restored fire first-arrival mask must contain only 0 or 1");
+        }
+        if (!std::isfinite(arrival_time)) {
+            throw std::invalid_argument(
+                "restored fire first-arrival times must be finite");
+        }
+
+        if (mask == std::uint8_t(0)) {
+            continue;
+        }
+
+        ++arrived_count;
+        if (!state.has_initial_condition
+            || arrival_time < state.initial_condition_time_s) {
+            throw std::invalid_argument(
+                "restored fire arrival precedes the initial condition");
+        }
+
+        if (state.has_committed_sweep) {
+            if (arrival_time > state.last_sweep_end_time_s) {
+                throw std::invalid_argument(
+                    "restored fire arrival lies after the committed sweep");
+            }
+        } else if (arrival_time
+                   != state.initial_condition_time_s) {
+            throw std::invalid_argument(
+                "restored fire arrival without a sweep must equal the initial time");
+        }
+    }
+
+    if (!state.has_initial_condition && arrived_count != 0) {
+        throw std::invalid_argument(
+            "restored fire first-arrival state has arrived cells without initialization");
+    }
+
+    arrived_ = std::move(state.arrived);
+    first_arrival_time_s_ =
+        std::move(state.first_arrival_time_s);
+    has_initial_condition_ =
+        state.has_initial_condition;
+    initial_condition_time_s_ =
+        state.initial_condition_time_s;
+    has_committed_sweep_ =
+        state.has_committed_sweep;
+    last_sweep_end_time_s_ =
+        state.last_sweep_end_time_s;
 }
 
 std::size_t

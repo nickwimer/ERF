@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 
 namespace ERFFire
 {
@@ -18,6 +19,32 @@ FireBurnedFractionRaster::FireBurnedFractionRaster (
     burned_fraction_.assign(
         cell_count,
         amrex::Real(0.0));
+}
+
+FireBurnedFractionRaster::FireBurnedFractionRaster (
+    const FireCartesianRasterGeometry2D& geometry,
+    FireBurnedFractionRasterState state)
+    : geometry_(geometry)
+{
+    const std::size_t cell_count =
+        detail::validate_fire_cartesian_raster_geometry(
+            geometry_);
+
+    if (state.burned_fraction.size() != cell_count) {
+        throw std::invalid_argument(
+            "restored fire burned-fraction state has the wrong cell count");
+    }
+
+    for (const amrex::Real value : state.burned_fraction) {
+        if (!std::isfinite(value)
+            || value < amrex::Real(0.0)
+            || value > amrex::Real(1.0)) {
+            throw std::invalid_argument(
+                "restored fire burned fraction must be finite in [0,1]");
+        }
+    }
+
+    burned_fraction_ = std::move(state.burned_fraction);
 }
 
 std::size_t

@@ -5,7 +5,9 @@
 #include <ERF_RothermelModel.H>
 #include <ERF_VectorPerimeterPropagator.H>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -43,6 +45,45 @@ terrain_upslope_unit(
             amrex::Real(0.0)};
     }
     return gradient_m_per_m / slope_tangent;
+}
+
+amrex::Real
+fraction_tolerance(amrex::Real scale) noexcept
+{
+    return amrex::Real(1024)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * std::max(amrex::Real(1), std::abs(scale));
+}
+
+bool
+fraction_equal(amrex::Real a, amrex::Real b) noexcept
+{
+    return std::abs(a - b)
+        <= fraction_tolerance(
+            std::max(std::abs(a), std::abs(b)));
+}
+
+void
+validate_runtime_scalars(
+    const ERFFireSpreadConfig& config,
+    amrex::Real current_time_s)
+{
+    require(
+        std::isfinite(current_time_s)
+            && current_time_s >= amrex::Real(0.0),
+        "fire spread time must be finite and nonnegative");
+
+    require(
+        std::isfinite(config.arrival_time_tolerance_s)
+            && config.arrival_time_tolerance_s > amrex::Real(0.0),
+        "fire spread arrival tolerance must be finite and positive");
+
+    (void)evaluate_rothermel(
+        config.fuel,
+        RothermelInputs{
+            config.dead_fuel_moisture_fraction,
+            amrex::Real(0.0),
+            amrex::Real(0.0)});
 }
 
 bool
@@ -122,22 +163,9 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
           config_.combustion_options),
       current_time_s_(initial_time_s)
 {
-    require(
-        std::isfinite(current_time_s_) &&
-            current_time_s_ >= amrex::Real(0.0),
-        "fire spread initial time must be finite and nonnegative");
-
-    require(
-        std::isfinite(config_.arrival_time_tolerance_s) &&
-            config_.arrival_time_tolerance_s > amrex::Real(0.0),
-        "fire spread arrival tolerance must be finite and positive");
-
-    (void)evaluate_rothermel(
-        config_.fuel,
-        RothermelInputs{
-            config_.dead_fuel_moisture_fraction,
-            amrex::Real(0.0),
-            amrex::Real(0.0)});
+    validate_runtime_scalars(
+        config_,
+        current_time_s_);
 
     auto initial_remesh =
         remesh_perimeter(perimeter_, config_.remesh_options);
@@ -148,6 +176,109 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     (void)burned_fraction_.update_from_perimeter(perimeter_);
     (void)combustion_.initialize_from_burned_fraction(
         burned_fraction_);
+}
+
+ERFFireSpreadRuntime::ERFFireSpreadRuntime(
+    ERFFireSpreadRuntimeState state,
+    RestoreStateTag)
+    : config_(std::move(state.config)),
+      perimeter_(std::move(state.perimeter_vertices_m)),
+      burned_fraction_(
+          config_.raster_geometry,
+          std::move(state.burned_fraction)),
+      first_arrival_(
+          config_.raster_geometry,
+          std::move(state.first_arrival)),
+      combustion_(
+          config_.raster_geometry,
+          config_.combustion_parameters,
+          config_.combustion_options,
+          std::move(state.combustion)),
+      current_time_s_(state.current_time_s)
+{
+    validate_runtime_scalars(
+        config_,
+        current_time_s_);
+
+    // Validate remeshing controls without changing restored topology.
+    (void)remesh_perimeter(
+        perimeter_,
+        config_.remesh_options);
+
+    const auto arrival_state =
+        first_arrival_.snapshot_state();
+    require(
+        arrival_state.has_initial_condition,
+        "restored fire runtime requires initialized first-arrival history");
+
+    if (arrival_state.has_committed_sweep) {
+        require(
+            arrival_state.last_sweep_end_time_s
+                == current_time_s_,
+            "restored fire runtime clock does not match first-arrival history");
+    } else {
+        require(
+            arrival_state.initial_condition_time_s
+                == current_time_s_,
+            "restored fire runtime initial clock does not match first-arrival history");
+    }
+
+    require(
+        combustion_.initialized(),
+        "restored fire runtime requires initialized combustion history");
+
+    const auto& geometry = config_.raster_geometry;
+    const amrex::Real xhi =
+        geometry.xlo_m
+        + static_cast<amrex::Real>(geometry.nx)
+            * geometry.dx_m;
+    const amrex::Real yhi =
+        geometry.ylo_m
+        + static_cast<amrex::Real>(geometry.ny)
+            * geometry.dy_m;
+
+    for (const FireVec2& vertex : perimeter_.vertices_m()) {
+        require(
+            std::isfinite(vertex.x)
+                && std::isfinite(vertex.y)
+                && vertex.x >= geometry.xlo_m
+                && vertex.x <= xhi
+                && vertex.y >= geometry.ylo_m
+                && vertex.y <= yhi,
+            "restored fire perimeter lies outside its raster geometry");
+    }
+
+    for (std::size_t j = 0; j < geometry.ny; ++j) {
+        for (std::size_t i = 0; i < geometry.nx; ++i) {
+            require(
+                fraction_equal(
+                    burned_fraction_.burned_fraction(i, j),
+                    combustion_.state(i, j)
+                        .ignited_area_fraction),
+                "restored fire combustion history is not synchronized with burned fraction");
+        }
+    }
+}
+
+ERFFireSpreadRuntimeState
+ERFFireSpreadRuntime::snapshot_state() const
+{
+    return {
+        config_,
+        perimeter_.vertices_m(),
+        burned_fraction_.snapshot_state(),
+        first_arrival_.snapshot_state(),
+        combustion_.snapshot_state(),
+        current_time_s_};
+}
+
+ERFFireSpreadRuntime
+ERFFireSpreadRuntime::restore_from_state(
+    ERFFireSpreadRuntimeState state)
+{
+    return ERFFireSpreadRuntime(
+        std::move(state),
+        RestoreStateTag{});
 }
 
 ERFFireStepDiagnostics
