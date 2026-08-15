@@ -65,10 +65,10 @@ analyze_response(
 
     require(
         one_way.finestLevel() == 0 && two_way.finestLevel() == 0,
-        "M12b2 analyzer requires level-0-only plotfiles");
+        "analyzer requires level-0-only plotfiles");
     require(
         one_way.spaceDim() == 3 && two_way.spaceDim() == 3,
-        "M12b2 analyzer requires 3-D plotfiles");
+        "analyzer requires 3-D plotfiles");
 
     const amrex::Real time_scale =
         std::max(
@@ -77,7 +77,7 @@ analyze_response(
     require(
         std::abs(one_way.time() - two_way.time())
             <= scaled_tolerance(time_scale),
-        "M12b2 one-way and two-way plotfiles are at different times");
+        "one-way and two-way plotfiles are at different times");
 
     const auto& one_names = one_way.varNames();
     const auto& two_names = two_way.varNames();
@@ -85,17 +85,17 @@ analyze_response(
          {"rhotheta", "rhoQ1", "theta", "z_velocity"}) {
         require(
             has_variable(one_names, name),
-            "M12b2 one-way plotfile is missing required variable " + name);
+            "one-way plotfile is missing required variable " + name);
         require(
             has_variable(two_names, name),
-            "M12b2 two-way plotfile is missing required variable " + name);
+            "two-way plotfile is missing required variable " + name);
     }
 
     const auto one_domain = one_way.probDomain(0);
     const auto two_domain = two_way.probDomain(0);
     require(
         one_domain == two_domain,
-        "M12b2 one-way and two-way plotfile domains differ");
+        "one-way and two-way plotfile domains differ");
 
     const auto one_dx = one_way.cellSize(0);
     const auto two_dx = two_way.cellSize(0);
@@ -105,11 +105,11 @@ analyze_response(
         require(
             std::abs(one_dx[dir] - two_dx[dir])
                 <= scaled_tolerance(one_dx[dir]),
-            "M12b2 one-way and two-way cell sizes differ");
+            "one-way and two-way cell sizes differ");
         require(
             std::abs(one_lo[dir] - two_lo[dir])
                 <= scaled_tolerance(one_lo[dir]),
-            "M12b2 one-way and two-way lower bounds differ");
+            "one-way and two-way lower bounds differ");
     }
 
     two_way.syncDistributionMap(one_way);
@@ -190,7 +190,7 @@ analyze_response(
                             && std::isfinite(delta_rhoqv)
                             && std::isfinite(delta_theta)
                             && std::isfinite(delta_w),
-                        "M12b2 response contains a non-finite difference");
+                        "response contains a non-finite difference");
 
                     metrics.max_delta_rhotheta =
                         std::max(
@@ -226,20 +226,20 @@ analyze_response(
 
     require(
         metrics.max_delta_rhotheta > amrex::Real(0.0),
-        "M12b2 response has no positive rhotheta perturbation");
+        "response has no positive rhotheta perturbation");
     require(
         metrics.max_delta_rhoqv > amrex::Real(0.0),
-        "M12b2 response has no positive rhoqv perturbation");
+        "response has no positive rhoqv perturbation");
     require(
         metrics.max_delta_theta_K > amrex::Real(0.0),
-        "M12b2 response has no positive theta perturbation");
+        "response has no positive theta perturbation");
     require(
         metrics.max_delta_w_mps > amrex::Real(0.0),
-        "M12b2 response has no upward vertical-velocity perturbation");
+        "response has no upward vertical-velocity perturbation");
     require(
         metrics.positive_theta_volume_integral_K_m3
             > amrex::Real(0.0),
-        "M12b2 response has no positive volume-integrated theta perturbation");
+        "response has no positive volume-integrated theta perturbation");
 
     auto positive_theta_below =
         [&](amrex::Real cutoff_m)
@@ -308,11 +308,11 @@ analyze_response(
             && std::isfinite(metrics.theta_response_z95_m)
             && std::isfinite(metrics.theta_below_25m_fraction)
             && std::isfinite(metrics.theta_below_50m_fraction),
-        "M12b2 response metrics are not finite");
+        "response metrics are not finite");
     require(
         metrics.theta_response_z50_m
             <= metrics.theta_response_z95_m,
-        "M12b2 theta response quantile heights are not ordered");
+        "theta response quantile heights are not ordered");
     require(
         metrics.theta_below_25m_fraction
             >= amrex::Real(0.0)
@@ -324,7 +324,7 @@ analyze_response(
                 <= amrex::Real(1.0)
             && metrics.theta_below_25m_fraction
                 <= metrics.theta_below_50m_fraction,
-        "M12b2 cumulative theta response fractions are invalid");
+        "cumulative theta response fractions are invalid");
 
     return metrics;
 }
@@ -336,7 +336,7 @@ print_metrics(
 {
     amrex::Print()
         << std::setprecision(17)
-        << "M12B2_RESPONSE_METRICS"
+        << "FIRE_ATMOSPHERIC_RESPONSE_SENSITIVITY_METRICS"
         << " H_m=" << H_m
         << " max_delta_rhotheta="
         << metrics.max_delta_rhotheta
@@ -399,26 +399,24 @@ main(int argc, char** argv)
             require(
                 metrics[n - 1].theta_response_z50_m
                     < metrics[n].theta_response_z50_m,
-                "M12b2 increasing H did not increase theta-response z50");
+                "increasing H did not increase theta-response z50");
             require(
                 metrics[n - 1].theta_response_z95_m
                     < metrics[n].theta_response_z95_m,
-                "M12b2 increasing H did not increase theta-response z95");
+                "increasing H did not increase theta-response z95");
             require(
                 metrics[n - 1].theta_below_25m_fraction
                     > metrics[n].theta_below_25m_fraction,
-                "M12b2 increasing H did not reduce theta response below 25 m");
+                "increasing H did not reduce theta response below 25 m");
             require(
                 metrics[n - 1].theta_below_50m_fraction
                     > metrics[n].theta_below_50m_fraction,
-                "M12b2 increasing H did not reduce theta response below 50 m");
+                "increasing H did not reduce theta response below 50 m");
         }
 
-        amrex::Print()
-            << "M12B2_RESPONSE_ORDERING_PASS=1\n";
     } catch (const std::exception& error) {
         amrex::Print()
-            << "M12b2 atmospheric-response sensitivity analysis error: "
+            << "atmospheric-response sensitivity analysis error: "
             << error.what()
             << "\n";
         result = 2;

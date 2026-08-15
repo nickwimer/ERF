@@ -86,7 +86,7 @@ flat_ground_height (
             const amrex::Real value = surface_arr(i, j, k);
             if (!std::isfinite(value) || value != ground) {
                 throw std::invalid_argument(
-                    "M7 fire environment requires an exactly flat level-0 physical surface");
+                    "fire environment requires an exactly flat level-0 physical surface");
             }
         }
     }
@@ -140,7 +140,7 @@ require_horizontally_uniform_z_phys_cc_plane (
             const amrex::Real value = plane_arr(i, j, k);
             if (!std::isfinite(value) || value != expected_height_m) {
                 throw std::invalid_argument(
-                    "M7 fire environment requires horizontally uniform "
+                    "fire environment requires horizontally uniform "
                     "z_phys_cc on sampled levels");
             }
         }
@@ -539,7 +539,7 @@ erf_fire_level0_flat_vertical_faces_agl (
                 if (!std::isfinite(z(i, j, k))
                     || z(i, j, k) != plane_height) {
                     throw std::invalid_argument(
-                        "M9 Fire feedback requires horizontally uniform z_phys_nd planes");
+                        "Fire feedback requires horizontally uniform z_phys_nd planes");
                 }
             }
         }

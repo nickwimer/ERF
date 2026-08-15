@@ -295,7 +295,7 @@ print_profile_metrics(
 {
     std::cout
         << std::setprecision(17)
-        << "M12A_PROFILE_METRICS"
+        << "FIRE_FEEDBACK_PROFILE_METRICS"
         << " H_m=" << H_m
         << " first_layer_fraction=" << metrics.first_layer_fraction
         << " below_25m_fraction=" << metrics.below_25m_fraction

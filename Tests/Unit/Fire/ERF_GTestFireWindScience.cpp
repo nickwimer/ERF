@@ -181,7 +181,7 @@ polygon_centroid(const FirePerimeter& perimeter)
     if (!std::isfinite(twice_signed_area)
         || !(std::abs(twice_signed_area) > Real(0.0))) {
         throw std::runtime_error(
-            "M11d polygon centroid requires finite nonzero area");
+            "polygon centroid requires finite nonzero area");
     }
 
     const Real denominator = Real(3.0) * twice_signed_area;
@@ -192,7 +192,7 @@ polygon_centroid(const FirePerimeter& perimeter)
     if (!std::isfinite(centroid.x)
         || !std::isfinite(centroid.y)) {
         throw std::runtime_error(
-            "M11d polygon centroid is not finite");
+            "polygon centroid is not finite");
     }
 
     return centroid;
@@ -400,7 +400,7 @@ print_metrics(
 {
     std::cout
         << std::setprecision(17)
-        << "M11D_SCIENCE_METRICS"
+        << "FIRE_WIND_SCIENCE_METRICS"
         << " geometry=" << geometry_name
         << " waf=" << waf
         << " downwind_support_ros_mps="

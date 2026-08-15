@@ -135,5 +135,5 @@ if(differing_cell_files EQUAL 0)
 endif()
 
 message(STATUS
-  "Fire two-way feedback PASS: first-step Fire evolution is identical, "
+  "Fire two-way feedback: first-step Fire evolution is identical, "
   "native heat/moisture source is active, and atmospheric state changes")

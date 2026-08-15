@@ -157,4 +157,4 @@ foreach(relative_file IN LISTS control_files)
 endforeach()
 
 message(STATUS
-  "Fire one-way spread identity PASS: Fire advances while atmospheric checkpoint prognostic files remain bitwise equal")
+  "Fire one-way spread identity: Fire advances while atmospheric checkpoint prognostic files remain bitwise equal")

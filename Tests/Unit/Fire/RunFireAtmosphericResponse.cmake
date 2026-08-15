@@ -31,7 +31,7 @@ function(run_case mode label plot_var output_var)
 
   if(NOT run_result EQUAL 0)
     message(FATAL_ERROR
-      "M12b1 ERF Fire ${mode} child failed\n"
+      "ERF Fire ${mode} child failed\n"
       "stdout:\n${run_output}\n"
       "stderr:\n${run_error}")
   endif()
@@ -42,7 +42,7 @@ function(run_case mode label plot_var output_var)
       summary.csv)
     if(NOT EXISTS "${case_dir}/${output_dir}/${required_file}")
       message(FATAL_ERROR
-        "M12b1 ERF Fire ${mode} run did not produce ${required_file}")
+        "ERF Fire ${mode} run did not produce ${required_file}")
     endif()
   endforeach()
 
@@ -52,7 +52,7 @@ function(run_case mode label plot_var output_var)
   list(LENGTH plot_dirs plot_count)
   if(plot_count LESS 1)
     message(FATAL_ERROR
-      "expected at least one M12b1 plotfile for ${mode}, found none")
+      "expected at least one plotfile for ${mode}, found none")
   endif()
 
   list(SORT plot_dirs)
@@ -71,7 +71,7 @@ execute_process(
   RESULT_VARIABLE perimeter_compare)
 if(NOT perimeter_compare EQUAL 0)
   message(FATAL_ERROR
-    "M12b1 first-step Fire perimeter differs between one-way and two-way")
+    "first-step Fire perimeter differs between one-way and two-way")
 endif()
 
 execute_process(
@@ -81,7 +81,7 @@ execute_process(
   RESULT_VARIABLE raster_compare)
 if(NOT raster_compare EQUAL 0)
   message(FATAL_ERROR
-    "M12b1 first-step Fire raster differs between one-way and two-way")
+    "first-step Fire raster differs between one-way and two-way")
 endif()
 
 execute_process(
@@ -96,14 +96,14 @@ execute_process(
 
 if(NOT analysis_result EQUAL 0)
   message(FATAL_ERROR
-    "M12b1 atmospheric-response analyzer failed\n"
+    "atmospheric-response analyzer failed\n"
     "stdout:\n${analysis_output}\n"
     "stderr:\n${analysis_error}")
 endif()
 
-if(NOT analysis_output MATCHES "M12B1_RESPONSE_METRICS")
+if(NOT analysis_output MATCHES "FIRE_ATMOSPHERIC_RESPONSE_METRICS")
   message(FATAL_ERROR
-    "M12b1 analyzer did not emit response metrics\n"
+    "analyzer did not emit response metrics\n"
     "stdout:\n${analysis_output}\n"
     "stderr:\n${analysis_error}")
 endif()
@@ -111,6 +111,6 @@ endif()
 string(STRIP "${analysis_output}" analysis_output_stripped)
 message(STATUS "${analysis_output_stripped}")
 message(STATUS
-  "M12b1 flat gravity-on atmospheric response PASS: "
+  "flat gravity-on atmospheric response: "
   "first-step Fire evolution matches and two-way heat/moisture forcing "
   "produces positive thermodynamic and upward-velocity response")

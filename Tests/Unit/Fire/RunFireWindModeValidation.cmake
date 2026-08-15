@@ -84,4 +84,4 @@ expect_failure(
   "fire.wind_adjustment_factor=0.5")
 
 message(STATUS
-  "Fire wind-mode runtime validation PASS")
+  "Fire wind-mode runtime validation")

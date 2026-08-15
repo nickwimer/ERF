@@ -594,8 +594,6 @@ main(int argc, char** argv)
                 <= amrex::Real(0.005),
             "Medium/fine positive theta integral differs by more than 0.5 percent");
 
-        amrex::Print()
-            << "VERTICAL_STABILITY_PASS=1\n";
     } catch (const std::exception& error) {
         amrex::Print()
             << "Vertical-resolution sensitivity analysis error: "

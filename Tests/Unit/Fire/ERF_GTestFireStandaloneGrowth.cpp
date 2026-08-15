@@ -84,7 +84,7 @@ using RemeshedGrowthSweepObserver =
         const FirePerimeter&,
         const FirePerimeter&)>;
 
-struct M6e2cTimelineRow
+struct FireArrivalTimelineRow
 {
     amrex::Real time_s{};
     std::size_t pre_remesh_vertices{};
@@ -124,9 +124,9 @@ open_fire_test_csv (const std::string& filename)
 }
 
 void
-maybe_write_m6e2c_timeline (
+maybe_write_fire_arrival_timeline (
     const std::string& filename,
-    const std::vector<M6e2cTimelineRow>& rows)
+    const std::vector<FireArrivalTimelineRow>& rows)
 {
     std::ofstream stream = open_fire_test_csv(filename);
     if (!stream.is_open()) {
@@ -148,13 +148,13 @@ maybe_write_m6e2c_timeline (
 }
 
 void
-maybe_write_m6e2c_wind_arrival_history (
+maybe_write_fire_arrival_wind_history (
     const FireFirstArrivalRaster& arrival,
     const FireBurnedFractionRaster& burned)
 {
     std::ofstream stream =
         open_fire_test_csv(
-            "m6e2c_wind_arrival_history.csv");
+            "fire_arrival_wind_arrival_history.csv");
     if (!stream.is_open()) {
         return;
     }
@@ -204,12 +204,12 @@ maybe_write_m6e2c_wind_arrival_history (
 }
 
 void
-maybe_write_m6e2c_extinction_arrival_history (
+maybe_write_fire_arrival_extinction_history (
     const FireFirstArrivalRaster& arrival)
 {
     std::ofstream stream =
         open_fire_test_csv(
-            "m6e2c_extinction_arrival_history.csv");
+            "fire_arrival_extinction_arrival_history.csv");
     if (!stream.is_open()) {
         return;
     }
@@ -1324,7 +1324,7 @@ TEST(FireArrivalIntegration, WindOnlyHeadStripTracksAnalyticArrivalThroughRemesh
     std::size_t last_newly_arrived_cell_count = 0;
     std::size_t last_arrived_cell_count = 0;
     bool sweep_observed = false;
-    std::vector<M6e2cTimelineRow> timeline;
+    std::vector<FireArrivalTimelineRow> timeline;
 
     const RemeshedGrowthSweepObserver sweep_observer =
         [&] (
@@ -1359,7 +1359,7 @@ TEST(FireArrivalIntegration, WindOnlyHeadStripTracksAnalyticArrivalThroughRemesh
             std::llround(end_time_s);
         if (whole_end_seconds % 20 == 0) {
             ERFFireTest::maybe_write_snapshot(
-                "m6e2c_wind_pre_remesh",
+                "fire_arrival_wind_pre_remesh",
                 end_time_s,
                 end_pre_remesh);
         }
@@ -1393,11 +1393,11 @@ TEST(FireArrivalIntegration, WindOnlyHeadStripTracksAnalyticArrivalThroughRemesh
             std::llround(time_s);
         if (whole_seconds % 20 == 0) {
             ERFFireTest::maybe_write_snapshot(
-                "m6e2c_wind_post_remesh",
+                "fire_arrival_wind_post_remesh",
                 time_s,
                 perimeter);
             ERFFireTest::maybe_write_snapshot(
-                "m6e2c_wind_exact",
+                "fire_arrival_wind_exact",
                 time_s,
                 make_wind_only_reference_wavelet(
                     2048,
@@ -1448,10 +1448,10 @@ TEST(FireArrivalIntegration, WindOnlyHeadStripTracksAnalyticArrivalThroughRemesh
     EXPECT_EQ(arrival.arrived_cell_count(), 5U);
     EXPECT_EQ(total_newly_arrived, 5U);
 
-    maybe_write_m6e2c_timeline(
-        "m6e2c_wind_timeline.csv",
+    maybe_write_fire_arrival_timeline(
+        "fire_arrival_wind_timeline.csv",
         timeline);
-    maybe_write_m6e2c_wind_arrival_history(
+    maybe_write_fire_arrival_wind_history(
         arrival,
         burned);
 
@@ -1519,7 +1519,7 @@ TEST(FireArrivalIntegration, ExtinguishedRemeshedSweepsDoNotAdvanceArrivalHistor
     std::size_t last_newly_arrived_cell_count = 0;
     std::size_t last_arrived_cell_count = 0;
     bool sweep_observed = false;
-    std::vector<M6e2cTimelineRow> timeline;
+    std::vector<FireArrivalTimelineRow> timeline;
 
     const RemeshedGrowthSweepObserver sweep_observer =
         [&] (
@@ -1560,7 +1560,7 @@ TEST(FireArrivalIntegration, ExtinguishedRemeshedSweepsDoNotAdvanceArrivalHistor
             std::llround(end_time_s);
         if (whole_end_seconds % 25 == 0) {
             ERFFireTest::maybe_write_snapshot(
-                "m6e2c_extinction_pre_remesh",
+                "fire_arrival_extinction_pre_remesh",
                 end_time_s,
                 end_pre_remesh);
         }
@@ -1577,7 +1577,7 @@ TEST(FireArrivalIntegration, ExtinguishedRemeshedSweepsDoNotAdvanceArrivalHistor
             std::llround(time_s);
         if (whole_seconds % 25 == 0) {
             ERFFireTest::maybe_write_snapshot(
-                "m6e2c_extinction_post_remesh",
+                "fire_arrival_extinction_post_remesh",
                 time_s,
                 perimeter);
         }
@@ -1618,10 +1618,10 @@ TEST(FireArrivalIntegration, ExtinguishedRemeshedSweepsDoNotAdvanceArrivalHistor
     EXPECT_EQ(total_newly_arrived, 2U);
     EXPECT_EQ(arrival.arrived_cell_count(), 2U);
 
-    maybe_write_m6e2c_timeline(
-        "m6e2c_extinction_timeline.csv",
+    maybe_write_fire_arrival_timeline(
+        "fire_arrival_extinction_timeline.csv",
         timeline);
-    maybe_write_m6e2c_extinction_arrival_history(
+    maybe_write_fire_arrival_extinction_history(
         arrival);
 
     ASSERT_TRUE(arrival.has_arrived(0, 0));

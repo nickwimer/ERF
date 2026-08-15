@@ -115,5 +115,5 @@ if(reduced_compare EQUAL 0)
 endif()
 
 message(STATUS
-  "Fire wind-mode comparison PASS: direct_reference at 6.096 m and WAF=1 "
+  "Fire wind-mode comparison: direct_reference at 6.096 m and WAF=1 "
   "are exactly identical, while WAF=0.5 changes Fire spread")

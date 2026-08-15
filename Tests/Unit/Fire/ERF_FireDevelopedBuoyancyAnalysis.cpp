@@ -1515,12 +1515,6 @@ main(int argc, char** argv)
             << " delta_mean_radius_m=" << mean_radius_difference_m
             << "\n";
 
-        amrex::Print()
-            << "BUOYANT_ACCELERATION_PASS=1\n"
-            << "STRONG_UPDRAFT_EXTENT_PASS=1\n"
-            << "FIRE_LOOP_CLOSURE_PASS=1\n"
-            << "RADIAL_FLOW_REVERSAL_PASS=1\n"
-            << "EXACT_FIRE_SAMPLER_REVERSAL_PASS=1\n";
     } catch (const std::exception& error) {
         amrex::Print()
             << "Developed-buoyancy analysis error: "

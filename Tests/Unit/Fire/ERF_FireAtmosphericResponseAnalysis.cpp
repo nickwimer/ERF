@@ -60,10 +60,10 @@ main(int argc, char** argv)
 
         require(
             one_way.finestLevel() == 0 && two_way.finestLevel() == 0,
-            "M12b1 analyzer requires level-0-only plotfiles");
+            "analyzer requires level-0-only plotfiles");
         require(
             one_way.spaceDim() == 3 && two_way.spaceDim() == 3,
-            "M12b1 analyzer requires 3-D plotfiles");
+            "analyzer requires 3-D plotfiles");
 
         const amrex::Real time_scale =
             std::max(
@@ -186,7 +186,7 @@ main(int argc, char** argv)
                                 && std::isfinite(delta_rhoqv)
                                 && std::isfinite(delta_theta)
                                 && std::isfinite(delta_w),
-                            "M12b1 response contains a non-finite difference");
+                            "response contains a non-finite difference");
 
                         max_delta_rhotheta =
                             std::max(max_delta_rhotheta, delta_rhotheta);
@@ -264,14 +264,14 @@ main(int argc, char** argv)
             std::isfinite(peak_delta_w_z_m)
                 && std::isfinite(theta_z50_m)
                 && std::isfinite(theta_z95_m),
-            "M12b1 response heights are not finite");
+            "response heights are not finite");
         require(
             theta_z50_m <= theta_z95_m,
-            "M12b1 response quantile heights are not ordered");
+            "response quantile heights are not ordered");
 
         amrex::Print()
             << std::setprecision(17)
-            << "M12B1_RESPONSE_METRICS"
+            << "FIRE_ATMOSPHERIC_RESPONSE_METRICS"
             << " time_s=" << one_way.time()
             << " max_delta_rhotheta="
             << max_delta_rhotheta
@@ -292,7 +292,7 @@ main(int argc, char** argv)
             << "\n";
     } catch (const std::exception& error) {
         amrex::Print()
-            << "M12b1 atmospheric-response analysis error: "
+            << "atmospheric-response analysis error: "
             << error.what()
             << "\n";
         result = 2;
