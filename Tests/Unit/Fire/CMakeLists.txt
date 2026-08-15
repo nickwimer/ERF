@@ -464,3 +464,18 @@ set_tests_properties(
     TIMEOUT 900
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+add_test(
+  NAME FireTimeStepIntegration.RestartPreservesCoupledState
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireRestart.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireRestart.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.RestartPreservesCoupledState
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 180
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)

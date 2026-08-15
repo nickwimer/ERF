@@ -4,10 +4,17 @@
 
 #include <iostream>
 #include <fstream>
+#include <exception>
+#include <limits>
 #include <vector>
 #include <string>
 
 #include "ERF.H"
+
+#ifdef ERF_USE_FIRE
+#include <ERF_FireRuntimeInit.H>
+#include <ERF_FireSpreadOutput.H>
+#endif
 #include "AMReX_PlotFileUtil.H"
 #include "ERF_ReadFromERFBdy.H"
 #include "ERF_Provenance.H"
@@ -18,6 +25,105 @@ namespace
 {
 
 bool provenance_warning_emitted = false;
+
+#ifdef ERF_USE_FIRE
+
+bool
+same_fire_fuel(
+    const ERFFire::RothermelFuelParameters& lhs,
+    const ERFFire::RothermelFuelParameters& rhs) noexcept
+{
+    return lhs.dead_1h_load_kg_m2 == rhs.dead_1h_load_kg_m2
+        && lhs.dead_1h_sav_m_inv == rhs.dead_1h_sav_m_inv
+        && lhs.fuel_bed_depth_m == rhs.fuel_bed_depth_m
+        && lhs.dead_heat_content_j_kg == rhs.dead_heat_content_j_kg
+        && lhs.particle_density_kg_m3 == rhs.particle_density_kg_m3
+        && lhs.total_mineral_fraction == rhs.total_mineral_fraction
+        && lhs.effective_mineral_fraction
+            == rhs.effective_mineral_fraction
+        && lhs.dead_moisture_of_extinction
+            == rhs.dead_moisture_of_extinction;
+}
+
+bool
+same_fire_spread_config(
+    const ERFFire::ERFFireSpreadConfig& lhs,
+    const ERFFire::ERFFireSpreadConfig& rhs) noexcept
+{
+    const auto& lc = lhs.combustion_parameters;
+    const auto& rc = rhs.combustion_parameters;
+    const auto& lr = lhs.remesh_options;
+    const auto& rr = rhs.remesh_options;
+    const auto& lg = lhs.raster_geometry;
+    const auto& rg = rhs.raster_geometry;
+
+    return same_fire_fuel(lhs.fuel, rhs.fuel)
+        && lhs.dead_fuel_moisture_fraction
+            == rhs.dead_fuel_moisture_fraction
+        && lc.dry_fuel_load_kg_m2
+            == rc.dry_fuel_load_kg_m2
+        && lc.sensible_heat_release_j_kg_dry
+            == rc.sensible_heat_release_j_kg_dry
+        && lc.fuel_moisture_fraction
+            == rc.fuel_moisture_fraction
+        && lc.burn_time_constant_s
+            == rc.burn_time_constant_s
+        && lc.combustion_water_yield_kg_per_kg_dry
+            == rc.combustion_water_yield_kg_per_kg_dry
+        && lhs.combustion_options.temporal_substeps
+            == rhs.combustion_options.temporal_substeps
+        && lr.min_edge_length_m == rr.min_edge_length_m
+        && lr.max_edge_length_m == rr.max_edge_length_m
+        && lr.max_chord_error_m == rr.max_chord_error_m
+        && lg.nx == rg.nx
+        && lg.ny == rg.ny
+        && lg.xlo_m == rg.xlo_m
+        && lg.ylo_m == rg.ylo_m
+        && lg.dx_m == rg.dx_m
+        && lg.dy_m == rg.dy_m
+        && lhs.arrival_time_tolerance_s
+            == rhs.arrival_time_tolerance_s;
+}
+
+void
+validate_fire_checkpoint_policy(
+    const ERFFire::ERFFireCheckpointState& checkpoint,
+    const ERFFire::ERFFireRuntimeOptions& options)
+{
+    if (checkpoint.coupling_mode != options.coupling_mode) {
+        amrex::Error(
+            "ERF-Fire checkpoint coupling mode does not match current inputs");
+    }
+    if (checkpoint.wind_mode != options.wind_mode) {
+        amrex::Error(
+            "ERF-Fire checkpoint wind mode does not match current inputs");
+    }
+
+    if (options.wind_mode
+            == ERFFire::ERFFireWindMode::DirectReference) {
+        if (checkpoint.reference_height_agl_m
+            != options.reference_height_agl_m) {
+            amrex::Error(
+                "ERF-Fire checkpoint reference height does not match current inputs");
+        }
+    } else {
+        if (checkpoint.wind_adjustment_factor
+            != options.wind_adjustment_factor) {
+            amrex::Error(
+                "ERF-Fire checkpoint wind adjustment factor does not match current inputs");
+        }
+    }
+
+    if (options.coupling_mode
+            == ERFFire::ERFFireCouplingMode::TwoWay
+        && checkpoint.feedback_extinction_depth_m
+            != options.feedback_extinction_depth_m) {
+        amrex::Error(
+            "ERF-Fire checkpoint feedback extinction depth does not match current inputs");
+    }
+}
+
+#endif
 
 } // namespace
 
@@ -459,6 +565,57 @@ ERF::WriteCheckpointFile () const
 
 #ifdef ERF_USE_PARTICLES
    particleData.Checkpoint(checkpointname);
+#endif
+
+#ifdef ERF_USE_FIRE
+    if (m_fire_runtime_options.enabled) {
+        std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
+            initial_fire_runtime;
+        const ERFFire::ERFFireSpreadRuntime*
+            fire_runtime_for_checkpoint =
+                m_fire_spread_runtime.get();
+
+        if (fire_runtime_for_checkpoint == nullptr) {
+            if (istep[0] != 0
+                || t_new[0] != amrex::Real(0.0)) {
+                Error(
+                    "ERF-Fire runtime is missing while writing a noninitial checkpoint");
+            }
+
+            initial_fire_runtime =
+                ERFFire::make_erf_fire_spread_runtime(
+                    m_fire_runtime_options,
+                    geom[0],
+                    static_cast<Real>(t_new[0]));
+            fire_runtime_for_checkpoint =
+                initial_fire_runtime.get();
+        }
+
+        if (ParallelDescriptor::IOProcessor()) {
+            const std::string fire_state_name =
+                checkpointname + "/FireState";
+            std::ofstream fire_state(
+                fire_state_name,
+                std::ios::out
+                    | std::ios::trunc
+                    | std::ios::binary);
+            if (!fire_state.good()) {
+                FileOpenFailed(fire_state_name);
+            }
+
+            try {
+                ERFFire::write_erf_fire_checkpoint_state(
+                    *fire_runtime_for_checkpoint,
+                    m_fire_runtime_options,
+                    fire_state);
+            } catch (const std::exception& error) {
+                Error(
+                    std::string(
+                        "failed to write ERF-Fire checkpoint state: ")
+                    + error.what());
+            }
+        }
+    }
 #endif
 
 #if 0
@@ -1223,6 +1380,81 @@ ERF::ReadCheckpointFile ()
                                  nvars_erfbdy, real_width);
                 Print() << "Restart: Loaded erfbdy time index " << itime << std::endl;
             }
+        }
+    }
+#endif
+
+#ifdef ERF_USE_FIRE
+    if (m_fire_runtime_options.enabled) {
+        const std::string fire_state_name =
+            restart_chkfile + "/FireState";
+        if (!amrex::FileExists(fire_state_name)) {
+            Error(
+                "Fire-enabled restart requires persistent FireState in native checkpoint "
+                + restart_chkfile);
+        }
+
+        Vector<char> fire_state_chars;
+        ParallelDescriptor::ReadAndBcastFile(
+            fire_state_name,
+            fire_state_chars);
+        std::string fire_state_text(
+            fire_state_chars.dataPtr());
+        std::istringstream fire_state_stream(
+            fire_state_text,
+            std::istringstream::in);
+
+        try {
+            ERFFire::ERFFireCheckpointState checkpoint =
+                ERFFire::read_erf_fire_checkpoint_state(
+                    fire_state_stream);
+
+            validate_fire_checkpoint_policy(
+                checkpoint,
+                m_fire_runtime_options);
+
+            const ERFFire::ERFFireSpreadConfig
+                expected_config =
+                    ERFFire::make_erf_fire_spread_config(
+                        m_fire_runtime_options,
+                        geom[0]);
+
+            if (!same_fire_spread_config(
+                    checkpoint.runtime_state.config,
+                    expected_config)) {
+                Error(
+                    "ERF-Fire checkpoint spread configuration does not match current inputs or level-0 geometry");
+            }
+
+            if (checkpoint.runtime_state.current_time_s
+                != static_cast<Real>(t_new[0])) {
+                Error(
+                    "ERF-Fire checkpoint clock does not match ERF level-0 checkpoint time");
+            }
+
+            ERFFire::ERFFireSpreadRuntime restored =
+                ERFFire::ERFFireSpreadRuntime::
+                    restore_from_state(
+                        std::move(
+                            checkpoint.runtime_state));
+
+            m_fire_spread_runtime =
+                std::make_unique<
+                    ERFFire::ERFFireSpreadRuntime>(
+                        std::move(restored));
+            m_fire_step_index = istep[0];
+
+            m_fire_environment_snapshot.reset();
+            m_fire_environment_snapshot_time =
+                std::numeric_limits<double>::quiet_NaN();
+            m_fire_atmospheric_source_tendency.reset();
+            m_fire_atmospheric_source_time =
+                std::numeric_limits<double>::quiet_NaN();
+        } catch (const std::exception& error) {
+            Error(
+                std::string(
+                    "failed to restore ERF-Fire checkpoint state: ")
+                + error.what());
         }
     }
 #endif

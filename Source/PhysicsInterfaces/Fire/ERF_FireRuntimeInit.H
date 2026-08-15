@@ -11,6 +11,12 @@ namespace ERFFire
 {
 
 class ERFFireSpreadRuntime;
+struct ERFFireSpreadConfig;
+
+[[nodiscard]] ERFFireSpreadConfig
+make_erf_fire_spread_config(
+    const ERFFireRuntimeOptions& options,
+    const amrex::Geometry& geometry);
 
 /**
  * Build the initial flat-grid fire state from ERF runtime options.

@@ -125,10 +125,6 @@ ERF::ERF_shared ()
             m_fire_runtime_options.enabled);
 
         if (m_fire_runtime_options.enabled) {
-            if (!restart_chkfile.empty()) {
-                Error(
-                    "fire.enabled does not yet support ERF checkpoint restart");
-            }
             if (ParallelDescriptor::NProcs() != 1) {
                 Error(
                     "Fire runtime currently requires one MPI rank");

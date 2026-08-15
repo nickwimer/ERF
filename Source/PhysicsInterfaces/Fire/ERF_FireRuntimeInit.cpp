@@ -99,18 +99,17 @@ make_level0_raster_geometry(const amrex::Geometry& geometry)
 
 } // namespace
 
-std::unique_ptr<ERFFireSpreadRuntime>
-make_erf_fire_spread_runtime(
+ERFFireSpreadConfig
+make_erf_fire_spread_config(
     const ERFFireRuntimeOptions& options,
-    const amrex::Geometry& geometry,
-    amrex::Real initial_time_s)
+    const amrex::Geometry& geometry)
 {
-    require(options.enabled, "cannot initialize disabled fire runtime");
+    require(options.enabled, "cannot configure disabled fire runtime");
     require(
         options.fuel_model == "FM1",
-        "M7e supports only fire.fuel_model = FM1");
+        "ERF-Fire currently supports only fire.fuel_model = FM1");
 
-    ERFFireSpreadConfig config{
+    return {
         make_fm1_fuel_parameters(),
         options.dead_fuel_moisture_fraction,
         make_fm1_combustion_parameters(
@@ -124,6 +123,16 @@ make_erf_fire_spread_runtime(
             options.remesh_max_chord_error_m},
         make_level0_raster_geometry(geometry),
         options.arrival_time_tolerance_s};
+}
+
+std::unique_ptr<ERFFireSpreadRuntime>
+make_erf_fire_spread_runtime(
+    const ERFFireRuntimeOptions& options,
+    const amrex::Geometry& geometry,
+    amrex::Real initial_time_s)
+{
+    ERFFireSpreadConfig config =
+        make_erf_fire_spread_config(options, geometry);
 
     return std::make_unique<ERFFireSpreadRuntime>(
         make_circular_ignition(options, geometry),
