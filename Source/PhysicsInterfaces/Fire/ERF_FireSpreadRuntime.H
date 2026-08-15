@@ -161,9 +161,9 @@ public:
         amrex::Real dt_s);
 
     /**
-     * Flat-grid direct-reference advance with one ordered environment batch
-     * per RK stage. This is the distributed-coupling equivalent of the scalar
-     * sampler overload and uses exactly zero terrain slope.
+     * Direct-reference advance with one ordered environment batch per RK
+     * stage. The batch sample carries both reference wind and the represented
+     * map-plane terrain gradient; flat samplers supply exact zero gradient.
      */
     [[nodiscard]] ERFFireStepDiagnostics
     advance_direct_reference_wind_batched(
@@ -206,7 +206,8 @@ public:
         amrex::Real dt_s);
 
     /**
-     * Flat-grid explicit-WAF advance with batched environment sampling.
+     * Explicit-WAF advance with batched wind and terrain-gradient sampling.
+     * Flat samplers supply exact zero terrain gradient.
      */
     [[nodiscard]] ERFFireStepDiagnostics
     advance_explicit_waf_20ft_batched(
@@ -252,7 +253,6 @@ private:
     [[nodiscard]] ERFFireStepDiagnostics
     advance_wind_batched_impl(
         const FireEnvironmentBatchFunction& environment,
-        const FireTerrainSurface* terrain_surface,
         WindInputMode wind_input_mode,
         amrex::Real wind_adjustment_factor,
         amrex::Real dt_s);

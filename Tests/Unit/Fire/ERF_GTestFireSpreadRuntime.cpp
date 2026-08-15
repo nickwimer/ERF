@@ -664,6 +664,60 @@ TEST(
     expect_same_runtime_state(scalar, batched);
 }
 
+TEST(
+    FireSpreadRuntime,
+    BatchedSampledTerrainGradientMatchesTerrainSurfaceStateExactly)
+{
+    constexpr Real dt_s = Real(1.0);
+    const FireCartesianRasterGeometry2D geometry{
+        24, 24,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    const FirePerimeter initial =
+        make_circle(
+            96,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.5));
+    const auto config = make_config(geometry);
+    const auto terrain =
+        make_planar_terrain(
+            geometry,
+            FireVec2{Real(0.2), Real(0.1)});
+    const FireFlatEnvironmentSampler environment =
+        make_affine_sampler();
+
+    ERFFireSpreadRuntime scalar(
+        initial, Real(0.0), config);
+    ERFFireSpreadRuntime sampled(
+        initial, Real(0.0), config);
+
+    (void)scalar.advance_direct_reference_wind(
+        environment,
+        terrain,
+        dt_s);
+    (void)sampled.advance_direct_reference_wind_batched(
+        [&environment, &terrain](
+            const std::vector<FireVec2>& positions_m) {
+            std::vector<ERFFire::FireEnvironmentSample> result;
+            result.reserve(positions_m.size());
+            for (const FireVec2& position : positions_m) {
+                auto sample =
+                    environment.sample(
+                        position.x,
+                        position.y);
+                sample.terrain_gradient_m_per_m =
+                    terrain.terrain_gradient_m_per_m(
+                        position.x,
+                        position.y);
+                result.push_back(sample);
+            }
+            return result;
+        },
+        dt_s);
+
+    expect_same_runtime_state(scalar, sampled);
+}
+
 TEST(FireSpreadRuntime, ArrivalBurnHistoryPrecedesRemeshingAndAdvancesMonotonically)
 {
     const FirePerimeter initial =

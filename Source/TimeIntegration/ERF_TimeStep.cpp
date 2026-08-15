@@ -151,7 +151,7 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
 #ifdef ERF_USE_FIRE
     // Explicit Fire coupling sequencing:
     //   FillPatch atmosphere at t^n
-    //   -> freeze one immutable t^n environment snapshot
+    //   -> bind one immutable t^n distributed environment view
     //   -> advance one candidate coupling-neutral Fire state across dt[0]
     //   -> for two_way only, difference combustion history, project the
     //      step-integrated release using t^n pressure, and prepare a constant
@@ -179,8 +179,6 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             solverChoice.buildings_type,
             max_level};
 
-        std::unique_ptr<ERFFire::FireTerrainSurface>
-            next_terrain_surface;
         std::unique_ptr<ERFFire::ERFFireLevel0TerrainWindSampler>
             next_terrain_sampler;
         std::unique_ptr<ERFFire::ERFFireLevel0FlatWindSampler>
@@ -193,10 +191,6 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 : m_fire_runtime_options.reference_height_agl_m;
 
         if (solverChoice.mesh_type == MeshType::VariableDz) {
-            next_terrain_surface =
-                std::make_unique<ERFFire::FireTerrainSurface>(
-                    ERFFire::make_erf_level0_terrain_surface(
-                        fire_inputs));
             next_terrain_sampler =
                 std::make_unique<ERFFire::ERFFireLevel0TerrainWindSampler>(
                     fire_inputs,
@@ -256,11 +250,10 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
 
         if (m_fire_runtime_options.wind_mode
                 == ERFFire::ERFFireWindMode::DirectReference) {
-            if (next_terrain_surface) {
+            if (next_terrain_sampler) {
                 (void)next_fire_runtime
                     .advance_direct_reference_wind_batched(
                         terrain_environment,
-                        *next_terrain_surface,
                         static_cast<Real>(dt[0]));
             } else {
                 (void)next_fire_runtime
@@ -270,11 +263,10 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             }
         } else if (m_fire_runtime_options.wind_mode
                    == ERFFire::ERFFireWindMode::ExplicitWaf20ft) {
-            if (next_terrain_surface) {
+            if (next_terrain_sampler) {
                 (void)next_fire_runtime
                     .advance_explicit_waf_20ft_batched(
                         terrain_environment,
-                        *next_terrain_surface,
                         m_fire_runtime_options.wind_adjustment_factor,
                         static_cast<Real>(dt[0]));
             } else {

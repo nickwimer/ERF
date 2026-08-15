@@ -16,10 +16,14 @@ namespace ERFFire
  * The sampler/adapter defines its AGL sampling height. It is not intrinsically
  * a 20-ft, 10-m, or Rothermel midflame wind. Wind adjustment, when requested,
  * belongs in Fire-side preprocessing before Rothermel evaluation.
+ *
+ * terrain_gradient_m_per_m is the represented map-plane ground gradient
+ * (dh/dx, dh/dy), dimensionless m/m. Flat samplers leave it at exact zero.
  */
 struct FireEnvironmentSample
 {
     FireVec2 horizontal_wind_mps{};
+    FireVec2 terrain_gradient_m_per_m{};
 };
 
 /**

@@ -147,6 +147,36 @@ require_perimeter_inside_environment(
     }
 }
 
+FireEnvironmentBatchFunction
+with_terrain_gradient(
+    const FireEnvironmentBatchFunction& environment,
+    const FireTerrainSurface& terrain)
+{
+    require(
+        static_cast<bool>(environment),
+        "fire batched environment sampler must be set");
+
+    return
+        [&environment, &terrain](
+            const std::vector<FireVec2>& positions_m) {
+            std::vector<FireEnvironmentSample> samples =
+                environment(positions_m);
+            require(
+                samples.size() == positions_m.size(),
+                "fire batched environment sampler returned the wrong size");
+
+            for (std::size_t index = 0;
+                 index < samples.size();
+                 ++index) {
+                samples[index].terrain_gradient_m_per_m =
+                    terrain.terrain_gradient_m_per_m(
+                        positions_m[index].x,
+                        positions_m[index].y);
+            }
+            return samples;
+        };
+}
+
 } // namespace
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
@@ -521,7 +551,6 @@ ERFFireSpreadRuntime::advance_direct_reference_wind_batched(
 {
     return advance_wind_batched_impl(
         environment,
-        nullptr,
         WindInputMode::DirectReference,
         amrex::Real(1.0),
         dt_s);
@@ -539,9 +568,12 @@ ERFFireSpreadRuntime::advance_direct_reference_wind_batched(
             config_.raster_geometry),
         "fire terrain geometry must match the Fire runtime raster geometry");
 
+    const FireEnvironmentBatchFunction terrain_environment =
+        with_terrain_gradient(
+            environment,
+            terrain);
     return advance_wind_batched_impl(
-        environment,
-        &terrain,
+        terrain_environment,
         WindInputMode::DirectReference,
         amrex::Real(1.0),
         dt_s);
@@ -555,7 +587,6 @@ ERFFireSpreadRuntime::advance_explicit_waf_20ft_batched(
 {
     return advance_wind_batched_impl(
         environment,
-        nullptr,
         WindInputMode::ExplicitWaf20ft,
         wind_adjustment_factor,
         dt_s);
@@ -574,9 +605,12 @@ ERFFireSpreadRuntime::advance_explicit_waf_20ft_batched(
             config_.raster_geometry),
         "fire terrain geometry must match the Fire runtime raster geometry");
 
+    const FireEnvironmentBatchFunction terrain_environment =
+        with_terrain_gradient(
+            environment,
+            terrain);
     return advance_wind_batched_impl(
-        environment,
-        &terrain,
+        terrain_environment,
         WindInputMode::ExplicitWaf20ft,
         wind_adjustment_factor,
         dt_s);
@@ -585,7 +619,6 @@ ERFFireSpreadRuntime::advance_explicit_waf_20ft_batched(
 ERFFireStepDiagnostics
 ERFFireSpreadRuntime::advance_wind_batched_impl(
     const FireEnvironmentBatchFunction& environment,
-    const FireTerrainSurface* terrain_surface,
     WindInputMode wind_input_mode,
     amrex::Real wind_adjustment_factor,
     amrex::Real dt_s)
@@ -620,7 +653,6 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
     const auto normal_speeds =
         [this,
          &environment,
-         terrain_surface,
          wind_input_mode,
          wind_adjustment_factor](
             const std::vector<FireVec2>& positions_m,
@@ -667,13 +699,8 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     "fire spread model wind magnitude is not finite");
             }
 
-            FireVec2 terrain_gradient_m_per_m{};
-            if (terrain_surface != nullptr) {
-                terrain_gradient_m_per_m =
-                    terrain_surface->terrain_gradient_m_per_m(
-                        positions_m[index].x,
-                        positions_m[index].y);
-            }
+            const FireVec2 terrain_gradient_m_per_m =
+                samples[index].terrain_gradient_m_per_m;
 
             const amrex::Real slope_tangent =
                 norm(terrain_gradient_m_per_m);

@@ -350,6 +350,9 @@ TEST(
         freeze_erf_level0_terrain_reference_wind_environment(
             fixture.inputs(),
             reference_height_agl_m);
+    const auto terrain =
+        ERFFire::make_erf_level0_terrain_surface(
+            fixture.inputs());
 
     const ERFFire::ERFFireLevel0TerrainWindSampler
         distributed(
@@ -388,6 +391,23 @@ TEST(
         EXPECT_EQ(
             samples[n].horizontal_wind_mps.y,
             expected.horizontal_wind_mps.y);
+
+        const auto expected_gradient =
+            terrain.terrain_gradient_m_per_m(
+                points[n].x,
+                points[n].y);
+        EXPECT_EQ(
+            samples[n].terrain_gradient_m_per_m.x,
+            expected_gradient.x);
+        EXPECT_EQ(
+            samples[n].terrain_gradient_m_per_m.y,
+            expected_gradient.y);
+        EXPECT_EQ(
+            samples[n].terrain_gradient_m_per_m.x,
+            Real(2));
+        EXPECT_EQ(
+            samples[n].terrain_gradient_m_per_m.y,
+            Real(1));
     }
 }
 
