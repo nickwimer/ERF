@@ -64,6 +64,185 @@ replicated_host_copy (
     return result;
 }
 
+amrex::MFInfo
+flat_coordinate_mf_info()
+{
+    amrex::MFInfo info;
+    info.SetArena(amrex::The_Pinned_Arena());
+    return info;
+}
+
+std::vector<amrex::Real>
+canonical_vertical_column(
+    const amrex::MultiFab& source,
+    amrex::Box column)
+{
+    column.setRange(0, column.smallEnd(0));
+    column.setRange(1, column.smallEnd(1));
+
+    amrex::BoxArray column_boxes(column);
+    amrex::Vector<int> processor_map(
+        1,
+        amrex::ParallelDescriptor::IOProcessorNumber());
+    const amrex::DistributionMapping column_dm(
+        std::move(processor_map));
+
+    amrex::MultiFab column_values(
+        column_boxes,
+        column_dm,
+        1,
+        0,
+        flat_coordinate_mf_info());
+    column_values.ParallelCopy(
+        source,
+        0,
+        0,
+        1,
+        0,
+        0);
+    amrex::Gpu::streamSynchronize();
+
+    const int klo = column.smallEnd(2);
+    const int khi = column.bigEnd(2);
+    std::vector<amrex::Real> result(
+        static_cast<std::size_t>(khi - klo + 1),
+        amrex::Real(0));
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        for (amrex::MFIter mfi(column_values);
+             mfi.isValid();
+             ++mfi) {
+            const auto values =
+                column_values.const_array(mfi);
+            const int i =
+                column.smallEnd(0);
+            const int j =
+                column.smallEnd(1);
+            for (int k = klo; k <= khi; ++k) {
+                result[
+                    static_cast<std::size_t>(k - klo)] =
+                        values(i, j, k);
+            }
+        }
+    }
+
+    amrex::ParallelDescriptor::Bcast(
+        result.data(),
+        result.size(),
+        amrex::ParallelDescriptor::IOProcessorNumber());
+    return result;
+}
+
+void
+require_exact_uniform_plane(
+    const amrex::MultiFab& source,
+    const amrex::Box& plane,
+    amrex::Real expected,
+    const char* message)
+{
+    amrex::Real plane_min =
+        source.min(
+            plane,
+            0,
+            0,
+            true);
+    amrex::Real plane_max =
+        source.max(
+            plane,
+            0,
+            0,
+            true);
+
+    amrex::ParallelDescriptor::ReduceRealMin(
+        plane_min);
+    amrex::ParallelDescriptor::ReduceRealMax(
+        plane_max);
+
+    if (!std::isfinite(plane_min)
+        || !std::isfinite(plane_max)
+        || plane_min != expected
+        || plane_max != expected) {
+        throw std::invalid_argument(message);
+    }
+}
+
+void
+require_exact_uniform_profile(
+    const amrex::MultiFab& source,
+    const amrex::Box& expected_box,
+    const std::vector<amrex::Real>& expected,
+    const char* message)
+{
+    if (expected.size()
+        != static_cast<std::size_t>(
+            expected_box.length(2))) {
+        throw std::logic_error(
+            "fire flat-coordinate profile has the wrong vertical size");
+    }
+    if (expected.size()
+        > static_cast<std::size_t>(
+            std::numeric_limits<int>::max())) {
+        throw std::overflow_error(
+            "fire flat-coordinate profile exceeds int count");
+    }
+
+    const int klo =
+        expected_box.smallEnd(2);
+    const int profile_size =
+        static_cast<int>(expected.size());
+
+    std::vector<amrex::Real> plane_min(
+        expected.size(),
+        std::numeric_limits<amrex::Real>::max());
+    std::vector<amrex::Real> plane_max(
+        expected.size(),
+        std::numeric_limits<amrex::Real>::lowest());
+
+    for (int offset = 0;
+         offset < profile_size;
+         ++offset) {
+        amrex::Box plane(expected_box);
+        plane.setRange(
+            2,
+            klo + offset);
+
+        plane_min[
+            static_cast<std::size_t>(offset)] =
+                source.min(
+                    plane,
+                    0,
+                    0,
+                    true);
+        plane_max[
+            static_cast<std::size_t>(offset)] =
+                source.max(
+                    plane,
+                    0,
+                    0,
+                    true);
+    }
+
+    amrex::ParallelDescriptor::ReduceRealMin(
+        plane_min.data(),
+        profile_size);
+    amrex::ParallelDescriptor::ReduceRealMax(
+        plane_max.data(),
+        profile_size);
+
+    for (int offset = 0;
+         offset < profile_size;
+         ++offset) {
+        const std::size_t index =
+            static_cast<std::size_t>(offset);
+        if (!std::isfinite(plane_min[index])
+            || !std::isfinite(plane_max[index])
+            || plane_min[index] != expected[index]
+            || plane_max[index] != expected[index]) {
+            throw std::invalid_argument(message);
+        }
+    }
+}
+
 amrex::Real
 flat_ground_height (
     const amrex::MultiFab& z_phys_nd,
@@ -73,32 +252,23 @@ flat_ground_height (
         amrex::convert(cell_domain, amrex::IntVect(1, 1, 1));
     bottom.setRange(2, bottom.smallEnd(2));
 
-    const amrex::FArrayBox surface =
-        replicated_host_copy(z_phys_nd, bottom, 0);
-    const auto surface_arr = surface.const_array();
-
-    const int ilo = bottom.smallEnd(0);
-    const int ihi = bottom.bigEnd(0);
-    const int jlo = bottom.smallEnd(1);
-    const int jhi = bottom.bigEnd(1);
-    const int k = bottom.smallEnd(2);
-
-    const amrex::Real ground = surface_arr(ilo, jlo, k);
+    const std::vector<amrex::Real> canonical =
+        canonical_vertical_column(
+            z_phys_nd,
+            bottom);
+    const amrex::Real ground =
+        canonical.front();
     require(
         std::isfinite(ground),
         "fire flat-grid ground height must be finite");
 
     // Any horizontal variation, including a
     // roundoff-sized one, is terrain for coupling purposes and is deferred.
-    for (int j = jlo; j <= jhi; ++j) {
-        for (int i = ilo; i <= ihi; ++i) {
-            const amrex::Real value = surface_arr(i, j, k);
-            if (!std::isfinite(value) || value != ground) {
-                throw std::invalid_argument(
-                    "fire environment requires an exactly flat level-0 physical surface");
-            }
-        }
-    }
+    require_exact_uniform_plane(
+        z_phys_nd,
+        bottom,
+        ground,
+        "fire environment requires an exactly flat level-0 physical surface");
 
     return ground;
 }
@@ -112,22 +282,9 @@ cell_center_heights (
     column.setRange(0, domain.smallEnd(0));
     column.setRange(1, domain.smallEnd(1));
 
-    const amrex::FArrayBox column_fab =
-        replicated_host_copy(z_phys_cc, column, 0);
-    const auto column_arr = column_fab.const_array();
-
-    const int i = column.smallEnd(0);
-    const int j = column.smallEnd(1);
-    const int klo = domain.smallEnd(2);
-    const int khi = domain.bigEnd(2);
-
-    std::vector<amrex::Real> result(
-        static_cast<std::size_t>(domain.length(2)));
-    for (int k = klo; k <= khi; ++k) {
-        result[static_cast<std::size_t>(k - klo)] =
-            column_arr(i, j, k);
-    }
-    return result;
+    return canonical_vertical_column(
+        z_phys_cc,
+        column);
 }
 
 void
@@ -140,20 +297,12 @@ require_horizontally_uniform_z_phys_cc_plane (
     amrex::Box plane(domain);
     plane.setRange(2, k);
 
-    const amrex::FArrayBox plane_fab =
-        replicated_host_copy(z_phys_cc, plane, 0);
-    const auto plane_arr = plane_fab.const_array();
-
-    for (int j = plane.smallEnd(1); j <= plane.bigEnd(1); ++j) {
-        for (int i = plane.smallEnd(0); i <= plane.bigEnd(0); ++i) {
-            const amrex::Real value = plane_arr(i, j, k);
-            if (!std::isfinite(value) || value != expected_height_m) {
-                throw std::invalid_argument(
-                    "fire environment requires horizontally uniform "
-                    "z_phys_cc on sampled levels");
-            }
-        }
-    }
+    require_exact_uniform_plane(
+        z_phys_cc,
+        plane,
+        expected_height_m,
+        "fire environment requires horizontally uniform "
+        "z_phys_cc on sampled levels");
 }
 
 amrex::Box
@@ -717,52 +866,44 @@ erf_fire_level0_flat_vertical_faces_agl (
 {
     validate_flat_scope_and_layout(inputs);
 
-    const amrex::Box& domain = inputs.geometry.Domain();
-    const amrex::Real ground =
-        flat_ground_height(inputs.z_phys_nd, domain);
-
+    const amrex::Box& domain =
+        inputs.geometry.Domain();
     const amrex::Box nodal_domain =
         amrex::convert(
             domain,
             amrex::IntVect(1, 1, 1));
-    const amrex::FArrayBox coordinates =
-        replicated_host_copy(
-            inputs.z_phys_nd,
-            nodal_domain,
-            0);
-    const auto z = coordinates.const_array();
-
-    const int ilo = nodal_domain.smallEnd(0);
-    const int ihi = nodal_domain.bigEnd(0);
-    const int jlo = nodal_domain.smallEnd(1);
-    const int jhi = nodal_domain.bigEnd(1);
     const int klo = nodal_domain.smallEnd(2);
     const int khi = nodal_domain.bigEnd(2);
 
+    const std::vector<amrex::Real>
+        physical_face_height_m =
+            canonical_vertical_column(
+                inputs.z_phys_nd,
+                nodal_domain);
+    for (const amrex::Real value
+         : physical_face_height_m) {
+        require(
+            std::isfinite(value),
+            "fire level-0 nodal height must be finite");
+    }
+
+    require_exact_uniform_profile(
+        inputs.z_phys_nd,
+        nodal_domain,
+        physical_face_height_m,
+        "Fire feedback requires horizontally uniform z_phys_nd planes");
+
+    const amrex::Real ground =
+        physical_face_height_m.front();
     std::vector<amrex::Real> result(
-        static_cast<std::size_t>(
-            khi - klo + 1),
+        physical_face_height_m.size(),
         amrex::Real(0));
 
     for (int k = klo; k <= khi; ++k) {
-        const amrex::Real plane_height =
-            z(ilo, jlo, k);
-        require(
-            std::isfinite(plane_height),
-            "fire level-0 nodal height must be finite");
-
-        for (int j = jlo; j <= jhi; ++j) {
-            for (int i = ilo; i <= ihi; ++i) {
-                if (!std::isfinite(z(i, j, k))
-                    || z(i, j, k) != plane_height) {
-                    throw std::invalid_argument(
-                        "Fire feedback requires horizontally uniform z_phys_nd planes");
-                }
-            }
-        }
-
         const amrex::Real agl =
-            plane_height - ground;
+            physical_face_height_m[
+                static_cast<std::size_t>(k - klo)]
+            - ground;
         require(
             std::isfinite(agl),
             "fire level-0 AGL face height must be finite");

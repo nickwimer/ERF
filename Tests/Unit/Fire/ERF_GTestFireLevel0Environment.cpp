@@ -120,7 +120,8 @@ struct FlatAtmosphereFixture
 
     explicit FlatAtmosphereFixture (
         bool nonflat_surface = false,
-        bool nonflat_sampled_level = false)
+        bool nonflat_sampled_level = false,
+        bool nonflat_upper_nodal_level = false)
     {
         const GpuArray<Real, nz> zcc{
             ground_z + Real(2),
@@ -209,6 +210,12 @@ struct FlatAtmosphereFixture
                         && i == 1
                         && j == 1) {
                         value += Real(0.25);
+                    }
+                    if (nonflat_upper_nodal_level
+                        && k == 2
+                        && i == 2
+                        && j == 1) {
+                        value += Real(0.125);
                     }
                     arr(i, j, k) = value;
                 });
@@ -485,6 +492,17 @@ TEST(
     EXPECT_THROW(
         freeze_erf_level0_environment(
             nonflat_sampled_level.inputs(), Real(16)),
+        std::invalid_argument);
+
+    FlatAtmosphereFixture
+        nonflat_upper_nodal_level(
+            false,
+            false,
+            true);
+
+    EXPECT_THROW(
+        (void)ERFFire::erf_fire_level0_flat_vertical_faces_agl(
+            nonflat_upper_nodal_level.inputs()),
         std::invalid_argument);
 }
 
