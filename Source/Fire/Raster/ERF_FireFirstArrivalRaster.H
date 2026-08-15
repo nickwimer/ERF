@@ -2,11 +2,15 @@
 #define ERF_FIRE_FIRST_ARRIVAL_RASTER_H
 
 #include <ERF_FireRasterGeometry.H>
+#include <ERF_FireSurfaceLayout.H>
 
+#include <AMReX_MultiFab.H>
 #include <AMReX_REAL.H>
+#include <AMReX_iMultiFab.H>
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace ERFFire
@@ -46,6 +50,11 @@ struct FireFirstArrivalRasterState
  * perimeter sweep before remeshing. After the first successful update, each
  * subsequent sweep must start exactly at the previous committed sweep end
  * time; gaps, overlaps, and out-of-order updates are rejected.
+ *
+ * Expensive cell-arrival queries are distributed over the AMReX Fire surface
+ * layout. During this migration stage, canonical row-major vectors remain as
+ * synchronized compatibility state for checkpoint/output and existing scalar
+ * accessors. Distributed and canonical state are committed atomically.
  */
 class FireFirstArrivalRaster
 {
@@ -56,6 +65,15 @@ public:
     FireFirstArrivalRaster(
         const FireCartesianRasterGeometry2D& geometry,
         FireFirstArrivalRasterState state);
+
+    FireFirstArrivalRaster(
+        const FireFirstArrivalRaster& other);
+    FireFirstArrivalRaster& operator=(
+        const FireFirstArrivalRaster& other);
+    FireFirstArrivalRaster(
+        FireFirstArrivalRaster&&) noexcept = default;
+    FireFirstArrivalRaster& operator=(
+        FireFirstArrivalRaster&&) noexcept = default;
 
     [[nodiscard]] FireFirstArrivalRasterState
     snapshot_state() const
@@ -73,6 +91,12 @@ public:
     geometry () const noexcept
     {
         return geometry_;
+    }
+
+    [[nodiscard]] const FireSurfaceLayout&
+    surface_layout() const noexcept
+    {
+        return surface_layout_;
     }
 
     [[nodiscard]] std::size_t cell_count () const noexcept
@@ -131,7 +155,23 @@ private:
         std::size_t i,
         std::size_t j) const;
 
+    void scatter_canonical_to_distributed(
+        const std::vector<std::uint8_t>& arrived,
+        const std::vector<amrex::Real>& first_arrival_time_s,
+        amrex::iMultiFab& arrived_mf,
+        amrex::MultiFab& first_arrival_time_mf) const;
+
+    [[nodiscard]] std::pair<
+        std::vector<std::uint8_t>,
+        std::vector<amrex::Real>>
+    gather_distributed_to_canonical(
+        const amrex::iMultiFab& arrived_mf,
+        const amrex::MultiFab& first_arrival_time_mf) const;
+
     FireCartesianRasterGeometry2D geometry_{};
+    FireSurfaceLayout surface_layout_;
+    amrex::iMultiFab arrived_mf_;
+    amrex::MultiFab first_arrival_time_mf_;
     std::vector<std::uint8_t> arrived_;
     std::vector<amrex::Real> first_arrival_time_s_;
     bool has_initial_condition_{false};

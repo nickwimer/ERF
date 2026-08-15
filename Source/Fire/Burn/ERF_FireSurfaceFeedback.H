@@ -3,7 +3,9 @@
 
 #include <ERF_FireCombustionRaster.H>
 #include <ERF_FireRasterGeometry.H>
+#include <ERF_FireSurfaceLayout.H>
 
+#include <AMReX_MultiFab.H>
 #include <AMReX_REAL.H>
 
 #include <cstddef>
@@ -43,17 +45,48 @@ struct FireSurfaceFeedbackTotals
  * This object contains no vertical deposition policy, no ERF thermodynamic
  * conversion, and no one-way/two-way switch. Those remain responsibilities of
  * the later ERF coupling layer.
+ *
+ * Cell values are stored on the distributed AMReX Fire surface layout. A
+ * canonical row-major vector remains synchronized during this migration stage
+ * for scalar accessors, deterministic totals, and the existing checkpoint/test
+ * interfaces.
  */
 class FireSurfaceFeedbackRaster
 {
 public:
+    static constexpr int consumed_dry_fuel_comp = 0;
+    static constexpr int sensible_energy_comp = 1;
+    static constexpr int water_released_comp = 2;
+    static constexpr int component_count = 3;
+
     explicit FireSurfaceFeedbackRaster(
         FireCartesianRasterGeometry2D geometry);
+
+    FireSurfaceFeedbackRaster(
+        const FireSurfaceFeedbackRaster& other);
+    FireSurfaceFeedbackRaster& operator=(
+        const FireSurfaceFeedbackRaster& other);
+    FireSurfaceFeedbackRaster(
+        FireSurfaceFeedbackRaster&&) noexcept = default;
+    FireSurfaceFeedbackRaster& operator=(
+        FireSurfaceFeedbackRaster&&) noexcept = default;
 
     [[nodiscard]] const FireCartesianRasterGeometry2D&
     geometry() const noexcept
     {
         return geometry_;
+    }
+
+    [[nodiscard]] const FireSurfaceLayout&
+    surface_layout() const noexcept
+    {
+        return surface_layout_;
+    }
+
+    [[nodiscard]] const amrex::MultiFab&
+    distributed_values() const noexcept
+    {
+        return cells_mf_;
     }
 
     [[nodiscard]] std::size_t cell_count() const noexcept
@@ -76,7 +109,17 @@ private:
         std::size_t i,
         std::size_t j) const;
 
+    void scatter_canonical_to_distributed(
+        const std::vector<FireSurfaceFeedbackCell>& canonical,
+        amrex::MultiFab& distributed) const;
+
+    [[nodiscard]] std::vector<FireSurfaceFeedbackCell>
+    gather_distributed_to_canonical(
+        const amrex::MultiFab& distributed) const;
+
     FireCartesianRasterGeometry2D geometry_{};
+    FireSurfaceLayout surface_layout_;
+    amrex::MultiFab cells_mf_;
     std::vector<FireSurfaceFeedbackCell> cells_;
 };
 

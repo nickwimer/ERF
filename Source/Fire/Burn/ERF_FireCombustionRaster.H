@@ -4,7 +4,9 @@
 #include <ERF_FireBurnedFractionRaster.H>
 #include <ERF_FireCombustion.H>
 #include <ERF_FirePerimeter.H>
+#include <ERF_FireSurfaceLayout.H>
 
+#include <AMReX_MultiFab.H>
 #include <AMReX_REAL.H>
 
 #include <cstddef>
@@ -60,6 +62,12 @@ struct FireCombustionRasterState
  * obtains each cell's incremental burned area, and places that increment at
  * the corresponding bin midpoint before exact exponential decay.
  *
+ * Combustion evolution is distributed over the AMReX Fire surface layout.
+ * During this migration stage, a canonical row-major state vector remains as
+ * synchronized compatibility state for checkpoint/output, scalar accessors,
+ * and the existing surface-feedback adapter. Distributed and canonical state
+ * are committed atomically after a successful complete sweep.
+ *
  * This class owns combustion state only. FirePerimeter remains authoritative
  * geometry and FireBurnedFractionRaster remains authoritative area history.
  */
@@ -77,6 +85,15 @@ public:
         FireCombustionRasterOptions options,
         FireCombustionRasterState state);
 
+    FireCombustionRaster(
+        const FireCombustionRaster& other);
+    FireCombustionRaster& operator=(
+        const FireCombustionRaster& other);
+    FireCombustionRaster(
+        FireCombustionRaster&&) noexcept = default;
+    FireCombustionRaster& operator=(
+        FireCombustionRaster&&) noexcept = default;
+
     [[nodiscard]] FireCombustionRasterState
     snapshot_state() const
     {
@@ -87,6 +104,12 @@ public:
     geometry() const noexcept
     {
         return geometry_;
+    }
+
+    [[nodiscard]] const FireSurfaceLayout&
+    surface_layout() const noexcept
+    {
+        return surface_layout_;
     }
 
     [[nodiscard]] const FireCombustionParameters&
@@ -146,6 +169,18 @@ private:
         std::size_t i,
         std::size_t j) const;
 
+    void scatter_canonical_to_distributed(
+        const std::vector<FireCombustionState>& canonical,
+        amrex::MultiFab& distributed) const;
+
+    void copy_distributed_state(
+        const amrex::MultiFab& source,
+        amrex::MultiFab& destination) const;
+
+    [[nodiscard]] std::vector<FireCombustionState>
+    gather_distributed_to_canonical(
+        const amrex::MultiFab& distributed) const;
+
     [[nodiscard]] FireCombustionRasterTotals
     totals_for(
         const std::vector<FireCombustionState>& states) const noexcept;
@@ -153,6 +188,8 @@ private:
     FireCartesianRasterGeometry2D geometry_{};
     FireCombustionParameters parameters_{};
     FireCombustionRasterOptions options_{};
+    FireSurfaceLayout surface_layout_;
+    amrex::MultiFab states_mf_;
     std::vector<FireCombustionState> states_;
     bool initialized_{false};
 };

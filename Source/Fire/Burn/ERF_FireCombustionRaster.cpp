@@ -3,10 +3,16 @@
 #include <ERF_FireCellCoverage.H>
 #include <ERF_FirePerimeterSweep.H>
 
+#include <AMReX_Arena.H>
+#include <AMReX_FArrayBox.H>
+#include <AMReX_MFIter.H>
+#include <AMReX_ParallelDescriptor.H>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -14,6 +20,22 @@ namespace ERFFire
 {
 namespace
 {
+
+constexpr int ignited_area_fraction_comp = 0;
+constexpr int remaining_dry_fuel_comp = 1;
+constexpr int consumed_dry_fuel_comp = 2;
+constexpr int sensible_energy_comp = 3;
+constexpr int water_released_comp = 4;
+constexpr int combustion_component_count = 5;
+
+enum class DistributedFailure : int
+{
+    none = 0,
+    invalid_argument = 1,
+    logic_error = 2,
+    overflow_error = 3,
+    runtime_error = 4
+};
 
 void
 require(bool condition, const char* message)
@@ -61,6 +83,93 @@ require_finite_nonnegative(
     }
 }
 
+amrex::MFInfo
+fire_surface_mf_info()
+{
+    amrex::MFInfo info;
+    info.SetArena(amrex::The_Pinned_Arena());
+    return info;
+}
+
+[[noreturn]] void
+throw_distributed_failure(
+    DistributedFailure failure,
+    const std::string& local_error,
+    const char* operation)
+{
+    const std::string message =
+        local_error.empty()
+        ? std::string(operation) + " failed on another MPI rank"
+        : std::string(operation) + " failed: " + local_error;
+
+    switch (failure) {
+    case DistributedFailure::invalid_argument:
+        throw std::invalid_argument(message);
+    case DistributedFailure::logic_error:
+        throw std::logic_error(message);
+    case DistributedFailure::overflow_error:
+        throw std::overflow_error(message);
+    case DistributedFailure::runtime_error:
+        throw std::runtime_error(message);
+    case DistributedFailure::none:
+        break;
+    }
+
+    throw std::runtime_error(
+        std::string(operation) + " failed with an invalid error code");
+}
+
+void
+synchronize_distributed_failure(
+    DistributedFailure local_failure,
+    const std::string& local_error,
+    const char* operation)
+{
+    int failure = static_cast<int>(local_failure);
+    amrex::ParallelDescriptor::ReduceIntMax(failure);
+
+    if (failure != static_cast<int>(DistributedFailure::none)) {
+        throw_distributed_failure(
+            static_cast<DistributedFailure>(failure),
+            local_error,
+            operation);
+    }
+}
+
+template <typename T>
+FireCombustionState
+load_combustion_state(
+    const amrex::Array4<T>& values,
+    int i,
+    int j)
+{
+    return {
+        values(i, j, 0, ignited_area_fraction_comp),
+        values(i, j, 0, remaining_dry_fuel_comp),
+        values(i, j, 0, consumed_dry_fuel_comp),
+        values(i, j, 0, sensible_energy_comp),
+        values(i, j, 0, water_released_comp)};
+}
+
+void
+store_combustion_state(
+    const amrex::Array4<amrex::Real>& values,
+    int i,
+    int j,
+    const FireCombustionState& state)
+{
+    values(i, j, 0, ignited_area_fraction_comp) =
+        state.ignited_area_fraction;
+    values(i, j, 0, remaining_dry_fuel_comp) =
+        state.remaining_dry_fuel_kg_m2;
+    values(i, j, 0, consumed_dry_fuel_comp) =
+        state.consumed_dry_fuel_kg_m2;
+    values(i, j, 0, sensible_energy_comp) =
+        state.sensible_energy_j_m2;
+    values(i, j, 0, water_released_comp) =
+        state.water_released_kg_m2;
+}
+
 } // namespace
 
 FireCombustionRaster::FireCombustionRaster(
@@ -69,7 +178,14 @@ FireCombustionRaster::FireCombustionRaster(
     FireCombustionRasterOptions options)
     : geometry_(geometry),
       parameters_(parameters),
-      options_(options)
+      options_(options),
+      surface_layout_(geometry_),
+      states_mf_(
+          surface_layout_.box_array(),
+          surface_layout_.distribution_map(),
+          combustion_component_count,
+          0,
+          fire_surface_mf_info())
 {
     const std::size_t cell_count =
         detail::validate_fire_cartesian_raster_geometry(geometry_);
@@ -86,6 +202,9 @@ FireCombustionRaster::FireCombustionRaster(
         amrex::Real(0));
 
     states_.assign(cell_count, FireCombustionState{});
+    scatter_canonical_to_distributed(
+        states_,
+        states_mf_);
 }
 
 FireCombustionRaster::FireCombustionRaster(
@@ -123,6 +242,40 @@ FireCombustionRaster::FireCombustionRaster(
 
     states_ = std::move(state.cells);
     initialized_ = state.initialized;
+    scatter_canonical_to_distributed(
+        states_,
+        states_mf_);
+}
+
+FireCombustionRaster::FireCombustionRaster(
+    const FireCombustionRaster& other)
+    : geometry_(other.geometry_),
+      parameters_(other.parameters_),
+      options_(other.options_),
+      surface_layout_(other.surface_layout_),
+      states_mf_(
+          surface_layout_.box_array(),
+          surface_layout_.distribution_map(),
+          combustion_component_count,
+          0,
+          fire_surface_mf_info()),
+      states_(other.states_),
+      initialized_(other.initialized_)
+{
+    scatter_canonical_to_distributed(
+        states_,
+        states_mf_);
+}
+
+FireCombustionRaster&
+FireCombustionRaster::operator=(
+    const FireCombustionRaster& other)
+{
+    if (this != &other) {
+        FireCombustionRaster copy(other);
+        *this = std::move(copy);
+    }
+    return *this;
 }
 
 std::size_t
@@ -140,6 +293,124 @@ FireCombustionRaster::state(
     std::size_t j) const
 {
     return states_[flat_index(i, j)];
+}
+
+void
+FireCombustionRaster::scatter_canonical_to_distributed(
+    const std::vector<FireCombustionState>& canonical,
+    amrex::MultiFab& distributed) const
+{
+    if (canonical.size() != states_.size()) {
+        throw std::invalid_argument(
+            "Fire combustion canonical state has the wrong cell count");
+    }
+    if (distributed.boxArray() != surface_layout_.box_array()
+        || distributed.DistributionMap()
+            != surface_layout_.distribution_map()
+        || distributed.nComp() != combustion_component_count
+        || distributed.nGrow() != 0) {
+        throw std::invalid_argument(
+            "Fire combustion MultiFab does not match its surface layout");
+    }
+
+    for (amrex::MFIter mfi(distributed); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values = distributed.array(mfi);
+
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                const FireCombustionState& state_value =
+                    canonical[
+                        flat_index(
+                            static_cast<std::size_t>(i),
+                            static_cast<std::size_t>(j))];
+                store_combustion_state(
+                    values,
+                    i,
+                    j,
+                    state_value);
+            }
+        }
+    }
+}
+
+void
+FireCombustionRaster::copy_distributed_state(
+    const amrex::MultiFab& source,
+    amrex::MultiFab& destination) const
+{
+    const auto matches_layout =
+        [this](const amrex::MultiFab& field) {
+            return field.boxArray() == surface_layout_.box_array()
+                && field.DistributionMap()
+                    == surface_layout_.distribution_map()
+                && field.nComp() == combustion_component_count
+                && field.nGrow() == 0;
+        };
+
+    if (!matches_layout(source)
+        || !matches_layout(destination)) {
+        throw std::invalid_argument(
+            "Fire combustion MultiFab does not match its surface layout");
+    }
+
+    for (amrex::MFIter mfi(destination); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto src = source.const_array(mfi);
+        const auto dst = destination.array(mfi);
+
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                for (int component = 0;
+                     component < combustion_component_count;
+                     ++component) {
+                    dst(i, j, 0, component) =
+                        src(i, j, 0, component);
+                }
+            }
+        }
+    }
+}
+
+std::vector<FireCombustionState>
+FireCombustionRaster::gather_distributed_to_canonical(
+    const amrex::MultiFab& distributed) const
+{
+    if (distributed.boxArray() != surface_layout_.box_array()
+        || distributed.DistributionMap()
+            != surface_layout_.distribution_map()
+        || distributed.nComp() != combustion_component_count
+        || distributed.nGrow() != 0) {
+        throw std::invalid_argument(
+            "Fire combustion MultiFab does not match its surface layout");
+    }
+
+    amrex::FArrayBox gathered(
+        surface_layout_.cell_domain(),
+        combustion_component_count,
+        amrex::The_Pinned_Arena());
+    distributed.copyTo(
+        gathered,
+        0,
+        0,
+        combustion_component_count,
+        0);
+    const auto values = gathered.const_array();
+
+    std::vector<FireCombustionState> canonical(
+        states_.size(),
+        FireCombustionState{});
+    for (std::size_t j = 0; j < geometry_.ny; ++j) {
+        for (std::size_t i = 0; i < geometry_.nx; ++i) {
+            canonical[flat_index(i, j)] =
+                load_combustion_state(
+                    values,
+                    static_cast<int>(i),
+                    static_cast<int>(j));
+        }
+    }
+
+    return canonical;
 }
 
 FireCombustionRasterTotals
@@ -184,21 +455,84 @@ FireCombustionRaster::initialize_from_burned_fraction(
         same_geometry(geometry_, burned_fraction.geometry()),
         "fire combustion raster initialization geometry mismatch");
 
-    std::vector<FireCombustionState> next_states = states_;
+    amrex::MultiFab next_states(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        combustion_component_count,
+        0,
+        fire_surface_mf_info());
+    copy_distributed_state(
+        states_mf_,
+        next_states);
 
-    for (std::size_t j = 0; j < geometry_.ny; ++j) {
-        for (std::size_t i = 0; i < geometry_.nx; ++i) {
-            const std::size_t index = flat_index(i, j);
-            next_states[index] =
-                add_fire_combustion_ignition(
-                    next_states[index],
-                    parameters_,
-                    burned_fraction.burned_fraction(i, j));
+    DistributedFailure local_failure =
+        DistributedFailure::none;
+    std::string local_error;
+
+    try {
+        for (amrex::MFIter mfi(next_states);
+             mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto values = next_states.array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    const std::size_t ii =
+                        static_cast<std::size_t>(i);
+                    const std::size_t jj =
+                        static_cast<std::size_t>(j);
+                    const FireCombustionState current =
+                        load_combustion_state(
+                            values,
+                            i,
+                            j);
+                    const FireCombustionState next =
+                        add_fire_combustion_ignition(
+                            current,
+                            parameters_,
+                            burned_fraction.burned_fraction(
+                                ii,
+                                jj));
+                    store_combustion_state(
+                        values,
+                        i,
+                        j,
+                        next);
+                }
+            }
         }
+    } catch (const std::invalid_argument& error) {
+        local_failure = DistributedFailure::invalid_argument;
+        local_error = error.what();
+    } catch (const std::logic_error& error) {
+        local_failure = DistributedFailure::logic_error;
+        local_error = error.what();
+    } catch (const std::overflow_error& error) {
+        local_failure = DistributedFailure::overflow_error;
+        local_error = error.what();
+    } catch (const std::exception& error) {
+        local_failure = DistributedFailure::runtime_error;
+        local_error = error.what();
+    } catch (...) {
+        local_failure = DistributedFailure::runtime_error;
+        local_error = "unknown local Fire combustion initialization error";
     }
 
+    synchronize_distributed_failure(
+        local_failure,
+        local_error,
+        "distributed Fire combustion initialization");
+
+    std::vector<FireCombustionState> next_canonical =
+        gather_distributed_to_canonical(
+            next_states);
+
     const FireCombustionRasterTotals next_totals =
-        totals_for(next_states);
+        totals_for(next_canonical);
 
     require_finite_nonnegative(
         next_totals.remaining_dry_fuel_kg,
@@ -213,7 +547,8 @@ FireCombustionRaster::initialize_from_burned_fraction(
         next_totals.water_released_kg,
         "fire combustion raster initial water is not finite");
 
-    states_.swap(next_states);
+    states_mf_ = std::move(next_states);
+    states_ = std::move(next_canonical);
     initialized_ = true;
 
     return next_totals;
@@ -256,129 +591,237 @@ FireCombustionRaster::advance_from_linear_sweep(
             "fire combustion raster temporal substep is not representable");
     }
 
-    std::vector<FireCombustionState> next_states = states_;
-    std::vector<amrex::Real> running_burned_fraction(
-        states_.size(), amrex::Real(0));
+    amrex::MultiFab next_states(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        combustion_component_count,
+        0,
+        fire_surface_mf_info());
+    amrex::MultiFab running_burned_fraction(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        1,
+        0,
+        fire_surface_mf_info());
 
-    for (std::size_t j = 0; j < geometry_.ny; ++j) {
-        for (std::size_t i = 0; i < geometry_.nx; ++i) {
-            const std::size_t index = flat_index(i, j);
-            const amrex::Real before =
-                burned_before.burned_fraction(i, j);
-            const amrex::Real after =
-                burned_after.burned_fraction(i, j);
+    copy_distributed_state(
+        states_mf_,
+        next_states);
 
-            require(
-                after + fraction_tolerance(after) >= before,
-                "fire combustion raster burned history is not monotone");
-            require(
-                fraction_equal(
-                    next_states[index].ignited_area_fraction,
-                    before),
-                "fire combustion raster state is not synchronized with burned history");
+    DistributedFailure local_failure =
+        DistributedFailure::none;
+    std::string local_error;
 
-            running_burned_fraction[index] = before;
+    try {
+        for (amrex::MFIter mfi(next_states);
+             mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto values = next_states.const_array(mfi);
+            const auto running =
+                running_burned_fraction.array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    const std::size_t ii =
+                        static_cast<std::size_t>(i);
+                    const std::size_t jj =
+                        static_cast<std::size_t>(j);
+                    const amrex::Real before =
+                        burned_before.burned_fraction(ii, jj);
+                    const amrex::Real after =
+                        burned_after.burned_fraction(ii, jj);
+                    const FireCombustionState current =
+                        load_combustion_state(
+                            values,
+                            i,
+                            j);
+
+                    require(
+                        after + fraction_tolerance(after)
+                            >= before,
+                        "fire combustion raster burned history is not monotone");
+                    require(
+                        fraction_equal(
+                            current.ignited_area_fraction,
+                            before),
+                        "fire combustion raster state is not synchronized with burned history");
+
+                    running(i, j, 0) = before;
+                }
+            }
         }
+
+        for (std::size_t substep = 1;
+             substep <= options_.temporal_substeps;
+             ++substep) {
+            const amrex::Real alpha =
+                static_cast<amrex::Real>(substep)
+                / static_cast<amrex::Real>(
+                    options_.temporal_substeps);
+
+            const FirePerimeter sample_perimeter =
+                interpolate_fire_perimeter_linear_sweep(
+                    start_perimeter,
+                    end_perimeter,
+                    alpha);
+
+            for (amrex::MFIter mfi(next_states);
+                 mfi.isValid(); ++mfi) {
+                const amrex::Box& box = mfi.validbox();
+                const auto values = next_states.array(mfi);
+                const auto running =
+                    running_burned_fraction.array(mfi);
+
+                for (int j = box.smallEnd(1);
+                     j <= box.bigEnd(1);
+                     ++j) {
+                    for (int i = box.smallEnd(0);
+                         i <= box.bigEnd(0);
+                         ++i) {
+                        const std::size_t ii =
+                            static_cast<std::size_t>(i);
+                        const std::size_t jj =
+                            static_cast<std::size_t>(j);
+                        const FireCartesianCell2D cell =
+                            burned_before.cell_bounds(ii, jj);
+
+                        const amrex::Real coverage =
+                            fire_perimeter_cell_coverage_fraction(
+                                sample_perimeter,
+                                cell);
+                        const amrex::Real next_burned_fraction =
+                            std::max(
+                                running(i, j, 0),
+                                coverage);
+                        const amrex::Real newly_ignited_fraction =
+                            next_burned_fraction
+                            - running(i, j, 0);
+
+                        const FireCombustionState current =
+                            load_combustion_state(
+                                values,
+                                i,
+                                j);
+                        const FireCombustionAdvance first_half =
+                            advance_fire_combustion(
+                                current,
+                                parameters_,
+                                half_substep_dt_s);
+                        const FireCombustionState with_ignition =
+                            add_fire_combustion_ignition(
+                                first_half.state,
+                                parameters_,
+                                newly_ignited_fraction);
+                        const FireCombustionAdvance second_half =
+                            advance_fire_combustion(
+                                with_ignition,
+                                parameters_,
+                                half_substep_dt_s);
+
+                        store_combustion_state(
+                            values,
+                            i,
+                            j,
+                            second_half.state);
+                        running(i, j, 0) =
+                            next_burned_fraction;
+                    }
+                }
+            }
+        }
+
+        for (amrex::MFIter mfi(next_states);
+             mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto values = next_states.const_array(mfi);
+            const auto running =
+                running_burned_fraction.const_array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    const std::size_t ii =
+                        static_cast<std::size_t>(i);
+                    const std::size_t jj =
+                        static_cast<std::size_t>(j);
+                    const amrex::Real target =
+                        burned_after.burned_fraction(ii, jj);
+                    const FireCombustionState current =
+                        load_combustion_state(
+                            values,
+                            i,
+                            j);
+
+                    require(
+                        fraction_equal(
+                            running(i, j, 0),
+                            target),
+                        "fire combustion temporal sampling does not reproduce endpoint burned history");
+                    require(
+                        fraction_equal(
+                            current.ignited_area_fraction,
+                            target),
+                        "fire combustion endpoint state is not synchronized with burned history");
+                }
+            }
+        }
+    } catch (const std::invalid_argument& error) {
+        local_failure = DistributedFailure::invalid_argument;
+        local_error = error.what();
+    } catch (const std::logic_error& error) {
+        local_failure = DistributedFailure::logic_error;
+        local_error = error.what();
+    } catch (const std::overflow_error& error) {
+        local_failure = DistributedFailure::overflow_error;
+        local_error = error.what();
+    } catch (const std::exception& error) {
+        local_failure = DistributedFailure::runtime_error;
+        local_error = error.what();
+    } catch (...) {
+        local_failure = DistributedFailure::runtime_error;
+        local_error = "unknown local Fire combustion sweep error";
     }
+
+    synchronize_distributed_failure(
+        local_failure,
+        local_error,
+        "distributed Fire combustion sweep");
+
+    std::vector<FireCombustionState> next_canonical =
+        gather_distributed_to_canonical(
+            next_states);
+    const FireCombustionRasterTotals next_totals =
+        totals_for(next_canonical);
 
     const amrex::Real cell_area_m2 =
         geometry_.dx_m * geometry_.dy_m;
-
     amrex::Real newly_consumed_dry_fuel_kg = 0;
     amrex::Real sensible_energy_increment_j = 0;
     amrex::Real water_released_increment_kg = 0;
 
-    for (std::size_t substep = 1;
-         substep <= options_.temporal_substeps;
-         ++substep) {
-        const amrex::Real alpha =
-            static_cast<amrex::Real>(substep)
-            / static_cast<amrex::Real>(
-                options_.temporal_substeps);
-
-        const FirePerimeter sample_perimeter =
-            interpolate_fire_perimeter_linear_sweep(
-                start_perimeter,
-                end_perimeter,
-                alpha);
-
-        for (std::size_t j = 0; j < geometry_.ny; ++j) {
-            for (std::size_t i = 0; i < geometry_.nx; ++i) {
-                const std::size_t index = flat_index(i, j);
-                const FireCartesianCell2D cell =
-                    burned_before.cell_bounds(i, j);
-
-                const amrex::Real coverage =
-                    fire_perimeter_cell_coverage_fraction(
-                        sample_perimeter,
-                        cell);
-                const amrex::Real next_burned_fraction =
-                    std::max(
-                        running_burned_fraction[index],
-                        coverage);
-                const amrex::Real newly_ignited_fraction =
-                    next_burned_fraction
-                    - running_burned_fraction[index];
-
-                const FireCombustionAdvance first_half =
-                    advance_fire_combustion(
-                        next_states[index],
-                        parameters_,
-                        half_substep_dt_s);
-
-                const FireCombustionState with_ignition =
-                    add_fire_combustion_ignition(
-                        first_half.state,
-                        parameters_,
-                        newly_ignited_fraction);
-
-                const FireCombustionAdvance second_half =
-                    advance_fire_combustion(
-                        with_ignition,
-                        parameters_,
-                        half_substep_dt_s);
-
-                newly_consumed_dry_fuel_kg +=
-                    (first_half.newly_consumed_dry_fuel_kg_m2
-                     + second_half.newly_consumed_dry_fuel_kg_m2)
-                    * cell_area_m2;
-                sensible_energy_increment_j +=
-                    (first_half.sensible_energy_increment_j_m2
-                     + second_half.sensible_energy_increment_j_m2)
-                    * cell_area_m2;
-                water_released_increment_kg +=
-                    (first_half.water_released_increment_kg_m2
-                     + second_half.water_released_increment_kg_m2)
-                    * cell_area_m2;
-
-                next_states[index] = second_half.state;
-                running_burned_fraction[index] =
-                    next_burned_fraction;
-            }
-        }
+    for (std::size_t index = 0;
+         index < states_.size();
+         ++index) {
+        newly_consumed_dry_fuel_kg +=
+            (next_canonical[index].consumed_dry_fuel_kg_m2
+             - states_[index].consumed_dry_fuel_kg_m2)
+            * cell_area_m2;
+        sensible_energy_increment_j +=
+            (next_canonical[index].sensible_energy_j_m2
+             - states_[index].sensible_energy_j_m2)
+            * cell_area_m2;
+        water_released_increment_kg +=
+            (next_canonical[index].water_released_kg_m2
+             - states_[index].water_released_kg_m2)
+            * cell_area_m2;
     }
-
-    for (std::size_t j = 0; j < geometry_.ny; ++j) {
-        for (std::size_t i = 0; i < geometry_.nx; ++i) {
-            const std::size_t index = flat_index(i, j);
-            const amrex::Real target =
-                burned_after.burned_fraction(i, j);
-
-            require(
-                fraction_equal(
-                    running_burned_fraction[index],
-                    target),
-                "fire combustion temporal sampling does not reproduce endpoint burned history");
-            require(
-                fraction_equal(
-                    next_states[index].ignited_area_fraction,
-                    target),
-                "fire combustion endpoint state is not synchronized with burned history");
-        }
-    }
-
-    const FireCombustionRasterTotals next_totals =
-        totals_for(next_states);
 
     require_finite_nonnegative(
         newly_consumed_dry_fuel_kg,
@@ -402,7 +845,8 @@ FireCombustionRaster::advance_from_linear_sweep(
         next_totals.water_released_kg,
         "fire combustion raster cumulative water is not finite");
 
-    states_.swap(next_states);
+    states_mf_ = std::move(next_states);
+    states_ = std::move(next_canonical);
 
     return {
         next_totals,

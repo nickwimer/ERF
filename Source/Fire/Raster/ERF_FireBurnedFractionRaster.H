@@ -3,7 +3,9 @@
 
 #include <ERF_FireBurnedFraction.H>
 #include <ERF_FireRasterGeometry.H>
+#include <ERF_FireSurfaceLayout.H>
 
+#include <AMReX_MultiFab.H>
 #include <AMReX_REAL.H>
 
 #include <cstddef>
@@ -37,6 +39,12 @@ struct FireBurnedFractionRasterState
  * FirePerimeter remains authoritative. This raster stores only monotone burn
  * history derived from exact polygon-cell coverage. It deliberately stores no
  * arrival time and no copy of instantaneous coverage.
+ *
+ * Expensive perimeter/cell coverage work is distributed over an AMReX
+ * MultiFab surface layout. During this migration stage, a canonical row-major
+ * vector is retained as a synchronized compatibility representation for the
+ * existing checkpoint/output/combustion APIs. The MultiFab and canonical
+ * vector are committed atomically after a successful distributed update.
  */
 class FireBurnedFractionRaster
 {
@@ -48,6 +56,15 @@ public:
         const FireCartesianRasterGeometry2D& geometry,
         FireBurnedFractionRasterState state);
 
+    FireBurnedFractionRaster(
+        const FireBurnedFractionRaster& other);
+    FireBurnedFractionRaster& operator=(
+        const FireBurnedFractionRaster& other);
+    FireBurnedFractionRaster(
+        FireBurnedFractionRaster&&) noexcept = default;
+    FireBurnedFractionRaster& operator=(
+        FireBurnedFractionRaster&&) noexcept = default;
+
     [[nodiscard]] FireBurnedFractionRasterState
     snapshot_state() const
     {
@@ -58,6 +75,12 @@ public:
     geometry () const noexcept
     {
         return geometry_;
+    }
+
+    [[nodiscard]] const FireSurfaceLayout&
+    surface_layout() const noexcept
+    {
+        return surface_layout_;
     }
 
     [[nodiscard]] std::size_t cell_count () const noexcept
@@ -83,7 +106,17 @@ private:
         std::size_t i,
         std::size_t j) const;
 
+    void scatter_canonical_to_distributed(
+        const std::vector<amrex::Real>& canonical,
+        amrex::MultiFab& distributed) const;
+
+    [[nodiscard]] std::vector<amrex::Real>
+    gather_distributed_to_canonical(
+        const amrex::MultiFab& distributed) const;
+
     FireCartesianRasterGeometry2D geometry_{};
+    FireSurfaceLayout surface_layout_;
+    amrex::MultiFab burned_fraction_mf_;
     std::vector<amrex::Real> burned_fraction_;
 };
 
