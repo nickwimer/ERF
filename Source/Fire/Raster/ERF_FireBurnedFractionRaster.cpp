@@ -37,16 +37,11 @@ FireBurnedFractionRaster::FireBurnedFractionRaster (
           0,
           fire_surface_mf_info())
 {
-    const std::size_t cell_count =
-        detail::validate_fire_cartesian_raster_geometry(
-            geometry_);
+    (void)detail::validate_fire_cartesian_raster_geometry(
+        geometry_);
 
-    burned_fraction_.assign(
-        cell_count,
-        amrex::Real(0.0));
-    scatter_canonical_to_distributed(
-        burned_fraction_,
-        burned_fraction_mf_);
+    burned_fraction_mf_.setVal(amrex::Real(0.0));
+    burned_area_m2_ = amrex::Real(0.0);
 }
 
 FireBurnedFractionRaster::FireBurnedFractionRaster (
@@ -79,9 +74,25 @@ FireBurnedFractionRaster::FireBurnedFractionRaster (
         }
     }
 
-    burned_fraction_ = std::move(state.burned_fraction);
+    burned_area_m2_ = amrex::Real(0.0);
+    for (std::size_t j = 0; j < geometry_.ny; ++j) {
+        for (std::size_t i = 0; i < geometry_.nx; ++i) {
+            const std::size_t index =
+                flat_index(i, j);
+            const FireCartesianCell2D cell =
+                cell_bounds(i, j);
+            burned_area_m2_ +=
+                state.burned_fraction[index]
+                * detail::fire_cartesian_cell_area_m2(cell);
+        }
+    }
+    if (!std::isfinite(burned_area_m2_)) {
+        throw std::overflow_error(
+            "restored fire burned area is not finite");
+    }
+
     scatter_canonical_to_distributed(
-        burned_fraction_,
+        state.burned_fraction,
         burned_fraction_mf_);
 }
 
@@ -95,10 +106,10 @@ FireBurnedFractionRaster::FireBurnedFractionRaster(
           1,
           0,
           fire_surface_mf_info()),
-      burned_fraction_(other.burned_fraction_)
+      burned_area_m2_(other.burned_area_m2_)
 {
-    scatter_canonical_to_distributed(
-        burned_fraction_,
+    copy_distributed_state(
+        other.burned_fraction_mf_,
         burned_fraction_mf_);
 }
 
@@ -111,6 +122,104 @@ FireBurnedFractionRaster::operator=(
         *this = std::move(copy);
     }
     return *this;
+}
+
+FireBurnedFractionRasterState
+FireBurnedFractionRaster::snapshot_state() const
+{
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "Fire burned-fraction snapshot_state is single-rank only; "
+            "use collective_snapshot_state_to_io_rank in parallel");
+    }
+
+    FireBurnedFractionRasterState state;
+    state.burned_fraction.assign(
+        geometry_.nx * geometry_.ny,
+        amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(burned_fraction_mf_);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values =
+            burned_fraction_mf_.const_array(mfi);
+
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
+                state.burned_fraction[
+                    flat_index(
+                        static_cast<std::size_t>(i),
+                        static_cast<std::size_t>(j))] =
+                            values(i, j, 0);
+            }
+        }
+    }
+
+    return state;
+}
+
+FireBurnedFractionRasterState
+FireBurnedFractionRaster::
+collective_snapshot_state_to_io_rank() const
+{
+    amrex::BoxArray io_boxes{
+        surface_layout_.cell_domain()};
+    amrex::Vector<int> processor_map(
+        1,
+        amrex::ParallelDescriptor::IOProcessorNumber());
+    const amrex::DistributionMapping io_dm(
+        std::move(processor_map));
+
+    amrex::MultiFab gathered(
+        io_boxes,
+        io_dm,
+        1,
+        0,
+        fire_surface_mf_info());
+    gathered.ParallelCopy(
+        burned_fraction_mf_,
+        0,
+        0,
+        1,
+        0,
+        0);
+
+    FireBurnedFractionRasterState state;
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        return state;
+    }
+
+    state.burned_fraction.assign(
+        geometry_.nx * geometry_.ny,
+        amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(gathered);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values = gathered.const_array(mfi);
+
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
+                state.burned_fraction[
+                    flat_index(
+                        static_cast<std::size_t>(i),
+                        static_cast<std::size_t>(j))] =
+                            values(i, j, 0);
+            }
+        }
+    }
+
+    return state;
 }
 
 std::size_t
@@ -136,26 +245,38 @@ FireBurnedFractionRaster::burned_fraction (
     std::size_t i,
     std::size_t j) const
 {
-    return burned_fraction_[flat_index(i, j)];
+    (void)flat_index(i, j);
+
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "Fire burned-fraction scalar cell access is single-rank only; "
+            "parallel Fire physics must use distributed_burned_fraction");
+    }
+
+    const amrex::IntVect cell(
+        static_cast<int>(i),
+        static_cast<int>(j),
+        0);
+    for (amrex::MFIter mfi(burned_fraction_mf_);
+         mfi.isValid();
+         ++mfi) {
+        if (mfi.validbox().contains(cell)) {
+            return
+                burned_fraction_mf_.const_array(mfi)(
+                    cell[0],
+                    cell[1],
+                    cell[2]);
+        }
+    }
+
+    throw std::logic_error(
+        "single-rank Fire burned-fraction cell is not locally represented");
 }
 
 amrex::Real
 FireBurnedFractionRaster::burned_area_m2 () const noexcept
 {
-    amrex::Real area_m2 = 0.0;
-
-    for (std::size_t j = 0; j < geometry_.ny; ++j) {
-        for (std::size_t i = 0; i < geometry_.nx; ++i) {
-            const std::size_t index =
-                flat_index(i, j);
-            const FireCartesianCell2D cell =
-                cell_bounds(i, j);
-            area_m2 += burned_fraction_[index]
-                * detail::fire_cartesian_cell_area_m2(cell);
-        }
-    }
-
-    return area_m2;
+    return burned_area_m2_;
 }
 
 void
@@ -192,44 +313,43 @@ FireBurnedFractionRaster::scatter_canonical_to_distributed(
     }
 }
 
-std::vector<amrex::Real>
-FireBurnedFractionRaster::gather_distributed_to_canonical(
-    const amrex::MultiFab& distributed) const
+void
+FireBurnedFractionRaster::copy_distributed_state(
+    const amrex::MultiFab& source,
+    amrex::MultiFab& destination) const
 {
-    if (distributed.boxArray() != surface_layout_.box_array()
-        || distributed.DistributionMap()
-            != surface_layout_.distribution_map()
-        || distributed.nComp() != 1
-        || distributed.nGrow() != 0) {
+    const auto matches_layout =
+        [this](const amrex::MultiFab& field) {
+            return field.boxArray()
+                    == surface_layout_.box_array()
+                && field.DistributionMap()
+                    == surface_layout_.distribution_map()
+                && field.nComp() == 1
+                && field.nGrow() == 0;
+        };
+    if (!matches_layout(source)
+        || !matches_layout(destination)) {
         throw std::invalid_argument(
             "Fire burned-fraction MultiFab does not match its surface layout");
     }
 
-    amrex::FArrayBox gathered(
-        surface_layout_.cell_domain(),
-        1,
-        amrex::The_Pinned_Arena());
-    distributed.copyTo(
-        gathered,
-        0,
-        0,
-        1,
-        0);
-    const auto values = gathered.const_array();
+    for (amrex::MFIter mfi(destination);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto src = source.const_array(mfi);
+        const auto dst = destination.array(mfi);
 
-    std::vector<amrex::Real> canonical(
-        geometry_.nx * geometry_.ny,
-        amrex::Real(0.0));
-    for (std::size_t j = 0; j < geometry_.ny; ++j) {
-        for (std::size_t i = 0; i < geometry_.nx; ++i) {
-            canonical[flat_index(i, j)] =
-                values(
-                    static_cast<int>(i),
-                    static_cast<int>(j),
-                    0);
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
+                dst(i, j, 0) = src(i, j, 0);
+            }
         }
     }
-    return canonical;
 }
 
 FireRasterBurnedAreaUpdate
@@ -243,11 +363,18 @@ FireBurnedFractionRaster::update_from_perimeter (
         0,
         fire_surface_mf_info());
 
+    amrex::Real local_newly_burned_area_m2 =
+        amrex::Real(0.0);
+    amrex::Real local_burned_area_m2 =
+        amrex::Real(0.0);
+
     std::string local_error;
     try {
         for (amrex::MFIter mfi(next_burned_fraction);
              mfi.isValid(); ++mfi) {
             const amrex::Box& box = mfi.validbox();
+            const auto current =
+                burned_fraction_mf_.const_array(mfi);
             const auto next = next_burned_fraction.array(mfi);
 
             for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
@@ -256,8 +383,6 @@ FireBurnedFractionRaster::update_from_perimeter (
                         static_cast<std::size_t>(i);
                     const std::size_t jj =
                         static_cast<std::size_t>(j);
-                    const std::size_t index =
-                        flat_index(ii, jj);
                     const FireCartesianCell2D cell =
                         cell_bounds(ii, jj);
                     const amrex::Real coverage =
@@ -265,11 +390,22 @@ FireBurnedFractionRaster::update_from_perimeter (
                             perimeter,
                             cell);
 
+                    const amrex::Real previous =
+                        current(i, j, 0);
                     const FireBurnedFractionUpdate update =
                         update_fire_burned_fraction(
-                            burned_fraction_[index],
+                            previous,
                             coverage);
                     next(i, j, 0) = update.burned_fraction;
+
+                    const amrex::Real represented_area_m2 =
+                        detail::fire_cartesian_cell_area_m2(cell);
+                    local_newly_burned_area_m2 +=
+                        (update.burned_fraction - previous)
+                        * represented_area_m2;
+                    local_burned_area_m2 +=
+                        update.burned_fraction
+                        * represented_area_m2;
                 }
             }
         }
@@ -291,32 +427,14 @@ FireBurnedFractionRaster::update_from_perimeter (
             "distributed Fire burned-fraction update failed on another MPI rank");
     }
 
-    std::vector<amrex::Real> next_canonical =
-        gather_distributed_to_canonical(
-            next_burned_fraction);
-
-    amrex::Real newly_burned_area_m2 = 0.0;
-    amrex::Real burned_area_m2 = 0.0;
-
-    // Preserve the canonical row-major accumulation order used by the serial
-    // implementation. This keeps extensive diagnostics decomposition-neutral
-    // while cell geometry work itself is distributed.
-    for (std::size_t j = 0; j < geometry_.ny; ++j) {
-        for (std::size_t i = 0; i < geometry_.nx; ++i) {
-            const std::size_t index = flat_index(i, j);
-            const FireCartesianCell2D cell =
-                cell_bounds(i, j);
-            const amrex::Real represented_area_m2 =
-                detail::fire_cartesian_cell_area_m2(cell);
-            const amrex::Real newly_burned_fraction =
-                next_canonical[index] - burned_fraction_[index];
-
-            newly_burned_area_m2 +=
-                newly_burned_fraction * represented_area_m2;
-            burned_area_m2 +=
-                next_canonical[index] * represented_area_m2;
-        }
-    }
+    amrex::Real newly_burned_area_m2 =
+        local_newly_burned_area_m2;
+    amrex::Real burned_area_m2 =
+        local_burned_area_m2;
+    amrex::ParallelDescriptor::ReduceRealSum(
+        newly_burned_area_m2);
+    amrex::ParallelDescriptor::ReduceRealSum(
+        burned_area_m2);
 
     if (!std::isfinite(newly_burned_area_m2)
         || !std::isfinite(burned_area_m2)) {
@@ -325,7 +443,7 @@ FireBurnedFractionRaster::update_from_perimeter (
     }
 
     burned_fraction_mf_ = std::move(next_burned_fraction);
-    burned_fraction_ = std::move(next_canonical);
+    burned_area_m2_ = burned_area_m2;
 
     return {
         burned_area_m2,

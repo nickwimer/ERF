@@ -135,8 +135,26 @@ public:
         return config_;
     }
 
+    /**
+     * Return one canonical runtime snapshot in a single-rank runtime.
+     *
+     * This accessor is noncollective. Parallel checkpoint/output code must use
+     * collective_snapshot_state_to_io_rank() so ordinary runtime access never
+     * hides full-domain communication.
+     */
     [[nodiscard]] ERFFireSpreadRuntimeState
     snapshot_state() const;
+
+    /**
+     * Collectively pack distributed raster state onto the AMReX IO rank.
+     *
+     * Every rank must call this method in the same collective order. The
+     * returned perimeter/configuration/scalars are valid on every rank, while
+     * full canonical raster vectors are populated only on IOProcessor().
+     * Ordinary snapshot_state() remains deliberately noncollective.
+     */
+    [[nodiscard]] ERFFireSpreadRuntimeState
+    collective_snapshot_state_to_io_rank() const;
 
     [[nodiscard]] static ERFFireSpreadRuntime
     restore_from_state(ERFFireSpreadRuntimeState state);

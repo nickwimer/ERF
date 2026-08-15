@@ -235,20 +235,18 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         perimeter_,
         config_.remesh_options);
 
-    const auto arrival_state =
-        first_arrival_.snapshot_state();
     require(
-        arrival_state.has_initial_condition,
+        first_arrival_.has_initial_condition(),
         "restored fire runtime requires initialized first-arrival history");
 
-    if (arrival_state.has_committed_sweep) {
+    if (first_arrival_.has_committed_sweep()) {
         require(
-            arrival_state.last_sweep_end_time_s
+            first_arrival_.last_sweep_end_time_s()
                 == current_time_s_,
             "restored fire runtime clock does not match first-arrival history");
     } else {
         require(
-            arrival_state.initial_condition_time_s
+            first_arrival_.initial_condition_time_s()
                 == current_time_s_,
             "restored fire runtime initial clock does not match first-arrival history");
     }
@@ -278,16 +276,6 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
             "restored fire perimeter lies outside its raster geometry");
     }
 
-    for (std::size_t j = 0; j < geometry.ny; ++j) {
-        for (std::size_t i = 0; i < geometry.nx; ++i) {
-            require(
-                fraction_equal(
-                    burned_fraction_.burned_fraction(i, j),
-                    combustion_.state(i, j)
-                        .ignited_area_fraction),
-                "restored fire combustion history is not synchronized with burned fraction");
-        }
-    }
 }
 
 ERFFireSpreadRuntimeState
@@ -302,10 +290,47 @@ ERFFireSpreadRuntime::snapshot_state() const
         current_time_s_};
 }
 
+ERFFireSpreadRuntimeState
+ERFFireSpreadRuntime::
+collective_snapshot_state_to_io_rank() const
+{
+    FireBurnedFractionRasterState burned =
+        burned_fraction_
+            .collective_snapshot_state_to_io_rank();
+    FireFirstArrivalRasterState arrival =
+        first_arrival_
+            .collective_snapshot_state_to_io_rank();
+    FireCombustionRasterState combustion =
+        combustion_
+            .collective_snapshot_state_to_io_rank();
+
+    return {
+        config_,
+        perimeter_.vertices_m(),
+        std::move(burned),
+        std::move(arrival),
+        std::move(combustion),
+        current_time_s_};
+}
+
 ERFFireSpreadRuntime
 ERFFireSpreadRuntime::restore_from_state(
     ERFFireSpreadRuntimeState state)
 {
+    if (state.burned_fraction.burned_fraction.size()
+        == state.combustion.cells.size()) {
+        for (std::size_t index = 0;
+             index < state.burned_fraction.burned_fraction.size();
+             ++index) {
+            require(
+                fraction_equal(
+                    state.burned_fraction.burned_fraction[index],
+                    state.combustion.cells[index]
+                        .ignited_area_fraction),
+                "restored fire combustion history is not synchronized with burned fraction");
+        }
+    }
+
     return ERFFireSpreadRuntime(
         std::move(state),
         RestoreStateTag{});

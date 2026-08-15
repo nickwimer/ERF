@@ -278,6 +278,70 @@ FireCombustionRaster::operator=(
     return *this;
 }
 
+FireCombustionRasterState
+FireCombustionRaster::
+collective_snapshot_state_to_io_rank() const
+{
+    amrex::BoxArray io_boxes{
+        surface_layout_.cell_domain()};
+    amrex::Vector<int> processor_map(
+        1,
+        amrex::ParallelDescriptor::IOProcessorNumber());
+    const amrex::DistributionMapping io_dm(
+        std::move(processor_map));
+
+    amrex::MultiFab gathered(
+        io_boxes,
+        io_dm,
+        combustion_component_count,
+        0,
+        fire_surface_mf_info());
+    gathered.ParallelCopy(
+        states_mf_,
+        0,
+        0,
+        combustion_component_count,
+        0,
+        0);
+
+    FireCombustionRasterState state;
+    state.initialized = initialized_;
+
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        return state;
+    }
+
+    state.cells.assign(
+        geometry_.nx * geometry_.ny,
+        FireCombustionState{});
+
+    for (amrex::MFIter mfi(gathered);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values = gathered.const_array(mfi);
+
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
+                state.cells[
+                    flat_index(
+                        static_cast<std::size_t>(i),
+                        static_cast<std::size_t>(j))] =
+                            load_combustion_state(
+                                values,
+                                i,
+                                j);
+            }
+        }
+    }
+
+    return state;
+}
+
 std::size_t
 FireCombustionRaster::flat_index(
     std::size_t i,
@@ -455,6 +519,17 @@ FireCombustionRaster::initialize_from_burned_fraction(
         same_geometry(geometry_, burned_fraction.geometry()),
         "fire combustion raster initialization geometry mismatch");
 
+    const amrex::MultiFab& burned_fraction_mf =
+        burned_fraction.distributed_burned_fraction();
+    require(
+        burned_fraction_mf.boxArray()
+                == surface_layout_.box_array()
+            && burned_fraction_mf.DistributionMap()
+                == surface_layout_.distribution_map()
+            && burned_fraction_mf.nComp() == 1
+            && burned_fraction_mf.nGrow() == 0,
+        "fire combustion initialization requires co-located distributed burned history");
+
     amrex::MultiFab next_states(
         surface_layout_.box_array(),
         surface_layout_.distribution_map(),
@@ -474,6 +549,8 @@ FireCombustionRaster::initialize_from_burned_fraction(
              mfi.isValid(); ++mfi) {
             const amrex::Box& box = mfi.validbox();
             const auto values = next_states.array(mfi);
+            const auto burned =
+                burned_fraction_mf.const_array(mfi);
 
             for (int j = box.smallEnd(1);
                  j <= box.bigEnd(1);
@@ -494,9 +571,7 @@ FireCombustionRaster::initialize_from_burned_fraction(
                         add_fire_combustion_ignition(
                             current,
                             parameters_,
-                            burned_fraction.burned_fraction(
-                                ii,
-                                jj));
+                            burned(i, j, 0));
                     store_combustion_state(
                         values,
                         i,
@@ -571,6 +646,25 @@ FireCombustionRaster::advance_from_linear_sweep(
         same_geometry(geometry_, burned_before.geometry())
             && same_geometry(geometry_, burned_after.geometry()),
         "fire combustion raster advance geometry mismatch");
+
+    const amrex::MultiFab& burned_before_mf =
+        burned_before.distributed_burned_fraction();
+    const amrex::MultiFab& burned_after_mf =
+        burned_after.distributed_burned_fraction();
+    const auto matches_burned_layout =
+        [this](const amrex::MultiFab& field) {
+            return field.boxArray()
+                    == surface_layout_.box_array()
+                && field.DistributionMap()
+                    == surface_layout_.distribution_map()
+                && field.nComp() == 1
+                && field.nGrow() == 0;
+        };
+    require(
+        matches_burned_layout(burned_before_mf)
+            && matches_burned_layout(burned_after_mf),
+        "fire combustion advance requires co-located distributed burned history");
+
     require(
         start_perimeter.size() == end_perimeter.size(),
         "fire combustion raster sweep requires matching perimeter vertex counts");
@@ -619,6 +713,10 @@ FireCombustionRaster::advance_from_linear_sweep(
             const auto values = next_states.const_array(mfi);
             const auto running =
                 running_burned_fraction.array(mfi);
+            const auto before_values =
+                burned_before_mf.const_array(mfi);
+            const auto after_values =
+                burned_after_mf.const_array(mfi);
 
             for (int j = box.smallEnd(1);
                  j <= box.bigEnd(1);
@@ -626,14 +724,10 @@ FireCombustionRaster::advance_from_linear_sweep(
                 for (int i = box.smallEnd(0);
                      i <= box.bigEnd(0);
                      ++i) {
-                    const std::size_t ii =
-                        static_cast<std::size_t>(i);
-                    const std::size_t jj =
-                        static_cast<std::size_t>(j);
                     const amrex::Real before =
-                        burned_before.burned_fraction(ii, jj);
+                        before_values(i, j, 0);
                     const amrex::Real after =
-                        burned_after.burned_fraction(ii, jj);
+                        after_values(i, j, 0);
                     const FireCombustionState current =
                         load_combustion_state(
                             values,
@@ -740,6 +834,8 @@ FireCombustionRaster::advance_from_linear_sweep(
             const auto values = next_states.const_array(mfi);
             const auto running =
                 running_burned_fraction.const_array(mfi);
+            const auto target_values =
+                burned_after_mf.const_array(mfi);
 
             for (int j = box.smallEnd(1);
                  j <= box.bigEnd(1);
@@ -747,12 +843,8 @@ FireCombustionRaster::advance_from_linear_sweep(
                 for (int i = box.smallEnd(0);
                      i <= box.bigEnd(0);
                      ++i) {
-                    const std::size_t ii =
-                        static_cast<std::size_t>(i);
-                    const std::size_t jj =
-                        static_cast<std::size_t>(j);
                     const amrex::Real target =
-                        burned_after.burned_fraction(ii, jj);
+                        target_values(i, j, 0);
                     const FireCombustionState current =
                         load_combustion_state(
                             values,

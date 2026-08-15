@@ -591,6 +591,11 @@ ERF::WriteCheckpointFile () const
                 initial_fire_runtime.get();
         }
 
+        const ERFFire::ERFFireSpreadRuntimeState
+            packed_fire_state =
+                fire_runtime_for_checkpoint
+                    ->collective_snapshot_state_to_io_rank();
+
         if (ParallelDescriptor::IOProcessor()) {
             const std::string fire_state_name =
                 checkpointname + "/FireState";
@@ -605,7 +610,7 @@ ERF::WriteCheckpointFile () const
 
             try {
                 ERFFire::write_erf_fire_checkpoint_state(
-                    *fire_runtime_for_checkpoint,
+                    packed_fire_state,
                     m_fire_runtime_options,
                     fire_state);
             } catch (const std::exception& error) {

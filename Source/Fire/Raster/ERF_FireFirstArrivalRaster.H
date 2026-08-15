@@ -52,9 +52,10 @@ struct FireFirstArrivalRasterState
  * time; gaps, overlaps, and out-of-order updates are rejected.
  *
  * Expensive cell-arrival queries are distributed over the AMReX Fire surface
- * layout. During this migration stage, canonical row-major vectors remain as
- * synchronized compatibility state for checkpoint/output and existing scalar
- * accessors. Distributed and canonical state are committed atomically.
+ * layout. Persistent raster state is authoritative only in the distributed
+ * MultiFabs. Full canonical row-major vectors are materialized only for an
+ * explicit single-rank snapshot or collective IO-rank packing; chronology and
+ * arrived-cell count remain replicated O(1) metadata.
  */
 class FireFirstArrivalRaster
 {
@@ -75,17 +76,25 @@ public:
     FireFirstArrivalRaster& operator=(
         FireFirstArrivalRaster&&) noexcept = default;
 
+    /**
+     * Return one canonical row-major snapshot in a single-rank runtime.
+     *
+     * This accessor is deliberately noncollective. Multi-rank callers must
+     * use collective_snapshot_state_to_io_rank() so ordinary state access
+     * never hides full-domain communication.
+     */
     [[nodiscard]] FireFirstArrivalRasterState
-    snapshot_state() const
-    {
-        return {
-            arrived_,
-            first_arrival_time_s_,
-            has_initial_condition_,
-            initial_condition_time_s_,
-            has_committed_sweep_,
-            last_sweep_end_time_s_};
-    }
+    snapshot_state() const;
+
+    /**
+     * Collectively pack distributed arrival state onto the AMReX IO rank.
+     *
+     * Every rank must participate. Canonical mask/time vectors are populated
+     * only on IOProcessor(); scalar chronology metadata is returned on every
+     * rank. Non-IO ranks therefore retain O(1) result storage.
+     */
+    [[nodiscard]] FireFirstArrivalRasterState
+    collective_snapshot_state_to_io_rank() const;
 
     [[nodiscard]] const FireCartesianRasterGeometry2D&
     geometry () const noexcept
@@ -101,7 +110,7 @@ public:
 
     [[nodiscard]] std::size_t cell_count () const noexcept
     {
-        return arrived_.size();
+        return geometry_.nx * geometry_.ny;
     }
 
     [[nodiscard]] FireCartesianCell2D cell_bounds(
@@ -122,6 +131,28 @@ public:
         std::size_t j) const;
 
     [[nodiscard]] std::size_t arrived_cell_count() const noexcept;
+
+    [[nodiscard]] bool has_initial_condition() const noexcept
+    {
+        return has_initial_condition_;
+    }
+
+    [[nodiscard]] amrex::Real
+    initial_condition_time_s() const noexcept
+    {
+        return initial_condition_time_s_;
+    }
+
+    [[nodiscard]] bool has_committed_sweep() const noexcept
+    {
+        return has_committed_sweep_;
+    }
+
+    [[nodiscard]] amrex::Real
+    last_sweep_end_time_s() const noexcept
+    {
+        return last_sweep_end_time_s_;
+    }
 
     /**
      * Seed ignition-area arrival history at one exact initial time.
@@ -161,19 +192,17 @@ private:
         amrex::iMultiFab& arrived_mf,
         amrex::MultiFab& first_arrival_time_mf) const;
 
-    [[nodiscard]] std::pair<
-        std::vector<std::uint8_t>,
-        std::vector<amrex::Real>>
-    gather_distributed_to_canonical(
-        const amrex::iMultiFab& arrived_mf,
-        const amrex::MultiFab& first_arrival_time_mf) const;
+    void copy_distributed_state(
+        const amrex::iMultiFab& source_arrived,
+        const amrex::MultiFab& source_times,
+        amrex::iMultiFab& destination_arrived,
+        amrex::MultiFab& destination_times) const;
 
     FireCartesianRasterGeometry2D geometry_{};
     FireSurfaceLayout surface_layout_;
     amrex::iMultiFab arrived_mf_;
     amrex::MultiFab first_arrival_time_mf_;
-    std::vector<std::uint8_t> arrived_;
-    std::vector<amrex::Real> first_arrival_time_s_;
+    std::size_t arrived_cell_count_{0};
     bool has_initial_condition_{false};
     amrex::Real initial_condition_time_s_{};
     bool has_committed_sweep_{false};

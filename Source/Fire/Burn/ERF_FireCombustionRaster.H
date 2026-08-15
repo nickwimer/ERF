@@ -74,6 +74,13 @@ struct FireCombustionRasterState
 class FireCombustionRaster
 {
 public:
+    static constexpr int ignited_area_fraction_comp = 0;
+    static constexpr int remaining_dry_fuel_comp = 1;
+    static constexpr int consumed_dry_fuel_comp = 2;
+    static constexpr int sensible_energy_comp = 3;
+    static constexpr int water_released_comp = 4;
+    static constexpr int component_count = 5;
+
     FireCombustionRaster(
         FireCartesianRasterGeometry2D geometry,
         FireCombustionParameters parameters,
@@ -100,6 +107,15 @@ public:
         return {states_, initialized_};
     }
 
+    /**
+     * Collectively pack distributed combustion state onto the AMReX IO rank.
+     *
+     * Every rank must participate. The canonical cell vector is populated
+     * only on IOProcessor(); the initialized flag is returned on every rank.
+     */
+    [[nodiscard]] FireCombustionRasterState
+    collective_snapshot_state_to_io_rank() const;
+
     [[nodiscard]] const FireCartesianRasterGeometry2D&
     geometry() const noexcept
     {
@@ -110,6 +126,18 @@ public:
     surface_layout() const noexcept
     {
         return surface_layout_;
+    }
+
+    /**
+     * Read-only authoritative distributed combustion state.
+     *
+     * Co-located Fire physics should consume this view directly instead of
+     * routing local cell reads through the canonical compatibility vector.
+     */
+    [[nodiscard]] const amrex::MultiFab&
+    distributed_states() const noexcept
+    {
+        return states_mf_;
     }
 
     [[nodiscard]] const FireCombustionParameters&

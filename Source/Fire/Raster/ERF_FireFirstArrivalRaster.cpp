@@ -46,21 +46,12 @@ FireFirstArrivalRaster::FireFirstArrivalRaster (
           0,
           fire_surface_mf_info())
 {
-    const std::size_t cell_count =
-        detail::validate_fire_cartesian_raster_geometry(
-            geometry_);
+    (void)detail::validate_fire_cartesian_raster_geometry(
+        geometry_);
 
-    arrived_.assign(
-        cell_count,
-        std::uint8_t(0));
-    first_arrival_time_s_.assign(
-        cell_count,
-        amrex::Real(0.0));
-    scatter_canonical_to_distributed(
-        arrived_,
-        first_arrival_time_s_,
-        arrived_mf_,
-        first_arrival_time_mf_);
+    arrived_mf_.setVal(0);
+    first_arrival_time_mf_.setVal(amrex::Real(0.0));
+    arrived_cell_count_ = 0;
 }
 
 FireFirstArrivalRaster::FireFirstArrivalRaster (
@@ -158,9 +149,7 @@ FireFirstArrivalRaster::FireFirstArrivalRaster (
             "restored fire first-arrival state has arrived cells without initialization");
     }
 
-    arrived_ = std::move(state.arrived);
-    first_arrival_time_s_ =
-        std::move(state.first_arrival_time_s);
+    arrived_cell_count_ = arrived_count;
     has_initial_condition_ =
         state.has_initial_condition;
     initial_condition_time_s_ =
@@ -171,8 +160,8 @@ FireFirstArrivalRaster::FireFirstArrivalRaster (
         state.last_sweep_end_time_s;
 
     scatter_canonical_to_distributed(
-        arrived_,
-        first_arrival_time_s_,
+        state.arrived,
+        state.first_arrival_time_s,
         arrived_mf_,
         first_arrival_time_mf_);
 }
@@ -193,16 +182,15 @@ FireFirstArrivalRaster::FireFirstArrivalRaster(
           1,
           0,
           fire_surface_mf_info()),
-      arrived_(other.arrived_),
-      first_arrival_time_s_(other.first_arrival_time_s_),
+      arrived_cell_count_(other.arrived_cell_count_),
       has_initial_condition_(other.has_initial_condition_),
       initial_condition_time_s_(other.initial_condition_time_s_),
       has_committed_sweep_(other.has_committed_sweep_),
       last_sweep_end_time_s_(other.last_sweep_end_time_s_)
 {
-    scatter_canonical_to_distributed(
-        arrived_,
-        first_arrival_time_s_,
+    copy_distributed_state(
+        other.arrived_mf_,
+        other.first_arrival_time_mf_,
         arrived_mf_,
         first_arrival_time_mf_);
 }
@@ -216,6 +204,160 @@ FireFirstArrivalRaster::operator=(
         *this = std::move(copy);
     }
     return *this;
+}
+
+FireFirstArrivalRasterState
+FireFirstArrivalRaster::snapshot_state() const
+{
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "Fire first-arrival snapshot_state is single-rank only; "
+            "use collective_snapshot_state_to_io_rank in parallel");
+    }
+
+    FireFirstArrivalRasterState state;
+    state.arrived.assign(
+        geometry_.nx * geometry_.ny,
+        std::uint8_t(0));
+    state.first_arrival_time_s.assign(
+        geometry_.nx * geometry_.ny,
+        amrex::Real(0.0));
+    state.has_initial_condition =
+        has_initial_condition_;
+    state.initial_condition_time_s =
+        initial_condition_time_s_;
+    state.has_committed_sweep =
+        has_committed_sweep_;
+    state.last_sweep_end_time_s =
+        last_sweep_end_time_s_;
+
+    for (amrex::MFIter mfi(arrived_mf_);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto mask = arrived_mf_.const_array(mfi);
+        const auto times =
+            first_arrival_time_mf_.const_array(mfi);
+
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
+                const int value = mask(i, j, 0);
+                if (value != 0 && value != 1) {
+                    throw std::logic_error(
+                        "distributed Fire first-arrival mask is not 0 or 1");
+                }
+                const std::size_t index =
+                    flat_index(
+                        static_cast<std::size_t>(i),
+                        static_cast<std::size_t>(j));
+                state.arrived[index] =
+                    static_cast<std::uint8_t>(value);
+                state.first_arrival_time_s[index] =
+                    times(i, j, 0);
+            }
+        }
+    }
+
+    return state;
+}
+
+FireFirstArrivalRasterState
+FireFirstArrivalRaster::
+collective_snapshot_state_to_io_rank() const
+{
+    amrex::BoxArray io_boxes{
+        surface_layout_.cell_domain()};
+    amrex::Vector<int> processor_map(
+        1,
+        amrex::ParallelDescriptor::IOProcessorNumber());
+    const amrex::DistributionMapping io_dm(
+        std::move(processor_map));
+
+    amrex::iMultiFab gathered_arrived(
+        io_boxes,
+        io_dm,
+        1,
+        0,
+        fire_surface_mf_info());
+    amrex::MultiFab gathered_times(
+        io_boxes,
+        io_dm,
+        1,
+        0,
+        fire_surface_mf_info());
+
+    gathered_arrived.ParallelCopy(
+        arrived_mf_,
+        0,
+        0,
+        1,
+        0,
+        0);
+    gathered_times.ParallelCopy(
+        first_arrival_time_mf_,
+        0,
+        0,
+        1,
+        0,
+        0);
+
+    FireFirstArrivalRasterState state;
+    state.has_initial_condition =
+        has_initial_condition_;
+    state.initial_condition_time_s =
+        initial_condition_time_s_;
+    state.has_committed_sweep =
+        has_committed_sweep_;
+    state.last_sweep_end_time_s =
+        last_sweep_end_time_s_;
+
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        return state;
+    }
+
+    const std::size_t cell_count =
+        geometry_.nx * geometry_.ny;
+    state.arrived.assign(
+        cell_count,
+        std::uint8_t(0));
+    state.first_arrival_time_s.assign(
+        cell_count,
+        amrex::Real(0.0));
+
+    for (amrex::MFIter mfi(gathered_arrived);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto mask =
+            gathered_arrived.const_array(mfi);
+        const auto times =
+            gathered_times.const_array(mfi);
+
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
+                const int value = mask(i, j, 0);
+
+                const std::size_t index =
+                    flat_index(
+                        static_cast<std::size_t>(i),
+                        static_cast<std::size_t>(j));
+                state.arrived[index] =
+                    static_cast<std::uint8_t>(value);
+                state.first_arrival_time_s[index] =
+                    times(i, j, 0);
+            }
+        }
+    }
+
+    return state;
 }
 
 std::size_t
@@ -241,7 +383,30 @@ FireFirstArrivalRaster::has_arrived (
     std::size_t i,
     std::size_t j) const
 {
-    return arrived_[flat_index(i, j)] != std::uint8_t(0);
+    (void)flat_index(i, j);
+
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "Fire first-arrival scalar cell access is single-rank only; "
+            "parallel code must use distributed state or collective packing");
+    }
+
+    const amrex::IntVect cell(
+        static_cast<int>(i),
+        static_cast<int>(j),
+        0);
+    for (amrex::MFIter mfi(arrived_mf_);
+         mfi.isValid();
+         ++mfi) {
+        if (mfi.validbox().contains(cell)) {
+            return arrived_mf_.const_array(mfi)(
+                       cell[0], cell[1], cell[2])
+                != 0;
+        }
+    }
+
+    throw std::logic_error(
+        "single-rank Fire first-arrival cell is not locally represented");
 }
 
 amrex::Real
@@ -249,28 +414,44 @@ FireFirstArrivalRaster::first_arrival_time_s (
     std::size_t i,
     std::size_t j) const
 {
-    const std::size_t index = flat_index(i, j);
+    (void)flat_index(i, j);
 
-    if (arrived_[index] == std::uint8_t(0)) {
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
         throw std::logic_error(
-            "Fire first-arrival time requested for a cell that has not arrived");
+            "Fire first-arrival scalar cell access is single-rank only; "
+            "parallel code must use distributed state or collective packing");
     }
 
-    return first_arrival_time_s_[index];
+    const amrex::IntVect cell(
+        static_cast<int>(i),
+        static_cast<int>(j),
+        0);
+    for (amrex::MFIter mfi(arrived_mf_);
+         mfi.isValid();
+         ++mfi) {
+        if (!mfi.validbox().contains(cell)) {
+            continue;
+        }
+
+        if (arrived_mf_.const_array(mfi)(
+                cell[0], cell[1], cell[2])
+            == 0) {
+            throw std::logic_error(
+                "Fire first-arrival time requested for a cell that has not arrived");
+        }
+
+        return first_arrival_time_mf_.const_array(mfi)(
+            cell[0], cell[1], cell[2]);
+    }
+
+    throw std::logic_error(
+        "single-rank Fire first-arrival cell is not locally represented");
 }
 
 std::size_t
 FireFirstArrivalRaster::arrived_cell_count () const noexcept
 {
-    std::size_t count = 0;
-
-    for (const std::uint8_t arrived : arrived_) {
-        if (arrived != std::uint8_t(0)) {
-            ++count;
-        }
-    }
-
-    return count;
+    return arrived_cell_count_;
 }
 
 void
@@ -320,81 +501,66 @@ FireFirstArrivalRaster::scatter_canonical_to_distributed(
     }
 }
 
-std::pair<
-    std::vector<std::uint8_t>,
-    std::vector<amrex::Real>>
-FireFirstArrivalRaster::gather_distributed_to_canonical(
-    const amrex::iMultiFab& arrived_mf,
-    const amrex::MultiFab& first_arrival_time_mf) const
+void
+FireFirstArrivalRaster::copy_distributed_state(
+    const amrex::iMultiFab& source_arrived,
+    const amrex::MultiFab& source_times,
+    amrex::iMultiFab& destination_arrived,
+    amrex::MultiFab& destination_times) const
 {
-    if (arrived_mf.boxArray() != surface_layout_.box_array()
-        || arrived_mf.DistributionMap()
-            != surface_layout_.distribution_map()
-        || arrived_mf.nComp() != 1
-        || arrived_mf.nGrow() != 0
-        || first_arrival_time_mf.boxArray()
-            != surface_layout_.box_array()
-        || first_arrival_time_mf.DistributionMap()
-            != surface_layout_.distribution_map()
-        || first_arrival_time_mf.nComp() != 1
-        || first_arrival_time_mf.nGrow() != 0) {
+    const auto matches_arrived =
+        [this](const amrex::iMultiFab& field) {
+            return field.boxArray()
+                    == surface_layout_.box_array()
+                && field.DistributionMap()
+                    == surface_layout_.distribution_map()
+                && field.nComp() == 1
+                && field.nGrow() == 0;
+        };
+    const auto matches_times =
+        [this](const amrex::MultiFab& field) {
+            return field.boxArray()
+                    == surface_layout_.box_array()
+                && field.DistributionMap()
+                    == surface_layout_.distribution_map()
+                && field.nComp() == 1
+                && field.nGrow() == 0;
+        };
+
+    if (!matches_arrived(source_arrived)
+        || !matches_arrived(destination_arrived)
+        || !matches_times(source_times)
+        || !matches_times(destination_times)) {
         throw std::invalid_argument(
             "Fire first-arrival MultiFabs do not match the surface layout");
     }
 
-    amrex::IArrayBox gathered_arrived(
-        surface_layout_.cell_domain(),
-        1,
-        amrex::The_Pinned_Arena());
-    amrex::FArrayBox gathered_times(
-        surface_layout_.cell_domain(),
-        1,
-        amrex::The_Pinned_Arena());
-    arrived_mf.copyTo(
-        gathered_arrived,
-        0,
-        0,
-        1,
-        0);
-    first_arrival_time_mf.copyTo(
-        gathered_times,
-        0,
-        0,
-        1,
-        0);
+    for (amrex::MFIter mfi(destination_arrived);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto source_mask =
+            source_arrived.const_array(mfi);
+        const auto source_time =
+            source_times.const_array(mfi);
+        const auto destination_mask =
+            destination_arrived.array(mfi);
+        const auto destination_time =
+            destination_times.array(mfi);
 
-    const auto mask = gathered_arrived.const_array();
-    const auto times = gathered_times.const_array();
-    std::vector<std::uint8_t> canonical_arrived(
-        geometry_.nx * geometry_.ny,
-        std::uint8_t(0));
-    std::vector<amrex::Real> canonical_times(
-        geometry_.nx * geometry_.ny,
-        amrex::Real(0.0));
-
-    for (std::size_t j = 0; j < geometry_.ny; ++j) {
-        for (std::size_t i = 0; i < geometry_.nx; ++i) {
-            const int value = mask(
-                static_cast<int>(i),
-                static_cast<int>(j),
-                0);
-            if (value != 0 && value != 1) {
-                throw std::logic_error(
-                    "distributed Fire first-arrival mask is not 0 or 1");
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
+                destination_mask(i, j, 0) =
+                    source_mask(i, j, 0);
+                destination_time(i, j, 0) =
+                    source_time(i, j, 0);
             }
-            const std::size_t index = flat_index(i, j);
-            canonical_arrived[index] =
-                static_cast<std::uint8_t>(value);
-            canonical_times[index] = times(
-                static_cast<int>(i),
-                static_cast<int>(j),
-                0);
         }
     }
-
-    return {
-        std::move(canonical_arrived),
-        std::move(canonical_times)};
 }
 
 FireFirstArrivalRasterUpdate
@@ -424,12 +590,13 @@ FireFirstArrivalRaster::initialize_from_perimeter (
         1,
         0,
         fire_surface_mf_info());
-    scatter_canonical_to_distributed(
-        arrived_,
-        first_arrival_time_s_,
+    copy_distributed_state(
+        arrived_mf_,
+        first_arrival_time_mf_,
         next_arrived,
         next_first_arrival_time_s);
 
+    amrex::Long local_newly_arrived_cell_count = 0;
     std::string local_error;
     try {
         for (amrex::MFIter mfi(next_arrived);
@@ -449,6 +616,9 @@ FireFirstArrivalRaster::initialize_from_perimeter (
                             perimeter,
                             cell_bounds(ii, jj))
                         > amrex::Real(0.0)) {
+                        if (next_mask(i, j, 0) == 0) {
+                            ++local_newly_arrived_cell_count;
+                        }
                         next_mask(i, j, 0) = 1;
                         next_times(i, j, 0) = time_s;
                     }
@@ -473,31 +643,27 @@ FireFirstArrivalRaster::initialize_from_perimeter (
             "distributed Fire first-arrival initialization failed on another MPI rank");
     }
 
-    auto [next_arrived_canonical, next_times_canonical] =
-        gather_distributed_to_canonical(
-            next_arrived,
-            next_first_arrival_time_s);
-
-    std::size_t newly_arrived_cell_count = 0;
-    for (std::size_t index = 0;
-         index < next_arrived_canonical.size();
-         ++index) {
-        if (arrived_[index] == std::uint8_t(0)
-            && next_arrived_canonical[index] != std::uint8_t(0)) {
-            ++newly_arrived_cell_count;
-        }
+    amrex::ParallelDescriptor::ReduceLongSum(
+        local_newly_arrived_cell_count);
+    const std::size_t newly_arrived_cell_count =
+        static_cast<std::size_t>(
+            local_newly_arrived_cell_count);
+    if (arrived_cell_count_ > cell_count()
+        || newly_arrived_cell_count
+            > cell_count() - arrived_cell_count_) {
+        throw std::logic_error(
+            "Fire first-arrival count exceeds raster cell count");
     }
 
     arrived_mf_ = std::move(next_arrived);
     first_arrival_time_mf_ =
         std::move(next_first_arrival_time_s);
-    arrived_ = std::move(next_arrived_canonical);
-    first_arrival_time_s_ = std::move(next_times_canonical);
+    arrived_cell_count_ += newly_arrived_cell_count;
     has_initial_condition_ = true;
     initial_condition_time_s_ = time_s;
 
     return {
-        arrived_cell_count(),
+        arrived_cell_count_,
         newly_arrived_cell_count
     };
 }
@@ -547,12 +713,13 @@ FireFirstArrivalRaster::update_from_sweep (
         1,
         0,
         fire_surface_mf_info());
-    scatter_canonical_to_distributed(
-        arrived_,
-        first_arrival_time_s_,
+    copy_distributed_state(
+        arrived_mf_,
+        first_arrival_time_mf_,
         next_arrived,
         next_first_arrival_time_s);
 
+    amrex::Long local_newly_arrived_cell_count = 0;
     std::string local_error;
     try {
         for (amrex::MFIter mfi(next_arrived);
@@ -568,9 +735,8 @@ FireFirstArrivalRaster::update_from_sweep (
                         static_cast<std::size_t>(i);
                     const std::size_t jj =
                         static_cast<std::size_t>(j);
-                    const std::size_t index = flat_index(ii, jj);
 
-                    if (arrived_[index] != std::uint8_t(0)) {
+                    if (next_mask(i, j, 0) != 0) {
                         continue;
                     }
 
@@ -588,6 +754,7 @@ FireFirstArrivalRaster::update_from_sweep (
                     if (result.arrived) {
                         next_mask(i, j, 0) = 1;
                         next_times(i, j, 0) = result.arrival_time_s;
+                        ++local_newly_arrived_cell_count;
                     }
                 }
             }
@@ -610,31 +777,27 @@ FireFirstArrivalRaster::update_from_sweep (
             "distributed Fire first-arrival sweep failed on another MPI rank");
     }
 
-    auto [next_arrived_canonical, next_times_canonical] =
-        gather_distributed_to_canonical(
-            next_arrived,
-            next_first_arrival_time_s);
-
-    std::size_t newly_arrived_cell_count = 0;
-    for (std::size_t index = 0;
-         index < next_arrived_canonical.size();
-         ++index) {
-        if (arrived_[index] == std::uint8_t(0)
-            && next_arrived_canonical[index] != std::uint8_t(0)) {
-            ++newly_arrived_cell_count;
-        }
+    amrex::ParallelDescriptor::ReduceLongSum(
+        local_newly_arrived_cell_count);
+    const std::size_t newly_arrived_cell_count =
+        static_cast<std::size_t>(
+            local_newly_arrived_cell_count);
+    if (arrived_cell_count_ > cell_count()
+        || newly_arrived_cell_count
+            > cell_count() - arrived_cell_count_) {
+        throw std::logic_error(
+            "Fire first-arrival count exceeds raster cell count");
     }
 
     arrived_mf_ = std::move(next_arrived);
     first_arrival_time_mf_ =
         std::move(next_first_arrival_time_s);
-    arrived_ = std::move(next_arrived_canonical);
-    first_arrival_time_s_ = std::move(next_times_canonical);
+    arrived_cell_count_ += newly_arrived_cell_count;
     has_committed_sweep_ = true;
     last_sweep_end_time_s_ = end_time_s;
 
     return {
-        arrived_cell_count(),
+        arrived_cell_count_,
         newly_arrived_cell_count
     };
 }

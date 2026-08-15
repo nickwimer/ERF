@@ -55,6 +55,18 @@ void write_erf_fire_checkpoint_state(
     const ERFFireRuntimeOptions& options,
     std::ostream& stream);
 
+/**
+ * Serialize one already-packed canonical Fire runtime state.
+ *
+ * This overload performs no MPI communication. It is the root-side endpoint
+ * for collective_snapshot_state_to_io_rank() and preserves checkpoint format
+ * version 1 exactly.
+ */
+void write_erf_fire_checkpoint_state(
+    const ERFFireSpreadRuntimeState& state,
+    const ERFFireRuntimeOptions& options,
+    std::ostream& stream);
+
 [[nodiscard]] ERFFireCheckpointState
 read_erf_fire_checkpoint_state(std::istream& stream);
 

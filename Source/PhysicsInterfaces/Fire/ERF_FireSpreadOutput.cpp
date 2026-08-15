@@ -171,8 +171,27 @@ write_erf_fire_spread_snapshot(
             "fire output step index must be nonnegative");
     }
 
+    const ERFFireSpreadRuntimeState state =
+        runtime.collective_snapshot_state_to_io_rank();
+
     if (!amrex::ParallelDescriptor::IOProcessor()) {
         return;
+    }
+
+    const auto& geometry = state.config.raster_geometry;
+    const std::size_t cell_count =
+        detail::validate_fire_cartesian_raster_geometry(
+            geometry);
+    if (state.burned_fraction.burned_fraction.size()
+            != cell_count
+        || state.first_arrival.arrived.size()
+            != cell_count
+        || state.first_arrival.first_arrival_time_s.size()
+            != cell_count
+        || state.combustion.cells.size()
+            != cell_count) {
+        throw std::logic_error(
+            "packed ERF-Fire visualization raster state has inconsistent sizes");
     }
 
     const std::filesystem::path directory(output_dir);
@@ -187,10 +206,11 @@ write_erf_fire_spread_snapshot(
         auto stream = open_output(directory / perimeter_name);
         stream << "time_s,vertex_index,x_m,y_m\n";
 
-        const auto& vertices = runtime.perimeter().vertices_m();
+        const auto& vertices =
+            state.perimeter_vertices_m;
         for (std::size_t i = 0; i < vertices.size(); ++i) {
             stream
-                << runtime.current_time_s() << ","
+                << state.current_time_s << ","
                 << i << ","
                 << vertices[i].x << ","
                 << vertices[i].y << "\n";
@@ -206,34 +226,43 @@ write_erf_fire_spread_snapshot(
             << "consumed_dry_fuel_kg_m2,sensible_energy_j_m2,"
             << "water_released_kg_m2\n";
 
-        const auto& burned = runtime.burned_fraction_raster();
-        const auto& arrival = runtime.first_arrival_raster();
-        const auto& combustion = runtime.combustion_raster();
-        const auto& geometry = burned.geometry();
-
         for (std::size_t j = 0; j < geometry.ny; ++j) {
             for (std::size_t i = 0; i < geometry.nx; ++i) {
-                const auto cell = burned.cell_bounds(i, j);
-                const bool arrived = arrival.has_arrived(i, j);
+                const std::size_t index =
+                    detail::fire_cartesian_raster_flat_index(
+                        geometry,
+                        i,
+                        j);
+                const auto cell =
+                    detail::fire_cartesian_raster_cell_bounds(
+                        geometry,
+                        i,
+                        j);
+                const bool arrived =
+                    state.first_arrival.arrived[index]
+                        != 0;
 
                 stream
-                    << runtime.current_time_s() << ","
+                    << state.current_time_s << ","
                     << i << ","
                     << j << ","
                     << cell.xlo_m << ","
                     << cell.xhi_m << ","
                     << cell.ylo_m << ","
                     << cell.yhi_m << ","
-                    << burned.burned_fraction(i, j) << ","
+                    << state.burned_fraction
+                           .burned_fraction[index]
+                    << ","
                     << (arrived ? 1 : 0) << ",";
 
                 if (arrived) {
                     stream
-                        << arrival.first_arrival_time_s(i, j);
+                        << state.first_arrival
+                               .first_arrival_time_s[index];
                 }
 
                 const auto& combustion_state =
-                    combustion.state(i, j);
+                    state.combustion.cells[index];
                 stream
                     << ","
                     << combustion_state.ignited_area_fraction << ","
@@ -268,8 +297,48 @@ write_erf_fire_spread_snapshot(
             + summary_path.string());
     }
 
-    const auto combustion_totals =
-        runtime.combustion_raster().totals();
+    amrex::Real burned_area_m2 = amrex::Real(0);
+    std::size_t arrived_cell_count = 0;
+    for (std::size_t j = 0; j < geometry.ny; ++j) {
+        for (std::size_t i = 0; i < geometry.nx; ++i) {
+            const std::size_t index =
+                detail::fire_cartesian_raster_flat_index(
+                    geometry,
+                    i,
+                    j);
+            const auto cell =
+                detail::fire_cartesian_raster_cell_bounds(
+                    geometry,
+                    i,
+                    j);
+            burned_area_m2 +=
+                state.burned_fraction.burned_fraction[index]
+                * detail::fire_cartesian_cell_area_m2(cell);
+            if (state.first_arrival.arrived[index]
+                != 0) {
+                ++arrived_cell_count;
+            }
+        }
+    }
+
+    const amrex::Real combustion_cell_area_m2 =
+        geometry.dx_m * geometry.dy_m;
+    FireCombustionRasterTotals combustion_totals{};
+    for (const FireCombustionState& cell
+         : state.combustion.cells) {
+        combustion_totals.remaining_dry_fuel_kg +=
+            cell.remaining_dry_fuel_kg_m2
+            * combustion_cell_area_m2;
+        combustion_totals.consumed_dry_fuel_kg +=
+            cell.consumed_dry_fuel_kg_m2
+            * combustion_cell_area_m2;
+        combustion_totals.sensible_energy_j +=
+            cell.sensible_energy_j_m2
+            * combustion_cell_area_m2;
+        combustion_totals.water_released_kg +=
+            cell.water_released_kg_m2
+            * combustion_cell_area_m2;
+    }
 
     summary << std::setprecision(17);
     if (write_summary_header) {
@@ -282,10 +351,10 @@ write_erf_fire_spread_snapshot(
 
     summary
         << step_index << ","
-        << runtime.current_time_s() << ","
-        << runtime.perimeter().size() << ","
-        << runtime.burned_fraction_raster().burned_area_m2() << ","
-        << runtime.first_arrival_raster().arrived_cell_count() << ","
+        << state.current_time_s << ","
+        << state.perimeter_vertices_m.size() << ","
+        << burned_area_m2 << ","
+        << arrived_cell_count << ","
         << combustion_totals.remaining_dry_fuel_kg << ","
         << combustion_totals.consumed_dry_fuel_kg << ","
         << combustion_totals.sensible_energy_j << ","
@@ -300,6 +369,18 @@ write_erf_fire_checkpoint_state(
     const ERFFireRuntimeOptions& options,
     std::ostream& stream)
 {
+    write_erf_fire_checkpoint_state(
+        runtime.snapshot_state(),
+        options,
+        stream);
+}
+
+void
+write_erf_fire_checkpoint_state(
+    const ERFFireSpreadRuntimeState& state,
+    const ERFFireRuntimeOptions& options,
+    std::ostream& stream)
+{
     if (!stream.good()) {
         throw std::runtime_error(
             "ERF-Fire checkpoint output stream is not writable");
@@ -309,8 +390,6 @@ write_erf_fire_checkpoint_state(
             "cannot checkpoint disabled ERF-Fire runtime");
     }
 
-    const ERFFireSpreadRuntimeState state =
-        runtime.snapshot_state();
     const auto& config = state.config;
     const auto& fuel = config.fuel;
     const auto& combustion_parameters =

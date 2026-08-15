@@ -718,6 +718,37 @@ TEST(
     expect_same_runtime_state(scalar, sampled);
 }
 
+TEST(
+    FireSpreadRuntime,
+    CollectiveIoSnapshotMatchesLocalRuntimeStateExactly)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        24, 24,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    ERFFireSpreadRuntime runtime(
+        make_circle(
+            96,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.5)),
+        Real(0.0),
+        make_config(geometry));
+    const FireFlatEnvironmentSampler environment =
+        make_affine_sampler();
+
+    (void)runtime.advance_direct_reference_wind(
+        environment,
+        Real(1.0));
+
+    ERFFireSpreadRuntimeState packed =
+        runtime.collective_snapshot_state_to_io_rank();
+    ERFFireSpreadRuntime restored =
+        ERFFireSpreadRuntime::restore_from_state(
+            std::move(packed));
+
+    expect_same_runtime_state(runtime, restored);
+}
+
 TEST(FireSpreadRuntime, ArrivalBurnHistoryPrecedesRemeshingAndAdvancesMonotonically)
 {
     const FirePerimeter initial =

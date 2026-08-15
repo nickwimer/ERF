@@ -46,10 +46,10 @@ struct FireSurfaceFeedbackTotals
  * conversion, and no one-way/two-way switch. Those remain responsibilities of
  * the later ERF coupling layer.
  *
- * Cell values are stored on the distributed AMReX Fire surface layout. A
- * canonical row-major vector remains synchronized during this migration stage
- * for scalar accessors, deterministic totals, and the existing checkpoint/test
- * interfaces.
+ * Cell values are authoritative only on the distributed AMReX Fire surface
+ * layout. No persistent canonical row-major mirror is retained. Scalar totals
+ * are replicated O(1) metadata; arbitrary cell access is a single-rank
+ * compatibility operation.
  */
 class FireSurfaceFeedbackRaster
 {
@@ -91,10 +91,16 @@ public:
 
     [[nodiscard]] std::size_t cell_count() const noexcept
     {
-        return cells_.size();
+        return geometry_.nx * geometry_.ny;
     }
 
-    [[nodiscard]] const FireSurfaceFeedbackCell&
+    /**
+     * Return one cell in a single-rank runtime.
+     *
+     * Parallel coupling consumes distributed_values() directly; this accessor
+     * deliberately performs no hidden communication.
+     */
+    [[nodiscard]] FireSurfaceFeedbackCell
     cell(std::size_t i, std::size_t j) const;
 
     [[nodiscard]] FireSurfaceFeedbackTotals totals() const noexcept;
@@ -120,7 +126,7 @@ private:
     FireCartesianRasterGeometry2D geometry_{};
     FireSurfaceLayout surface_layout_;
     amrex::MultiFab cells_mf_;
-    std::vector<FireSurfaceFeedbackCell> cells_;
+    FireSurfaceFeedbackTotals totals_{};
 };
 
 /**
