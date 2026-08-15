@@ -570,6 +570,100 @@ TEST(FireSpreadRuntime, AffineSnapshotIsResampledAtCurrentAndMidpointPositions)
     EXPECT_GT(maximum_global_difference, Real(1.0e-5));
 }
 
+TEST(
+    FireSpreadRuntime,
+    BatchedFlatEnvironmentMatchesScalarRuntimeStateExactly)
+{
+    constexpr Real dt_s = Real(1.0);
+    const FirePerimeter initial =
+        make_circle(
+            96,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.5));
+    const auto config =
+        make_config(
+            FireCartesianRasterGeometry2D{
+                24, 24,
+                Real(0.0), Real(0.0),
+                Real(1.0), Real(1.0)});
+
+    ERFFireSpreadRuntime scalar(
+        initial, Real(0.0), config);
+    ERFFireSpreadRuntime batched(
+        initial, Real(0.0), config);
+    const FireFlatEnvironmentSampler environment =
+        make_affine_sampler();
+
+    (void)scalar.advance_direct_reference_wind(
+        environment, dt_s);
+    (void)batched.advance_direct_reference_wind_batched(
+        [&environment](
+            const std::vector<FireVec2>& positions_m) {
+            std::vector<ERFFire::FireEnvironmentSample> result;
+            result.reserve(positions_m.size());
+            for (const FireVec2& position : positions_m) {
+                result.push_back(
+                    environment.sample(
+                        position.x,
+                        position.y));
+            }
+            return result;
+        },
+        dt_s);
+
+    expect_same_runtime_state(scalar, batched);
+}
+
+TEST(
+    FireSpreadRuntime,
+    BatchedTerrainEnvironmentMatchesScalarRuntimeStateExactly)
+{
+    constexpr Real dt_s = Real(1.0);
+    const FireCartesianRasterGeometry2D geometry{
+        24, 24,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    const FirePerimeter initial =
+        make_circle(
+            96,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.5));
+    const auto config = make_config(geometry);
+    const auto terrain =
+        make_planar_terrain(
+            geometry,
+            FireVec2{Real(0.2), Real(0.1)});
+    const FireFlatEnvironmentSampler environment =
+        make_affine_sampler();
+
+    ERFFireSpreadRuntime scalar(
+        initial, Real(0.0), config);
+    ERFFireSpreadRuntime batched(
+        initial, Real(0.0), config);
+
+    (void)scalar.advance_direct_reference_wind(
+        environment,
+        terrain,
+        dt_s);
+    (void)batched.advance_direct_reference_wind_batched(
+        [&environment](
+            const std::vector<FireVec2>& positions_m) {
+            std::vector<ERFFire::FireEnvironmentSample> result;
+            result.reserve(positions_m.size());
+            for (const FireVec2& position : positions_m) {
+                result.push_back(
+                    environment.sample(
+                        position.x,
+                        position.y));
+            }
+            return result;
+        },
+        terrain,
+        dt_s);
+
+    expect_same_runtime_state(scalar, batched);
+}
+
 TEST(FireSpreadRuntime, ArrivalBurnHistoryPrecedesRemeshingAndAdvancesMonotonically)
 {
     const FirePerimeter initial =

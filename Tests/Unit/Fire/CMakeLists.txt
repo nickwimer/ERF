@@ -15,6 +15,7 @@ add_executable(erf_fire_unit_tests
   ERF_GTestFireTypes.cpp
   ERF_GTestFirePerimeter.cpp
   ERF_GTestFirePropagation.cpp
+  ERF_GTestFirePropagationBatch.cpp
   ERF_GTestFireRemeshing.cpp
   ERF_GTestRothermel.cpp
   ERF_GTestRichardsEllipse.cpp

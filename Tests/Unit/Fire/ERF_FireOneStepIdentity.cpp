@@ -45,11 +45,6 @@ main (int argc, char** argv)
                 expected_reference_height_agl_m);
         }
 
-        bool expect_constant_reference_wind = true;
-        pp_fire.query(
-            "test_expect_constant_reference_wind",
-            expect_constant_reference_wind);
-
         ERF erf;
         erf.InitData();
 
@@ -77,9 +72,9 @@ main (int argc, char** argv)
             erf.FireAtmosphericSourceTendency();
 
         if (expect_fire_enabled) {
-            if (snapshot == nullptr) {
+            if (snapshot != nullptr) {
                 throw std::runtime_error(
-                    "enabled fire did not freeze an environment snapshot");
+                    "enabled fire unexpectedly retained a replicated environment snapshot");
             }
             if (fire_runtime == nullptr) {
                 throw std::runtime_error(
@@ -93,34 +88,15 @@ main (int argc, char** argv)
                 throw std::runtime_error(
                     "fire environment snapshot was not frozen at the final t^n");
             }
-            if (snapshot->reference_height_agl_m()
+            if (erf.FireEnvironmentReferenceHeightAGL()
                 != expected_reference_height_agl_m) {
                 throw std::runtime_error(
-                    "fire environment snapshot reference height changed");
+                    "fire environment reference height changed");
             }
             if (fire_runtime->current_time_s()
                 != static_cast<amrex::Real>(time)) {
                 throw std::runtime_error(
                     "fire runtime clock did not track ERF coarse steps");
-            }
-
-            const auto sample = snapshot->sample(
-                amrex::Real(4.0), amrex::Real(4.0));
-            if (!std::isfinite(sample.horizontal_wind_mps.x)
-                || !std::isfinite(sample.horizontal_wind_mps.y)) {
-                throw std::runtime_error(
-                    "fire environment snapshot produced non-finite wind");
-            }
-            if (!expect_two_way
-                && expect_constant_reference_wind
-                && (std::abs(
-                        sample.horizontal_wind_mps.x
-                        - amrex::Real(1.0))
-                    > amrex::Real(1.0e-12)
-                    || std::abs(sample.horizontal_wind_mps.y)
-                        > amrex::Real(1.0e-12))) {
-                throw std::runtime_error(
-                    "one-way fire identity atmosphere did not preserve configured constant wind");
             }
 
             if (expect_two_way) {

@@ -321,6 +321,51 @@ TEST(
 
 TEST(
     FireLevel0Environment,
+    DistributedFlatBatchMatchesReplicatedSnapshotBitwise)
+{
+    FlatAtmosphereFixture fixture;
+    const Real reference_height_agl_m =
+        Real(16);
+
+    const auto snapshot =
+        freeze_erf_level0_environment(
+            fixture.inputs(),
+            reference_height_agl_m);
+    const ERFFire::ERFFireLevel0FlatWindSampler
+        distributed(
+            fixture.inputs(),
+            reference_height_agl_m);
+
+    const std::vector<ERFFire::FireVec2> points{
+        {xlo, ylo},
+        {Real(103.3), Real(56.7)},
+        {Real(105.1), Real(59.2)},
+        {xlo + Real(nx) * dx,
+         ylo + Real(ny) * dy}};
+
+    const auto samples =
+        distributed.sample_points(points);
+    ASSERT_EQ(samples.size(), points.size());
+    EXPECT_EQ(
+        distributed.reference_height_agl_m(),
+        reference_height_agl_m);
+
+    for (std::size_t n = 0; n < points.size(); ++n) {
+        const auto expected =
+            snapshot.sample(
+                points[n].x,
+                points[n].y);
+        EXPECT_EQ(
+            samples[n].horizontal_wind_mps.x,
+            expected.horizontal_wind_mps.x);
+        EXPECT_EQ(
+            samples[n].horizontal_wind_mps.y,
+            expected.horizontal_wind_mps.y);
+    }
+}
+
+TEST(
+    FireLevel0Environment,
     SnapshotReadDoesNotModifyAnySourceField)
 {
     FlatAtmosphereFixture fixture;

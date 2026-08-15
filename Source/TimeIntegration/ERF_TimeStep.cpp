@@ -5,6 +5,7 @@
 
 #ifdef ERF_USE_FIRE
 #include <ERF_FireLevel0Environment.H>
+#include <ERF_FireLevel0TerrainWindSampler.H>
 #include <ERF_FireLevel0SourceCoupling.H>
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireSpreadOutput.H>
@@ -180,8 +181,10 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
 
         std::unique_ptr<ERFFire::FireTerrainSurface>
             next_terrain_surface;
-        std::unique_ptr<ERFFire::FireFlatEnvironmentSampler>
-            next_snapshot;
+        std::unique_ptr<ERFFire::ERFFireLevel0TerrainWindSampler>
+            next_terrain_sampler;
+        std::unique_ptr<ERFFire::ERFFireLevel0FlatWindSampler>
+            next_flat_sampler;
 
         const Real fire_reference_height_agl_m =
             m_fire_runtime_options.wind_mode
@@ -194,21 +197,23 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 std::make_unique<ERFFire::FireTerrainSurface>(
                     ERFFire::make_erf_level0_terrain_surface(
                         fire_inputs));
-            next_snapshot =
-                std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
-                    ERFFire::freeze_erf_level0_terrain_reference_wind_environment(
-                        fire_inputs,
-                        fire_reference_height_agl_m));
+            next_terrain_sampler =
+                std::make_unique<ERFFire::ERFFireLevel0TerrainWindSampler>(
+                    fire_inputs,
+                    fire_reference_height_agl_m);
         } else {
-            next_snapshot =
-                std::make_unique<ERFFire::FireFlatEnvironmentSampler>(
-                    ERFFire::freeze_erf_level0_environment(
-                        fire_inputs,
-                        fire_reference_height_agl_m));
+            next_flat_sampler =
+                std::make_unique<
+                    ERFFire::ERFFireLevel0FlatWindSampler>(
+                    fire_inputs,
+                    fire_reference_height_agl_m);
         }
 
-        m_fire_environment_snapshot = std::move(next_snapshot);
+        m_fire_environment_snapshot.reset();
         m_fire_environment_snapshot_time = time;
+        m_fire_environment_reference_height_agl_m =
+            static_cast<double>(
+                fire_reference_height_agl_m);
 
         if (!m_fire_spread_runtime) {
             m_fire_spread_runtime =
@@ -233,31 +238,51 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
         ERFFire::ERFFireSpreadRuntime next_fire_runtime =
             *m_fire_spread_runtime;
 
+        const ERFFire::FireEnvironmentBatchFunction
+            flat_environment =
+                [&next_flat_sampler](
+                    const std::vector<ERFFire::FireVec2>& positions_m) {
+                    return next_flat_sampler->sample_points(
+                        positions_m);
+                };
+
+        const ERFFire::FireEnvironmentBatchFunction
+            terrain_environment =
+                [&next_terrain_sampler](
+                    const std::vector<ERFFire::FireVec2>& positions_m) {
+                    return next_terrain_sampler->sample_points(
+                        positions_m);
+                };
+
         if (m_fire_runtime_options.wind_mode
                 == ERFFire::ERFFireWindMode::DirectReference) {
             if (next_terrain_surface) {
-                (void)next_fire_runtime.advance_direct_reference_wind(
-                    *m_fire_environment_snapshot,
-                    *next_terrain_surface,
-                    static_cast<Real>(dt[0]));
+                (void)next_fire_runtime
+                    .advance_direct_reference_wind_batched(
+                        terrain_environment,
+                        *next_terrain_surface,
+                        static_cast<Real>(dt[0]));
             } else {
-                (void)next_fire_runtime.advance_direct_reference_wind(
-                    *m_fire_environment_snapshot,
-                    static_cast<Real>(dt[0]));
+                (void)next_fire_runtime
+                    .advance_direct_reference_wind_batched(
+                        flat_environment,
+                        static_cast<Real>(dt[0]));
             }
         } else if (m_fire_runtime_options.wind_mode
                    == ERFFire::ERFFireWindMode::ExplicitWaf20ft) {
             if (next_terrain_surface) {
-                (void)next_fire_runtime.advance_explicit_waf_20ft(
-                    *m_fire_environment_snapshot,
-                    *next_terrain_surface,
-                    m_fire_runtime_options.wind_adjustment_factor,
-                    static_cast<Real>(dt[0]));
+                (void)next_fire_runtime
+                    .advance_explicit_waf_20ft_batched(
+                        terrain_environment,
+                        *next_terrain_surface,
+                        m_fire_runtime_options.wind_adjustment_factor,
+                        static_cast<Real>(dt[0]));
             } else {
-                (void)next_fire_runtime.advance_explicit_waf_20ft(
-                    *m_fire_environment_snapshot,
-                    m_fire_runtime_options.wind_adjustment_factor,
-                    static_cast<Real>(dt[0]));
+                (void)next_fire_runtime
+                    .advance_explicit_waf_20ft_batched(
+                        flat_environment,
+                        m_fire_runtime_options.wind_adjustment_factor,
+                        static_cast<Real>(dt[0]));
             }
         } else {
             Error("unsupported ERF-Fire wind mode");

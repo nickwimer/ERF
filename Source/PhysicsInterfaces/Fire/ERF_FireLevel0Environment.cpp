@@ -3,12 +3,21 @@
 #include <AMReX_Arena.H>
 #include <AMReX_Box.H>
 #include <AMReX_BoxArray.H>
+#include <AMReX_DistributionMapping.H>
 #include <AMReX_FArrayBox.H>
+#include <AMReX_Gpu.H>
 #include <AMReX_IntVect.H>
+#include <AMReX_MFIter.H>
+#include <AMReX_ParallelDescriptor.H>
+#include <AMReX_Vector.H>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
+#include <map>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -157,6 +166,214 @@ horizontal_velocity_plane_box (
     plane.setRange(2, k);
     plane.grow(amrex::IntVect(1, 1, 0));
     return plane;
+}
+
+struct FlatAxisStencil
+{
+    int lower{};
+    amrex::Real upper_weight{};
+};
+
+FlatAxisStencil
+make_flat_axis_stencil (
+    amrex::Real coordinate_m,
+    amrex::Real origin_m,
+    amrex::Real spacing_m,
+    amrex::Real native_offset_cells)
+{
+    const amrex::Real logical =
+        (coordinate_m - origin_m) / spacing_m
+        - native_offset_cells;
+    const amrex::Real floored = std::floor(logical);
+
+    if (floored
+            < static_cast<amrex::Real>(
+                  std::numeric_limits<int>::min())
+        || floored
+            > static_cast<amrex::Real>(
+                  std::numeric_limits<int>::max())) {
+        throw std::overflow_error(
+            "fire distributed flat-wind stencil index overflow");
+    }
+
+    const int lower = static_cast<int>(floored);
+    const amrex::Real upper_weight =
+        logical - static_cast<amrex::Real>(lower);
+
+    return {lower, upper_weight};
+}
+
+amrex::Real
+flat_bilinear (
+    amrex::Real q00,
+    amrex::Real q10,
+    amrex::Real q01,
+    amrex::Real q11,
+    amrex::Real wx,
+    amrex::Real wy)
+{
+    const amrex::Real lower =
+        (amrex::Real(1) - wx) * q00 + wx * q10;
+    const amrex::Real upper =
+        (amrex::Real(1) - wx) * q01 + wx * q11;
+    return (amrex::Real(1) - wy) * lower + wy * upper;
+}
+
+using SparseVelocityKey = std::tuple<int, int, int>;
+
+amrex::MFInfo
+sparse_velocity_mf_info()
+{
+    amrex::MFInfo info;
+    info.SetArena(amrex::The_Pinned_Arena());
+    return info;
+}
+
+int
+checked_sparse_count(std::size_t count)
+{
+    if (count
+        > static_cast<std::size_t>(
+            std::numeric_limits<int>::max())) {
+        throw std::overflow_error(
+            "fire distributed flat-wind sparse point count exceeds int");
+    }
+    return static_cast<int>(count);
+}
+
+std::map<SparseVelocityKey, amrex::Real>
+sample_sparse_velocity_values(
+    const amrex::MultiFab& source,
+    std::vector<SparseVelocityKey> keys)
+{
+    std::sort(keys.begin(), keys.end());
+    keys.erase(
+        std::unique(keys.begin(), keys.end()),
+        keys.end());
+
+    if (keys.empty()) {
+        return {};
+    }
+
+    const int key_count =
+        checked_sparse_count(keys.size());
+
+    amrex::BoxArray sparse_boxes(keys.size());
+    const amrex::IndexType index_type =
+        source.boxArray().ixType();
+    for (int n = 0; n < key_count; ++n) {
+        const auto [i, j, k] =
+            keys[static_cast<std::size_t>(n)];
+        const amrex::IntVect point(i, j, k);
+        sparse_boxes.set(
+            n,
+            amrex::Box(point, point, index_type));
+    }
+
+    const int nprocs =
+        std::max(
+            1,
+            amrex::ParallelDescriptor::NProcs());
+    amrex::Vector<int> processor_map(keys.size());
+    for (int n = 0; n < key_count; ++n) {
+        processor_map[static_cast<std::size_t>(n)] =
+            n % nprocs;
+    }
+    const amrex::DistributionMapping sparse_dm(
+        std::move(processor_map));
+
+    amrex::MultiFab sparse_values(
+        sparse_boxes,
+        sparse_dm,
+        1,
+        0,
+        sparse_velocity_mf_info());
+
+    sparse_values.ParallelCopy(
+        source,
+        0,
+        0,
+        1,
+        1,
+        0);
+    amrex::Gpu::streamSynchronize();
+
+    std::map<SparseVelocityKey, std::size_t>
+        key_to_index;
+    for (std::size_t n = 0; n < keys.size(); ++n) {
+        key_to_index.emplace(keys[n], n);
+    }
+
+    std::vector<amrex::Real> reduced_values(
+        keys.size(),
+        amrex::Real(0));
+    std::vector<int> reduced_counts(
+        keys.size(),
+        0);
+
+    for (amrex::MFIter mfi(sparse_values);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const int i = box.smallEnd(0);
+        const int j = box.smallEnd(1);
+        const int k = box.smallEnd(2);
+        const SparseVelocityKey key{i, j, k};
+        const auto found = key_to_index.find(key);
+        if (found == key_to_index.end()) {
+            throw std::logic_error(
+                "fire distributed flat-wind sparse lookup failed");
+        }
+
+        const auto values =
+            sparse_values.const_array(mfi);
+        reduced_values[found->second] =
+            values(i, j, k);
+        reduced_counts[found->second] = 1;
+    }
+
+    amrex::ParallelDescriptor::ReduceRealSum(
+        reduced_values.data(),
+        key_count);
+    amrex::ParallelDescriptor::ReduceIntSum(
+        reduced_counts.data(),
+        key_count);
+
+    std::map<SparseVelocityKey, amrex::Real> result;
+    for (std::size_t n = 0; n < keys.size(); ++n) {
+        if (reduced_counts[n] != 1) {
+            throw std::runtime_error(
+                "fire distributed flat-wind sparse value has invalid ownership count");
+        }
+        if (!std::isfinite(reduced_values[n])) {
+            throw std::invalid_argument(
+                "fire distributed flat-wind source value must be finite");
+        }
+        result.emplace(keys[n], reduced_values[n]);
+    }
+    return result;
+}
+
+void
+append_sparse_stencil_keys(
+    std::vector<SparseVelocityKey>& keys,
+    int lower_i,
+    int lower_j,
+    int lower_k,
+    int upper_k)
+{
+    for (int dj = 0; dj <= 1; ++dj) {
+        for (int di = 0; di <= 1; ++di) {
+            keys.emplace_back(
+                lower_i + di,
+                lower_j + dj,
+                lower_k);
+            keys.emplace_back(
+                lower_i + di,
+                lower_j + dj,
+                upper_k);
+        }
+    }
 }
 
 void
@@ -563,6 +780,225 @@ erf_fire_level0_flat_vertical_faces_agl (
                 result[index] > result[index - 1],
                 "fire level-0 AGL faces must increase strictly");
         }
+    }
+
+    return result;
+}
+
+ERFFireLevel0FlatWindSampler::
+ERFFireLevel0FlatWindSampler(
+    const ERFFireLevel0EnvironmentInputs& inputs,
+    amrex::Real reference_height_agl_m)
+    : x_velocity_(&inputs.x_velocity),
+      y_velocity_(&inputs.y_velocity),
+      layout_(
+          inputs.geometry.ProbLoArray()[0],
+          inputs.geometry.ProbLoArray()[1],
+          inputs.geometry.CellSizeArray()[0],
+          inputs.geometry.CellSizeArray()[1],
+          static_cast<std::size_t>(
+              inputs.geometry.Domain().length(0)),
+          static_cast<std::size_t>(
+              inputs.geometry.Domain().length(1))),
+      reference_height_agl_m_(reference_height_agl_m),
+      domain_ilo_(inputs.geometry.Domain().smallEnd(0)),
+      domain_jlo_(inputs.geometry.Domain().smallEnd(1))
+{
+    validate_flat_scope_and_layout(inputs);
+    validate_reference_height_agl(
+        reference_height_agl_m_);
+
+    const amrex::Box& domain =
+        inputs.geometry.Domain();
+    const amrex::Real ground =
+        flat_ground_height(
+            inputs.z_phys_nd,
+            domain);
+    const std::vector<amrex::Real> z_cell_center_m =
+        cell_center_heights(
+            inputs.z_phys_cc,
+            domain);
+
+    const amrex::Real target_height_m =
+        ground + reference_height_agl_m_;
+    if (!std::isfinite(target_height_m)) {
+        throw std::invalid_argument(
+            "fire atmospheric reference height is not representable");
+    }
+
+    vertical_bracket_ =
+        fire_vertical_linear_bracket(
+            z_cell_center_m,
+            target_height_m);
+
+    const int domain_klo = domain.smallEnd(2);
+    lower_k_ =
+        domain_klo
+        + static_cast<int>(
+            vertical_bracket_.lower_k);
+    upper_k_ =
+        domain_klo
+        + static_cast<int>(
+            vertical_bracket_.upper_k);
+
+    require_horizontally_uniform_z_phys_cc_plane(
+        inputs.z_phys_cc,
+        domain,
+        lower_k_,
+        z_cell_center_m[
+            vertical_bracket_.lower_k]);
+    if (upper_k_ != lower_k_) {
+        require_horizontally_uniform_z_phys_cc_plane(
+            inputs.z_phys_cc,
+            domain,
+            upper_k_,
+            z_cell_center_m[
+                vertical_bracket_.upper_k]);
+    }
+}
+
+std::vector<FireEnvironmentSample>
+ERFFireLevel0FlatWindSampler::sample_points(
+    const std::vector<FireVec2>& positions_m) const
+{
+    if (positions_m.empty()) {
+        return {};
+    }
+
+    struct PointStencils
+    {
+        FlatAxisStencil ux;
+        FlatAxisStencil uy;
+        FlatAxisStencil vx;
+        FlatAxisStencil vy;
+    };
+
+    std::vector<PointStencils> stencils;
+    stencils.reserve(positions_m.size());
+    std::vector<SparseVelocityKey> u_keys;
+    std::vector<SparseVelocityKey> v_keys;
+    u_keys.reserve(positions_m.size() * 8);
+    v_keys.reserve(positions_m.size() * 8);
+
+    for (const FireVec2& point : positions_m) {
+        if (!layout_.contains_physical_point(
+                point.x,
+                point.y)) {
+            throw std::out_of_range(
+                "fire distributed flat-wind sample point lies outside the physical level-0 domain");
+        }
+
+        PointStencils point_stencils{
+            make_flat_axis_stencil(
+                point.x,
+                layout_.xlo_m(),
+                layout_.dx_m(),
+                amrex::Real(0)),
+            make_flat_axis_stencil(
+                point.y,
+                layout_.ylo_m(),
+                layout_.dy_m(),
+                amrex::Real(0.5)),
+            make_flat_axis_stencil(
+                point.x,
+                layout_.xlo_m(),
+                layout_.dx_m(),
+                amrex::Real(0.5)),
+            make_flat_axis_stencil(
+                point.y,
+                layout_.ylo_m(),
+                layout_.dy_m(),
+                amrex::Real(0))};
+        stencils.push_back(point_stencils);
+
+        append_sparse_stencil_keys(
+            u_keys,
+            domain_ilo_ + point_stencils.ux.lower,
+            domain_jlo_ + point_stencils.uy.lower,
+            lower_k_,
+            upper_k_);
+        append_sparse_stencil_keys(
+            v_keys,
+            domain_ilo_ + point_stencils.vx.lower,
+            domain_jlo_ + point_stencils.vy.lower,
+            lower_k_,
+            upper_k_);
+    }
+
+    const auto u_values =
+        sample_sparse_velocity_values(
+            *x_velocity_,
+            std::move(u_keys));
+    const auto v_values =
+        sample_sparse_velocity_values(
+            *y_velocity_,
+            std::move(v_keys));
+
+    const auto vertically_interpolated =
+        [this](
+            const auto& values,
+            int i,
+            int j) {
+            return fire_vertical_linear_interpolate(
+                values.at(
+                    SparseVelocityKey{
+                        i, j, lower_k_}),
+                values.at(
+                    SparseVelocityKey{
+                        i, j, upper_k_}),
+                vertical_bracket_);
+        };
+
+    std::vector<FireEnvironmentSample> result;
+    result.reserve(positions_m.size());
+
+    for (std::size_t n = 0;
+         n < positions_m.size();
+         ++n) {
+        const PointStencils& s = stencils[n];
+
+        const int ui =
+            domain_ilo_ + s.ux.lower;
+        const int uj =
+            domain_jlo_ + s.uy.lower;
+        const amrex::Real u =
+            flat_bilinear(
+                vertically_interpolated(
+                    u_values, ui, uj),
+                vertically_interpolated(
+                    u_values, ui + 1, uj),
+                vertically_interpolated(
+                    u_values, ui, uj + 1),
+                vertically_interpolated(
+                    u_values, ui + 1, uj + 1),
+                s.ux.upper_weight,
+                s.uy.upper_weight);
+
+        const int vi =
+            domain_ilo_ + s.vx.lower;
+        const int vj =
+            domain_jlo_ + s.vy.lower;
+        const amrex::Real v =
+            flat_bilinear(
+                vertically_interpolated(
+                    v_values, vi, vj),
+                vertically_interpolated(
+                    v_values, vi + 1, vj),
+                vertically_interpolated(
+                    v_values, vi, vj + 1),
+                vertically_interpolated(
+                    v_values, vi + 1, vj + 1),
+                s.vx.upper_weight,
+                s.vy.upper_weight);
+
+        if (!std::isfinite(u)
+            || !std::isfinite(v)) {
+            throw std::overflow_error(
+                "fire distributed flat-wind interpolation produced non-finite wind");
+        }
+        result.push_back(
+            FireEnvironmentSample{
+                FireVec2{u, v}});
     }
 
     return result;

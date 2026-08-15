@@ -165,6 +165,11 @@ public:
         return m_fire_environment_snapshot_time;
     }
 
+    double FireEnvironmentReferenceHeightAGL () const noexcept
+    {
+        return m_fire_environment_reference_height_agl_m;
+    }
+
     const ERFFire::ERFFireSpreadRuntime* FireSpreadRuntime () const noexcept
     {
         return m_fire_spread_runtime.get();
@@ -750,6 +755,8 @@ private:
 #ifdef ERF_USE_FIRE
     ERFFire::ERFFireRuntimeOptions m_fire_runtime_options{};
     double m_fire_environment_snapshot_time =
+        std::numeric_limits<double>::quiet_NaN();
+    double m_fire_environment_reference_height_agl_m =
         std::numeric_limits<double>::quiet_NaN();
     std::unique_ptr<ERFFire::FireFlatEnvironmentSampler>
         m_fire_environment_snapshot;

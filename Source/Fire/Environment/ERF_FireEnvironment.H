@@ -3,6 +3,9 @@
 
 #include <ERF_FireTypes.H>
 
+#include <functional>
+#include <vector>
+
 namespace ERFFire
 {
 
@@ -18,6 +21,19 @@ struct FireEnvironmentSample
 {
     FireVec2 horizontal_wind_mps{};
 };
+
+/**
+ * Coupling-neutral ordered batch sampler.
+ *
+ * The caller supplies map-plane positions in canonical perimeter order and
+ * receives one environment sample per position in that same order. A concrete
+ * implementation may be collective (for example, an ERF/AMReX distributed
+ * field adapter), so Fire propagation evaluates this callback once per RK
+ * stage rather than once per vertex.
+ */
+using FireEnvironmentBatchFunction =
+    std::function<std::vector<FireEnvironmentSample>(
+        const std::vector<FireVec2>& positions_m)>;
 
 } // namespace ERFFire
 

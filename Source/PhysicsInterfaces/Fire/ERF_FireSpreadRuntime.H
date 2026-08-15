@@ -161,6 +161,22 @@ public:
         amrex::Real dt_s);
 
     /**
+     * Flat-grid direct-reference advance with one ordered environment batch
+     * per RK stage. This is the distributed-coupling equivalent of the scalar
+     * sampler overload and uses exactly zero terrain slope.
+     */
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_direct_reference_wind_batched(
+        const FireEnvironmentBatchFunction& environment,
+        amrex::Real dt_s);
+
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_direct_reference_wind_batched(
+        const FireEnvironmentBatchFunction& environment,
+        const FireTerrainSurface& terrain,
+        amrex::Real dt_s);
+
+    /**
      * Advance one Fire step with direct reference wind plus terrain slope.
      *
      * Fire remains a map-plane model: terrain contributes the local
@@ -189,6 +205,22 @@ public:
         amrex::Real wind_adjustment_factor,
         amrex::Real dt_s);
 
+    /**
+     * Flat-grid explicit-WAF advance with batched environment sampling.
+     */
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_explicit_waf_20ft_batched(
+        const FireEnvironmentBatchFunction& environment,
+        amrex::Real wind_adjustment_factor,
+        amrex::Real dt_s);
+
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_explicit_waf_20ft_batched(
+        const FireEnvironmentBatchFunction& environment,
+        const FireTerrainSurface& terrain,
+        amrex::Real wind_adjustment_factor,
+        amrex::Real dt_s);
+
     [[nodiscard]] ERFFireStepDiagnostics
     advance_explicit_waf_20ft(
         const FireFlatEnvironmentSampler& environment,
@@ -212,6 +244,14 @@ private:
     [[nodiscard]] ERFFireStepDiagnostics
     advance_wind_impl(
         const FireFlatEnvironmentSampler& environment,
+        const FireTerrainSurface* terrain_surface,
+        WindInputMode wind_input_mode,
+        amrex::Real wind_adjustment_factor,
+        amrex::Real dt_s);
+
+    [[nodiscard]] ERFFireStepDiagnostics
+    advance_wind_batched_impl(
+        const FireEnvironmentBatchFunction& environment,
         const FireTerrainSurface* terrain_surface,
         WindInputMode wind_input_mode,
         amrex::Real wind_adjustment_factor,

@@ -36,6 +36,59 @@ struct ERFFireLevel0EnvironmentInputs
 };
 
 /**
+ * Collective flat-grid reference-wind sampler for sparse Fire point batches.
+ *
+ * Unlike FireFlatEnvironmentSampler, this object does not freeze or replicate
+ * the complete horizontal wind planes. It retains read-only references to the
+ * already-fillpatched ERF level-0 velocity MultiFabs and stores only the
+ * common flat-grid vertical interpolation bracket plus grid metadata.
+ *
+ * sample_points() is collective across the active AMReX communicator. For one
+ * batch it constructs sparse one-cell AMReX destinations containing only the
+ * native staggered velocity values required by the requested bilinear
+ * stencils, uses ParallelCopy from the ERF velocity fields, and reduces only
+ * those O(point-count) values to a common ordered result on all ranks.
+ *
+ * The source MultiFabs must remain valid and unchanged for the lifetime of
+ * this sampler. This is a t^n coupling view, not an owning atmospheric
+ * snapshot.
+ */
+class ERFFireLevel0FlatWindSampler
+{
+public:
+    ERFFireLevel0FlatWindSampler(
+        const ERFFireLevel0EnvironmentInputs& inputs,
+        amrex::Real reference_height_agl_m);
+
+    [[nodiscard]] amrex::Real
+    reference_height_agl_m() const noexcept
+    {
+        return reference_height_agl_m_;
+    }
+
+    [[nodiscard]] const FireFlatEnvironmentLayout2D&
+    layout() const noexcept
+    {
+        return layout_;
+    }
+
+    [[nodiscard]] std::vector<FireEnvironmentSample>
+    sample_points(
+        const std::vector<FireVec2>& positions_m) const;
+
+private:
+    const amrex::MultiFab* x_velocity_{nullptr};
+    const amrex::MultiFab* y_velocity_{nullptr};
+    FireFlatEnvironmentLayout2D layout_;
+    FireVerticalLinearBracket vertical_bracket_{};
+    amrex::Real reference_height_agl_m_{};
+    int domain_ilo_{};
+    int domain_jlo_{};
+    int lower_k_{};
+    int upper_k_{};
+};
+
+/**
  * Extract the level-0 bottom nodal surface into the coupling-neutral bilinear
  * Fire terrain representation.
  *
