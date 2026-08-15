@@ -62,11 +62,10 @@ struct FireCombustionRasterState
  * obtains each cell's incremental burned area, and places that increment at
  * the corresponding bin midpoint before exact exponential decay.
  *
- * Combustion evolution is distributed over the AMReX Fire surface layout.
- * During this migration stage, a canonical row-major state vector remains as
- * synchronized compatibility state for checkpoint/output, scalar accessors,
- * and the existing surface-feedback adapter. Distributed and canonical state
- * are committed atomically after a successful complete sweep.
+ * Combustion evolution is authoritative on the distributed AMReX Fire
+ * surface layout. No persistent canonical row-major mirror is retained. Full
+ * canonical cells are materialized only by explicit serialization/snapshot
+ * boundaries; extensive totals remain replicated O(1) metadata.
  *
  * This class owns combustion state only. FirePerimeter remains authoritative
  * geometry and FireBurnedFractionRaster remains authoritative area history.
@@ -101,11 +100,15 @@ public:
     FireCombustionRaster& operator=(
         FireCombustionRaster&&) noexcept = default;
 
+    /**
+     * Return one canonical row-major snapshot in a single-rank runtime.
+     *
+     * This accessor is deliberately noncollective. Multi-rank callers must
+     * use collective_snapshot_state_to_io_rank() so ordinary state access
+     * never hides full-domain communication.
+     */
     [[nodiscard]] FireCombustionRasterState
-    snapshot_state() const
-    {
-        return {states_, initialized_};
-    }
+    snapshot_state() const;
 
     /**
      * Collectively pack distributed combustion state onto the AMReX IO rank.
@@ -157,7 +160,13 @@ public:
         return initialized_;
     }
 
-    [[nodiscard]] const FireCombustionState&
+    /**
+     * Return one combustion cell in a single-rank runtime.
+     *
+     * Parallel Fire physics consumes distributed_states() directly; this
+     * accessor deliberately performs no hidden communication.
+     */
+    [[nodiscard]] FireCombustionState
     state(std::size_t i, std::size_t j) const;
 
     [[nodiscard]] FireCombustionRasterTotals totals() const noexcept;
@@ -218,7 +227,7 @@ private:
     FireCombustionRasterOptions options_{};
     FireSurfaceLayout surface_layout_;
     amrex::MultiFab states_mf_;
-    std::vector<FireCombustionState> states_;
+    FireCombustionRasterTotals totals_{};
     bool initialized_{false};
 };
 

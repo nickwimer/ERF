@@ -170,6 +170,58 @@ store_combustion_state(
         state.water_released_kg_m2;
 }
 
+FireCombustionRasterTotals
+local_distributed_totals(
+    const amrex::MultiFab& states,
+    const FireCartesianRasterGeometry2D& geometry) noexcept
+{
+    const amrex::Real cell_area_m2 =
+        geometry.dx_m * geometry.dy_m;
+
+    FireCombustionRasterTotals totals{};
+
+    for (amrex::MFIter mfi(states); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values = states.const_array(mfi);
+
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                const FireCombustionState state =
+                    load_combustion_state(values, i, j);
+                totals.remaining_dry_fuel_kg +=
+                    state.remaining_dry_fuel_kg_m2 * cell_area_m2;
+                totals.consumed_dry_fuel_kg +=
+                    state.consumed_dry_fuel_kg_m2 * cell_area_m2;
+                totals.sensible_energy_j +=
+                    state.sensible_energy_j_m2 * cell_area_m2;
+                totals.water_released_kg +=
+                    state.water_released_kg_m2 * cell_area_m2;
+            }
+        }
+    }
+
+    return totals;
+}
+
+void
+reduce_distributed_totals(
+    FireCombustionRasterTotals& totals)
+{
+    amrex::Real values[4]{
+        totals.remaining_dry_fuel_kg,
+        totals.consumed_dry_fuel_kg,
+        totals.sensible_energy_j,
+        totals.water_released_kg};
+
+    amrex::ParallelDescriptor::ReduceRealSum(values, 4);
+
+    totals = {
+        values[0],
+        values[1],
+        values[2],
+        values[3]};
+}
+
 } // namespace
 
 FireCombustionRaster::FireCombustionRaster(
@@ -187,8 +239,8 @@ FireCombustionRaster::FireCombustionRaster(
           0,
           fire_surface_mf_info())
 {
-    const std::size_t cell_count =
-        detail::validate_fire_cartesian_raster_geometry(geometry_);
+    (void)detail::validate_fire_cartesian_raster_geometry(
+        geometry_);
 
     require(
         options_.temporal_substeps > 0,
@@ -201,10 +253,8 @@ FireCombustionRaster::FireCombustionRaster(
         parameters_,
         amrex::Real(0));
 
-    states_.assign(cell_count, FireCombustionState{});
-    scatter_canonical_to_distributed(
-        states_,
-        states_mf_);
+    states_mf_.setVal(amrex::Real(0));
+    totals_ = {};
 }
 
 FireCombustionRaster::FireCombustionRaster(
@@ -217,7 +267,8 @@ FireCombustionRaster::FireCombustionRaster(
           parameters,
           options)
 {
-    if (state.cells.size() != states_.size()) {
+    if (state.cells.size()
+        != geometry_.nx * geometry_.ny) {
         throw std::invalid_argument(
             "restored fire combustion state has the wrong cell count");
     }
@@ -240,10 +291,23 @@ FireCombustionRaster::FireCombustionRaster(
         }
     }
 
-    states_ = std::move(state.cells);
+    totals_ = totals_for(state.cells);
+    require_finite_nonnegative(
+        totals_.remaining_dry_fuel_kg,
+        "restored fire combustion remaining fuel is not finite");
+    require_finite_nonnegative(
+        totals_.consumed_dry_fuel_kg,
+        "restored fire combustion consumed fuel is not finite");
+    require_finite_nonnegative(
+        totals_.sensible_energy_j,
+        "restored fire combustion sensible energy is not finite");
+    require_finite_nonnegative(
+        totals_.water_released_kg,
+        "restored fire combustion released water is not finite");
+
     initialized_ = state.initialized;
     scatter_canonical_to_distributed(
-        states_,
+        state.cells,
         states_mf_);
 }
 
@@ -259,11 +323,11 @@ FireCombustionRaster::FireCombustionRaster(
           combustion_component_count,
           0,
           fire_surface_mf_info()),
-      states_(other.states_),
+      totals_(other.totals_),
       initialized_(other.initialized_)
 {
-    scatter_canonical_to_distributed(
-        states_,
+    copy_distributed_state(
+        other.states_mf_,
         states_mf_);
 }
 
@@ -276,6 +340,20 @@ FireCombustionRaster::operator=(
         *this = std::move(copy);
     }
     return *this;
+}
+
+FireCombustionRasterState
+FireCombustionRaster::snapshot_state() const
+{
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "Fire combustion snapshot_state is single-rank only; "
+            "use collective_snapshot_state_to_io_rank in parallel");
+    }
+
+    return {
+        gather_distributed_to_canonical(states_mf_),
+        initialized_};
 }
 
 FireCombustionRasterState
@@ -351,12 +429,34 @@ FireCombustionRaster::flat_index(
         geometry_, i, j);
 }
 
-const FireCombustionState&
+FireCombustionState
 FireCombustionRaster::state(
     std::size_t i,
     std::size_t j) const
 {
-    return states_[flat_index(i, j)];
+    (void)flat_index(i, j);
+
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "Fire combustion scalar cell access is single-rank only; "
+            "parallel Fire physics must use distributed_states");
+    }
+
+    const amrex::IntVect cell(
+        static_cast<int>(i),
+        static_cast<int>(j),
+        0);
+    for (amrex::MFIter mfi(states_mf_); mfi.isValid(); ++mfi) {
+        if (mfi.validbox().contains(cell)) {
+            return load_combustion_state(
+                states_mf_.const_array(mfi),
+                cell[0],
+                cell[1]);
+        }
+    }
+
+    throw std::logic_error(
+        "single-rank Fire combustion cell is not locally represented");
 }
 
 void
@@ -364,7 +464,8 @@ FireCombustionRaster::scatter_canonical_to_distributed(
     const std::vector<FireCombustionState>& canonical,
     amrex::MultiFab& distributed) const
 {
-    if (canonical.size() != states_.size()) {
+    if (canonical.size()
+        != geometry_.nx * geometry_.ny) {
         throw std::invalid_argument(
             "Fire combustion canonical state has the wrong cell count");
     }
@@ -462,7 +563,7 @@ FireCombustionRaster::gather_distributed_to_canonical(
     const auto values = gathered.const_array();
 
     std::vector<FireCombustionState> canonical(
-        states_.size(),
+        geometry_.nx * geometry_.ny,
         FireCombustionState{});
     for (std::size_t j = 0; j < geometry_.ny; ++j) {
         for (std::size_t i = 0; i < geometry_.nx; ++i) {
@@ -503,7 +604,7 @@ FireCombustionRaster::totals_for(
 FireCombustionRasterTotals
 FireCombustionRaster::totals() const noexcept
 {
-    return totals_for(states_);
+    return totals_;
 }
 
 FireCombustionRasterTotals
@@ -602,12 +703,11 @@ FireCombustionRaster::initialize_from_burned_fraction(
         local_error,
         "distributed Fire combustion initialization");
 
-    std::vector<FireCombustionState> next_canonical =
-        gather_distributed_to_canonical(
-            next_states);
-
-    const FireCombustionRasterTotals next_totals =
-        totals_for(next_canonical);
+    FireCombustionRasterTotals next_totals =
+        local_distributed_totals(
+            next_states,
+            geometry_);
+    reduce_distributed_totals(next_totals);
 
     require_finite_nonnegative(
         next_totals.remaining_dry_fuel_kg,
@@ -623,10 +723,10 @@ FireCombustionRaster::initialize_from_burned_fraction(
         "fire combustion raster initial water is not finite");
 
     states_mf_ = std::move(next_states);
-    states_ = std::move(next_canonical);
+    totals_ = next_totals;
     initialized_ = true;
 
-    return next_totals;
+    return totals_;
 }
 
 FireCombustionRasterAdvance
@@ -886,34 +986,55 @@ FireCombustionRaster::advance_from_linear_sweep(
         local_error,
         "distributed Fire combustion sweep");
 
-    std::vector<FireCombustionState> next_canonical =
-        gather_distributed_to_canonical(
-            next_states);
-    const FireCombustionRasterTotals next_totals =
-        totals_for(next_canonical);
+    const FireCombustionRasterTotals local_next_totals =
+        local_distributed_totals(
+            next_states,
+            geometry_);
 
     const amrex::Real cell_area_m2 =
         geometry_.dx_m * geometry_.dy_m;
-    amrex::Real newly_consumed_dry_fuel_kg = 0;
-    amrex::Real sensible_energy_increment_j = 0;
-    amrex::Real water_released_increment_kg = 0;
+    amrex::Real accounting[7]{
+        local_next_totals.remaining_dry_fuel_kg,
+        local_next_totals.consumed_dry_fuel_kg,
+        local_next_totals.sensible_energy_j,
+        local_next_totals.water_released_kg,
+        amrex::Real(0),
+        amrex::Real(0),
+        amrex::Real(0)};
 
-    for (std::size_t index = 0;
-         index < states_.size();
-         ++index) {
-        newly_consumed_dry_fuel_kg +=
-            (next_canonical[index].consumed_dry_fuel_kg_m2
-             - states_[index].consumed_dry_fuel_kg_m2)
-            * cell_area_m2;
-        sensible_energy_increment_j +=
-            (next_canonical[index].sensible_energy_j_m2
-             - states_[index].sensible_energy_j_m2)
-            * cell_area_m2;
-        water_released_increment_kg +=
-            (next_canonical[index].water_released_kg_m2
-             - states_[index].water_released_kg_m2)
-            * cell_area_m2;
+    for (amrex::MFIter mfi(next_states); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto previous = states_mf_.const_array(mfi);
+        const auto next = next_states.const_array(mfi);
+
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                accounting[4] +=
+                    (next(i, j, 0, consumed_dry_fuel_comp)
+                     - previous(i, j, 0, consumed_dry_fuel_comp))
+                    * cell_area_m2;
+                accounting[5] +=
+                    (next(i, j, 0, sensible_energy_comp)
+                     - previous(i, j, 0, sensible_energy_comp))
+                    * cell_area_m2;
+                accounting[6] +=
+                    (next(i, j, 0, water_released_comp)
+                     - previous(i, j, 0, water_released_comp))
+                    * cell_area_m2;
+            }
+        }
     }
+
+    amrex::ParallelDescriptor::ReduceRealSum(accounting, 7);
+
+    const FireCombustionRasterTotals next_totals{
+        accounting[0],
+        accounting[1],
+        accounting[2],
+        accounting[3]};
+    const amrex::Real newly_consumed_dry_fuel_kg = accounting[4];
+    const amrex::Real sensible_energy_increment_j = accounting[5];
+    const amrex::Real water_released_increment_kg = accounting[6];
 
     require_finite_nonnegative(
         newly_consumed_dry_fuel_kg,
@@ -938,10 +1059,10 @@ FireCombustionRaster::advance_from_linear_sweep(
         "fire combustion raster cumulative water is not finite");
 
     states_mf_ = std::move(next_states);
-    states_ = std::move(next_canonical);
+    totals_ = next_totals;
 
     return {
-        next_totals,
+        totals_,
         newly_consumed_dry_fuel_kg,
         sensible_energy_increment_j,
         water_released_increment_kg
