@@ -2,6 +2,8 @@
 
 #include <ERF_FireSpreadRuntime.H>
 
+#include <AMReX_ParallelDescriptor.H>
+
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -167,6 +169,10 @@ write_erf_fire_spread_snapshot(
     if (step_index < 0) {
         throw std::invalid_argument(
             "fire output step index must be nonnegative");
+    }
+
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        return;
     }
 
     const std::filesystem::path directory(output_dir);

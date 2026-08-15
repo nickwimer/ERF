@@ -34,10 +34,14 @@ require_level0_layout (
     require(
         mf.nComp() == 1,
         "fire environment source fields must have exactly one component");
-    require(mf.boxArray().ixType() == expected.ixType(), message);
-    require(
-        amrex::match(mf.boxArray(), amrex::BoxArray(expected)),
-        message);
+
+    const amrex::BoxArray& boxes = mf.boxArray();
+    require(boxes.ixType() == expected.ixType(), message);
+    require(boxes.contains(expected), message);
+
+    for (int index = 0; index < boxes.size(); ++index) {
+        require(expected.contains(boxes[index]), message);
+    }
 }
 
 amrex::FArrayBox

@@ -28,6 +28,20 @@ require(bool condition, const char* message)
     }
 }
 
+void
+require_level0_coverage(
+    const amrex::BoxArray& boxes,
+    const amrex::Box& expected,
+    const char* message)
+{
+    require(boxes.ixType() == expected.ixType(), message);
+    require(boxes.contains(expected), message);
+
+    for (int index = 0; index < boxes.size(); ++index) {
+        require(expected.contains(boxes[index]), message);
+    }
+}
+
 bool
 same_horizontal_geometry(
     const FireCartesianRasterGeometry2D& fire_geometry,
@@ -58,12 +72,9 @@ diagnose_level0_pressure_pa(
     require(
         domain.cellCentered(),
         "ERF Fire source coupling requires a cell-centered level-0 domain");
-    require(
-        conserved_state_tn.boxArray().ixType()
-            == domain.ixType()
-        && amrex::match(
-            conserved_state_tn.boxArray(),
-            amrex::BoxArray(domain)),
+    require_level0_coverage(
+        conserved_state_tn.boxArray(),
+        domain,
         "ERF Fire source coupling conserved state does not cover level 0");
     require(
         moisture_type != MoistureType::None,
@@ -176,26 +187,17 @@ validate_terrain_source_scope_and_layout(
             domain,
             amrex::IntVect(1, 1, 1));
 
-    require(
-        inputs.z_phys_cc.boxArray().ixType()
-                == domain.ixType()
-            && amrex::match(
-                inputs.z_phys_cc.boxArray(),
-                amrex::BoxArray(domain)),
+    require_level0_coverage(
+        inputs.z_phys_cc.boxArray(),
+        domain,
         "ERF Fire terrain source z_phys_cc does not cover level 0");
-    require(
-        inputs.z_phys_nd.boxArray().ixType()
-                == expected_znd.ixType()
-            && amrex::match(
-                inputs.z_phys_nd.boxArray(),
-                amrex::BoxArray(expected_znd)),
+    require_level0_coverage(
+        inputs.z_phys_nd.boxArray(),
+        expected_znd,
         "ERF Fire terrain source z_phys_nd does not cover the level-0 nodal domain");
-    require(
-        detJ_cc.boxArray().ixType()
-                == domain.ixType()
-            && amrex::match(
-                detJ_cc.boxArray(),
-                amrex::BoxArray(domain)),
+    require_level0_coverage(
+        detJ_cc.boxArray(),
+        domain,
         "ERF Fire terrain source detJ_cc does not cover level 0");
     require(
         inputs.z_phys_cc.nComp() >= 1

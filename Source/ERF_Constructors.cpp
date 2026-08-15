@@ -125,10 +125,6 @@ ERF::ERF_shared ()
             m_fire_runtime_options.enabled);
 
         if (m_fire_runtime_options.enabled) {
-            if (ParallelDescriptor::NProcs() != 1) {
-                Error(
-                    "Fire runtime currently requires one MPI rank");
-            }
             if (max_level != 0) {
                 Error(
                     "Fire runtime currently requires amr.max_level = 0");

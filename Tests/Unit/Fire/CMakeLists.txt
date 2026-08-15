@@ -479,3 +479,53 @@ set_tests_properties(
     TIMEOUT 180
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+if(ERF_ENABLE_MPI)
+  if(NOT TARGET MPI::MPI_CXX)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+  endif()
+  if(NOT MPIEXEC_EXECUTABLE)
+    message(FATAL_ERROR
+      "MPIEXEC_EXECUTABLE is required for the ERF-Fire decomposition test")
+  endif()
+
+  add_executable(erf_fire_mpi_decomposition_analysis
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecompositionAnalysis.cpp
+  )
+  target_link_libraries(
+    erf_fire_mpi_decomposition_analysis
+    PRIVATE
+      AMReX::amrex
+  )
+  set_erf_compile_flags(erf_fire_mpi_decomposition_analysis)
+  add_dependencies(
+    erf_fire_unit_tests
+    erf_fire_mpi_decomposition_analysis
+  )
+
+  string(REPLACE ";" "," fire_mpi_preflags_csv
+    "${MPIEXEC_PREFLAGS}")
+  string(REPLACE ";" "," fire_mpi_postflags_csv
+    "${MPIEXEC_POSTFLAGS}")
+
+  add_test(
+    NAME FireTimeStepIntegration.MpiDecompositionInvariant
+    COMMAND ${CMAKE_COMMAND}
+      -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+      -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_mpi_decomposition_analysis>
+      -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecomposition.inputs
+      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+      -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+      -DMPIEXEC_PREFLAGS_CSV=${fire_mpi_preflags_csv}
+      -DMPIEXEC_POSTFLAGS_CSV=${fire_mpi_postflags_csv}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireMpiDecomposition.cmake
+  )
+  set_tests_properties(
+    FireTimeStepIntegration.MpiDecompositionInvariant
+    PROPERTIES
+      LABELS "unit;parallel"
+      PROCESSORS 2
+      TIMEOUT 180
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+endif()
