@@ -215,6 +215,7 @@ validate_terrain_source_scope_and_layout(
         "ERF Fire terrain source geometry fields require at least one component");
 }
 
+[[maybe_unused]]
 amrex::Real
 terrain_cell_vertical_face_height_m(
     const amrex::Array4<const amrex::Real>& z,
@@ -261,12 +262,17 @@ fire_column_mf_info()
 }
 
 #ifdef AMREX_USE_GPU
-constexpr int flat_device_source_invalid_density = 1;
-constexpr int flat_device_source_invalid_rhotheta = 2;
-constexpr int flat_device_source_invalid_rhoqv = 3;
-constexpr int flat_device_source_invalid_source = 4;
-constexpr int flat_device_source_invalid_pressure = 5;
-constexpr int flat_device_source_overflow_source = 6;
+constexpr int device_source_invalid_density = 1;
+constexpr int device_source_invalid_rhotheta = 2;
+constexpr int device_source_invalid_rhoqv = 3;
+constexpr int device_source_invalid_source = 4;
+constexpr int device_source_invalid_terrain_geometry = 5;
+constexpr int device_source_invalid_detj = 6;
+constexpr int device_source_invalid_pressure = 101;
+constexpr int device_source_overflow_source = 102;
+constexpr int device_source_overflow_weight = 103;
+constexpr int device_source_overflow_volume = 104;
+constexpr int device_source_overflow_normalization = 105;
 
 std::vector<amrex::Real>
 flat_normalized_layer_weights(
@@ -378,6 +384,85 @@ throw_distributed_source_failure(
         + " failed with an invalid distributed error code");
 }
 
+#ifdef AMREX_USE_GPU
+void
+throw_device_source_failure(
+    int local_device_failure,
+    int device_failure,
+    const char* operation)
+{
+    if (device_failure == 0) {
+        return;
+    }
+
+    DistributedSourceFailure failure =
+        device_failure >= device_source_invalid_pressure
+        ? DistributedSourceFailure::overflow_error
+        : DistributedSourceFailure::invalid_argument;
+
+    std::string local_error;
+    if (local_device_failure == device_failure) {
+        switch (device_failure) {
+        case device_source_invalid_density:
+            local_error =
+                "ERF Fire source coupling dry density must be finite and positive";
+            break;
+        case device_source_invalid_rhotheta:
+            local_error =
+                "ERF Fire source coupling rho theta must be finite and positive";
+            break;
+        case device_source_invalid_rhoqv:
+            local_error =
+                "ERF Fire source coupling rho qv must be finite and nonnegative";
+            break;
+        case device_source_invalid_source:
+            local_error =
+                "ERF Fire atmospheric source received invalid layer inputs";
+            break;
+        case device_source_invalid_terrain_geometry:
+            local_error =
+                "ERF Fire terrain source vertical-face geometry is invalid";
+            break;
+        case device_source_invalid_detj:
+            local_error =
+                "ERF Fire terrain source detJ_cc must be finite and positive";
+            break;
+        case device_source_invalid_pressure:
+            local_error =
+                "ERF Fire source coupling diagnosed invalid pressure";
+            break;
+        case device_source_overflow_source:
+            local_error =
+                "ERF Fire atmospheric source produced invalid tendency";
+            break;
+        case device_source_overflow_weight:
+            local_error =
+                "ERF Fire atmospheric deposition weight is not finite and positive";
+            break;
+        case device_source_overflow_volume:
+            local_error =
+                "ERF Fire terrain source physical cell volume is invalid";
+            break;
+        case device_source_overflow_normalization:
+            local_error =
+                "ERF Fire atmospheric deposition normalization is invalid";
+            break;
+        default:
+            failure =
+                DistributedSourceFailure::runtime_error;
+            local_error =
+                "invalid device source failure code";
+            break;
+        }
+    }
+
+    throw_distributed_source_failure(
+        failure,
+        local_error,
+        operation);
+}
+#endif
+
 template <typename Function>
 void
 run_distributed_source_projection(
@@ -477,6 +562,7 @@ make_fire_column_box_array(
     return columns;
 }
 
+[[maybe_unused]]
 amrex::MultiFab
 make_fire_state_columns(
     const amrex::BoxArray& column_boxes,
@@ -523,6 +609,7 @@ make_fire_state_columns(
     return result;
 }
 
+[[maybe_unused]]
 amrex::MultiFab
 make_fire_source_columns(
     const FireSurfaceFeedbackRaster& feedback,
@@ -566,6 +653,7 @@ make_fire_source_columns(
     return result;
 }
 
+[[maybe_unused]]
 amrex::MultiFab
 make_fire_scalar_columns(
     const amrex::BoxArray& column_boxes,
@@ -589,6 +677,7 @@ make_fire_scalar_columns(
     return result;
 }
 
+[[maybe_unused]]
 amrex::MultiFab
 make_fire_nodal_height_columns(
     const amrex::BoxArray& column_boxes,
@@ -617,6 +706,7 @@ make_fire_nodal_height_columns(
     return result;
 }
 
+[[maybe_unused]]
 amrex::Real
 diagnose_fire_column_pressure_pa(
     const amrex::Array4<const amrex::Real>& state,
@@ -1046,17 +1136,17 @@ make_erf_fire_level0_source_tendency(
                 if (!amrex::Math::isfinite(rho)
                     || !(rho > amrex::Real(0))) {
                     return {
-                        flat_device_source_invalid_density};
+                        device_source_invalid_density};
                 }
                 if (!amrex::Math::isfinite(rhotheta)
                     || !(rhotheta > amrex::Real(0))) {
                     return {
-                        flat_device_source_invalid_rhotheta};
+                        device_source_invalid_rhotheta};
                 }
                 if (!amrex::Math::isfinite(rhoqv)
                     || rhoqv < amrex::Real(0)) {
                     return {
-                        flat_device_source_invalid_rhoqv};
+                        device_source_invalid_rhoqv};
                 }
 
                 const amrex::Real qv = rhoqv / rho;
@@ -1065,7 +1155,7 @@ make_erf_fire_level0_source_tendency(
                 if (!amrex::Math::isfinite(pressure)
                     || !(pressure > amrex::Real(0))) {
                     return {
-                        flat_device_source_invalid_pressure};
+                        device_source_invalid_pressure};
                 }
 
                 ERFFireAtmosphericSourceCell cell{};
@@ -1084,17 +1174,17 @@ make_erf_fire_level0_source_tendency(
                 if (status
                     == ERFFireAtmosphericSourceStatus::invalid_argument) {
                     return {
-                        flat_device_source_invalid_source};
+                        device_source_invalid_source};
                 }
                 if (status
                     == ERFFireAtmosphericSourceStatus::overflow_error) {
                     return {
-                        flat_device_source_overflow_source};
+                        device_source_overflow_source};
                 }
                 if (status
                     != ERFFireAtmosphericSourceStatus::success) {
                     return {
-                        flat_device_source_overflow_source};
+                        device_source_overflow_source};
                 }
 
                 source(
@@ -1114,54 +1204,10 @@ make_erf_fire_level0_source_tendency(
     amrex::ParallelDescriptor::ReduceIntMax(
         device_failure);
 
-    if (device_failure != 0) {
-        DistributedSourceFailure failure =
-            device_failure
-                    >= flat_device_source_invalid_pressure
-                    ? DistributedSourceFailure::overflow_error
-                : DistributedSourceFailure::invalid_argument;
-
-        std::string local_error;
-        if (local_device_failure == device_failure) {
-            switch (device_failure) {
-            case flat_device_source_invalid_density:
-                local_error =
-                    "ERF Fire source coupling dry density must be finite and positive";
-                break;
-            case flat_device_source_invalid_rhotheta:
-                local_error =
-                    "ERF Fire source coupling rho theta must be finite and positive";
-                break;
-            case flat_device_source_invalid_rhoqv:
-                local_error =
-                    "ERF Fire source coupling rho qv must be finite and nonnegative";
-                break;
-            case flat_device_source_invalid_source:
-                local_error =
-                    "ERF Fire atmospheric source received invalid layer inputs";
-                break;
-            case flat_device_source_invalid_pressure:
-                local_error =
-                    "ERF Fire source coupling diagnosed invalid pressure";
-                break;
-            case flat_device_source_overflow_source:
-                local_error =
-                    "ERF Fire atmospheric source produced invalid tendency";
-                break;
-            default:
-                failure =
-                    DistributedSourceFailure::runtime_error;
-                local_error =
-                    "invalid device flat source failure code";
-                break;
-            }
-        }
-
-        throw_distributed_source_failure(
-            failure,
-            local_error,
-            "distributed ERF Fire flat source projection");
-    }
+    throw_device_source_failure(
+        local_device_failure,
+        device_failure,
+        "distributed ERF Fire flat source projection");
 
     return map_fire_columns_to_native_source(
         source_columns,
@@ -1301,6 +1347,483 @@ make_erf_fire_level0_terrain_source_tendency(
     const auto& column_dm =
         feedback.surface_layout().distribution_map();
 
+#ifdef AMREX_USE_GPU
+    validate_source_state_scope_and_layout(
+        environment_inputs.geometry,
+        conserved_state_tn,
+        moisture_type);
+    require(
+        std::isfinite(dt_s) && dt_s > amrex::Real(0),
+        "ERF Fire atmospheric source dt must be finite and positive");
+    require(
+        std::isfinite(options.extinction_depth_m)
+            && options.extinction_depth_m > amrex::Real(0),
+        "ERF Fire atmospheric extinction depth must be finite and positive");
+
+    amrex::MultiFab state_columns(
+        column_boxes,
+        column_dm,
+        fire_state_component_count,
+        0);
+    state_columns.ParallelCopy(
+        conserved_state_tn,
+        Rho_comp,
+        fire_state_rho_comp,
+        1,
+        0,
+        0);
+    state_columns.ParallelCopy(
+        conserved_state_tn,
+        RhoTheta_comp,
+        fire_state_rhotheta_comp,
+        1,
+        0,
+        0);
+    state_columns.ParallelCopy(
+        conserved_state_tn,
+        RhoQ1_comp,
+        fire_state_rhoqv_comp,
+        1,
+        0,
+        0);
+
+    const amrex::BoxArray nodal_column_boxes =
+        amrex::convert(
+            column_boxes,
+            amrex::IntVect(1, 1, 1));
+    amrex::MultiFab z_columns(
+        nodal_column_boxes,
+        column_dm,
+        1,
+        0);
+    z_columns.ParallelCopy(
+        environment_inputs.z_phys_nd,
+        0,
+        0,
+        1,
+        0,
+        0);
+
+    amrex::MultiFab detJ_columns(
+        column_boxes,
+        column_dm,
+        1,
+        0);
+    detJ_columns.ParallelCopy(
+        detJ_cc,
+        0,
+        0,
+        1,
+        0,
+        0);
+
+    const int klo = domain.smallEnd(2);
+    const int khi = domain.bigEnd(2);
+    const int device_nz =
+        static_cast<int>(nz);
+
+    amrex::BoxArray surface_boxes(
+        column_boxes.boxList());
+    for (int index = 0;
+         index < surface_boxes.size();
+         ++index) {
+        amrex::Box surface_box =
+            surface_boxes[index];
+        surface_box.setRange(
+            2,
+            klo,
+            1);
+        surface_boxes.set(
+            index,
+            surface_box);
+    }
+
+    amrex::MultiFab surface_release(
+        surface_boxes,
+        column_dm,
+        fire_source_component_count,
+        0);
+    surface_release.setVal(amrex::Real(0));
+
+    const amrex::IntVect offset(
+        domain.smallEnd(0),
+        domain.smallEnd(1),
+        domain.smallEnd(2));
+    const amrex::IntVect no_ghost(0);
+    surface_release.ParallelCopy(
+        feedback.distributed_values(),
+        FireSurfaceFeedbackRaster::sensible_energy_comp,
+        fire_source_rhotheta_comp,
+        1,
+        no_ghost,
+        no_ghost,
+        offset,
+        amrex::Periodicity::NonPeriodic());
+    surface_release.ParallelCopy(
+        feedback.distributed_values(),
+        FireSurfaceFeedbackRaster::water_released_comp,
+        fire_source_rhoqv_comp,
+        1,
+        no_ghost,
+        no_ghost,
+        offset,
+        amrex::Periodicity::NonPeriodic());
+
+    amrex::MultiFab source_columns(
+        column_boxes,
+        column_dm,
+        fire_source_component_count,
+        0);
+    source_columns.setVal(amrex::Real(0));
+
+    amrex::Gpu::streamSynchronize();
+
+    const auto state_arrays =
+        state_columns.const_arrays();
+    const auto z_arrays =
+        z_columns.const_arrays();
+    const auto detJ_arrays =
+        detJ_columns.const_arrays();
+    const auto release_arrays =
+        surface_release.const_arrays();
+    const auto source_arrays =
+        source_columns.arrays();
+
+    const auto cell_size =
+        environment_inputs.geometry.CellSizeArray();
+    const amrex::Real computational_volume_m3 =
+        cell_size[0]
+        * cell_size[1]
+        * cell_size[2];
+    require(
+        std::isfinite(computational_volume_m3)
+            && computational_volume_m3 > amrex::Real(0),
+        "ERF Fire terrain source computational cell volume must be finite and positive");
+
+    const amrex::Real device_computational_volume_m3 =
+        computational_volume_m3;
+    const amrex::Real device_extinction_depth_m =
+        options.extinction_depth_m;
+    const amrex::Real device_dt_s =
+        dt_s;
+
+    const int local_device_failure =
+        amrex::ParReduce(
+            amrex::TypeList<
+                amrex::ReduceOpMax>{},
+            amrex::TypeList<int>{},
+            surface_release,
+            [=] AMREX_GPU_DEVICE (
+                int box_no,
+                int i,
+                int j,
+                int k_surface) noexcept
+                -> amrex::GpuTuple<int>
+            {
+                if (k_surface != klo) {
+                    return {
+                        device_source_invalid_terrain_geometry};
+                }
+
+                const auto state =
+                    state_arrays[box_no];
+                const auto z =
+                    z_arrays[box_no];
+                const auto detJ =
+                    detJ_arrays[box_no];
+                const auto release =
+                    release_arrays[box_no];
+                const auto source =
+                    source_arrays[box_no];
+
+                const FireSurfaceFeedbackCell surface_feedback{
+                    amrex::Real(0),
+                    release(
+                        i, j, klo,
+                        fire_source_rhotheta_comp),
+                    release(
+                        i, j, klo,
+                        fire_source_rhoqv_comp)};
+
+                const amrex::Real ground_height_m =
+                    amrex::Real(0.25)
+                    * (z(i, j, klo)
+                       + z(i + 1, j, klo)
+                       + z(i, j + 1, klo)
+                       + z(i + 1, j + 1, klo));
+                if (!amrex::Math::isfinite(
+                        ground_height_m)) {
+                    return {
+                        device_source_invalid_terrain_geometry};
+                }
+
+                amrex::Real raw_weight_total =
+                    amrex::Real(0);
+
+                for (int local_k = 0;
+                     local_k < device_nz;
+                     ++local_k) {
+                    const int k =
+                        klo + local_k;
+
+                    amrex::Real zlo_m =
+                        amrex::Real(0);
+                    if (local_k != 0) {
+                        const amrex::Real physical_lo_m =
+                            amrex::Real(0.25)
+                            * (z(i, j, k)
+                               + z(i + 1, j, k)
+                               + z(i, j + 1, k)
+                               + z(i + 1, j + 1, k));
+                        zlo_m =
+                            physical_lo_m
+                            - ground_height_m;
+                    }
+
+                    const amrex::Real physical_hi_m =
+                        amrex::Real(0.25)
+                        * (z(i, j, k + 1)
+                           + z(i + 1, j, k + 1)
+                           + z(i, j + 1, k + 1)
+                           + z(i + 1, j + 1, k + 1));
+                    const amrex::Real zhi_m =
+                        physical_hi_m
+                        - ground_height_m;
+
+                    if (!amrex::Math::isfinite(zlo_m)
+                        || !amrex::Math::isfinite(zhi_m)
+                        || !(zhi_m > zlo_m)) {
+                        return {
+                            device_source_invalid_terrain_geometry};
+                    }
+
+                    amrex::Real raw_weight =
+                        amrex::Real(0);
+                    const auto weight_status =
+                        try_erf_fire_atmospheric_source_raw_layer_weight(
+                            zlo_m,
+                            zhi_m,
+                            device_extinction_depth_m,
+                            raw_weight);
+                    if (weight_status
+                        == ERFFireAtmosphericSourceStatus::invalid_argument) {
+                        return {
+                            device_source_invalid_terrain_geometry};
+                    }
+                    if (weight_status
+                        != ERFFireAtmosphericSourceStatus::success) {
+                        return {
+                            device_source_overflow_weight};
+                    }
+
+                    raw_weight_total +=
+                        raw_weight;
+                    if (!amrex::Math::isfinite(
+                            raw_weight_total)) {
+                        return {
+                            device_source_overflow_normalization};
+                    }
+                }
+
+                if (!(raw_weight_total
+                        > amrex::Real(0))) {
+                    return {
+                        device_source_overflow_normalization};
+                }
+
+                amrex::Real normalized_sum =
+                    amrex::Real(0);
+
+                for (int local_k = 0;
+                     local_k < device_nz;
+                     ++local_k) {
+                    const int k =
+                        klo + local_k;
+
+                    amrex::Real zlo_m =
+                        amrex::Real(0);
+                    if (local_k != 0) {
+                        const amrex::Real physical_lo_m =
+                            amrex::Real(0.25)
+                            * (z(i, j, k)
+                               + z(i + 1, j, k)
+                               + z(i, j + 1, k)
+                               + z(i + 1, j + 1, k));
+                        zlo_m =
+                            physical_lo_m
+                            - ground_height_m;
+                    }
+
+                    const amrex::Real physical_hi_m =
+                        amrex::Real(0.25)
+                        * (z(i, j, k + 1)
+                           + z(i + 1, j, k + 1)
+                           + z(i, j + 1, k + 1)
+                           + z(i + 1, j + 1, k + 1));
+                    const amrex::Real zhi_m =
+                        physical_hi_m
+                        - ground_height_m;
+
+                    amrex::Real raw_weight =
+                        amrex::Real(0);
+                    const auto weight_status =
+                        try_erf_fire_atmospheric_source_raw_layer_weight(
+                            zlo_m,
+                            zhi_m,
+                            device_extinction_depth_m,
+                            raw_weight);
+                    if (weight_status
+                        == ERFFireAtmosphericSourceStatus::invalid_argument) {
+                        return {
+                            device_source_invalid_terrain_geometry};
+                    }
+                    if (weight_status
+                        != ERFFireAtmosphericSourceStatus::success) {
+                        return {
+                            device_source_overflow_weight};
+                    }
+
+                    amrex::Real normalized_weight =
+                        amrex::Real(0);
+                    if (k == khi) {
+                        const amrex::Real remainder =
+                            amrex::Real(1)
+                            - normalized_sum;
+                        normalized_weight =
+                            remainder > amrex::Real(0)
+                            ? remainder
+                            : amrex::Real(0);
+                    } else {
+                        normalized_weight =
+                            raw_weight
+                            / raw_weight_total;
+                        normalized_sum +=
+                            normalized_weight;
+                    }
+
+                    if (!amrex::Math::isfinite(
+                            normalized_weight)
+                        || normalized_weight
+                            < amrex::Real(0)) {
+                        return {
+                            device_source_overflow_normalization};
+                    }
+
+                    const amrex::Real jacobian =
+                        detJ(i, j, k);
+                    if (!amrex::Math::isfinite(
+                            jacobian)
+                        || !(jacobian
+                             > amrex::Real(0))) {
+                        return {
+                            device_source_invalid_detj};
+                    }
+
+                    const amrex::Real volume_m3 =
+                        device_computational_volume_m3
+                        * jacobian;
+                    if (!amrex::Math::isfinite(
+                            volume_m3)
+                        || !(volume_m3
+                             > amrex::Real(0))) {
+                        return {
+                            device_source_overflow_volume};
+                    }
+
+                    const amrex::Real rho =
+                        state(
+                            i, j, k,
+                            fire_state_rho_comp);
+                    const amrex::Real rhotheta =
+                        state(
+                            i, j, k,
+                            fire_state_rhotheta_comp);
+                    const amrex::Real rhoqv =
+                        state(
+                            i, j, k,
+                            fire_state_rhoqv_comp);
+
+                    if (!amrex::Math::isfinite(rho)
+                        || !(rho > amrex::Real(0))) {
+                        return {
+                            device_source_invalid_density};
+                    }
+                    if (!amrex::Math::isfinite(
+                            rhotheta)
+                        || !(rhotheta
+                             > amrex::Real(0))) {
+                        return {
+                            device_source_invalid_rhotheta};
+                    }
+                    if (!amrex::Math::isfinite(
+                            rhoqv)
+                        || rhoqv < amrex::Real(0)) {
+                        return {
+                            device_source_invalid_rhoqv};
+                    }
+
+                    const amrex::Real qv =
+                        rhoqv / rho;
+                    const amrex::Real pressure =
+                        getPgivenRTh(
+                            rhotheta,
+                            qv);
+                    if (!amrex::Math::isfinite(
+                            pressure)
+                        || !(pressure
+                             > amrex::Real(0))) {
+                        return {
+                            device_source_invalid_pressure};
+                    }
+
+                    ERFFireAtmosphericSourceCell cell{};
+                    const auto source_status =
+                        try_make_erf_fire_atmospheric_source_cell(
+                            surface_feedback,
+                            normalized_weight,
+                            volume_m3,
+                            pressure,
+                            device_dt_s,
+                            cell);
+
+                    if (source_status
+                        == ERFFireAtmosphericSourceStatus::invalid_argument) {
+                        return {
+                            device_source_invalid_source};
+                    }
+                    if (source_status
+                        != ERFFireAtmosphericSourceStatus::success) {
+                        return {
+                            device_source_overflow_source};
+                    }
+
+                    source(
+                        i, j, k,
+                        fire_source_rhotheta_comp) =
+                            cell.rhotheta_tendency_kg_K_m3_s;
+                    source(
+                        i, j, k,
+                        fire_source_rhoqv_comp) =
+                            cell.rhoqv_tendency_kg_m3_s;
+                }
+
+                return {0};
+            });
+
+    int device_failure =
+        local_device_failure;
+    amrex::ParallelDescriptor::ReduceIntMax(
+        device_failure);
+
+    throw_device_source_failure(
+        local_device_failure,
+        device_failure,
+        "distributed ERF Fire terrain source projection");
+
+    return map_fire_columns_to_native_source(
+        source_columns,
+        conserved_state_tn);
+#else
     amrex::MultiFab state_columns =
         make_fire_state_columns(
             column_boxes,
@@ -1462,6 +1985,7 @@ make_erf_fire_level0_terrain_source_tendency(
     return map_fire_columns_to_native_source(
         source_columns,
         conserved_state_tn);
+#endif
 }
 
 
