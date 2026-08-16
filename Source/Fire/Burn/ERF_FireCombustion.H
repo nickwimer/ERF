@@ -1,7 +1,13 @@
 #ifndef ERF_FIRE_COMBUSTION_H_
 #define ERF_FIRE_COMBUSTION_H_
 
+#include <AMReX_Extension.H>
+#include <AMReX_GpuQualifiers.H>
+#include <AMReX_Math.H>
 #include <AMReX_REAL.H>
+
+#include <cmath>
+#include <limits>
 
 namespace ERFFire
 {
@@ -32,6 +38,234 @@ struct FireCombustionAdvance
     amrex::Real sensible_energy_increment_j_m2{};
     amrex::Real water_released_increment_kg_m2{};
 };
+
+enum class FireCombustionStatus : int
+{
+    success = 0,
+    invalid_argument = 1,
+    overflow_error = 2
+};
+
+namespace detail
+{
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real
+combustion_scaled_tolerance(amrex::Real scale) noexcept
+{
+    const amrex::Real magnitude = amrex::Math::abs(scale);
+    const amrex::Real bounded =
+        magnitude > amrex::Real(1) ? magnitude : amrex::Real(1);
+    return amrex::Real(512)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * bounded;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+bool
+combustion_parameters_valid(
+    const FireCombustionParameters& p) noexcept
+{
+    return amrex::Math::isfinite(p.dry_fuel_load_kg_m2)
+        && p.dry_fuel_load_kg_m2 > amrex::Real(0)
+        && amrex::Math::isfinite(p.sensible_heat_release_j_kg_dry)
+        && p.sensible_heat_release_j_kg_dry > amrex::Real(0)
+        && amrex::Math::isfinite(p.fuel_moisture_fraction)
+        && p.fuel_moisture_fraction >= amrex::Real(0)
+        && amrex::Math::isfinite(p.burn_time_constant_s)
+        && p.burn_time_constant_s > amrex::Real(0)
+        && amrex::Math::isfinite(
+            p.combustion_water_yield_kg_per_kg_dry)
+        && p.combustion_water_yield_kg_per_kg_dry
+            >= amrex::Real(0);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+bool
+combustion_state_valid(
+    const FireCombustionState& s,
+    const FireCombustionParameters& p) noexcept
+{
+    if (!combustion_parameters_valid(p)
+        || !amrex::Math::isfinite(s.ignited_area_fraction)
+        || s.ignited_area_fraction < amrex::Real(0)
+        || s.ignited_area_fraction > amrex::Real(1)
+        || !amrex::Math::isfinite(s.remaining_dry_fuel_kg_m2)
+        || s.remaining_dry_fuel_kg_m2 < amrex::Real(0)
+        || !amrex::Math::isfinite(s.consumed_dry_fuel_kg_m2)
+        || s.consumed_dry_fuel_kg_m2 < amrex::Real(0)
+        || !amrex::Math::isfinite(s.sensible_energy_j_m2)
+        || s.sensible_energy_j_m2 < amrex::Real(0)
+        || !amrex::Math::isfinite(s.water_released_kg_m2)
+        || s.water_released_kg_m2 < amrex::Real(0)) {
+        return false;
+    }
+
+    const amrex::Real expected_mass =
+        s.ignited_area_fraction * p.dry_fuel_load_kg_m2;
+    const amrex::Real represented_mass =
+        s.remaining_dry_fuel_kg_m2
+        + s.consumed_dry_fuel_kg_m2;
+    if (amrex::Math::abs(expected_mass - represented_mass)
+        > combustion_scaled_tolerance(expected_mass)) {
+        return false;
+    }
+
+    const amrex::Real expected_energy =
+        s.consumed_dry_fuel_kg_m2
+        * p.sensible_heat_release_j_kg_dry;
+    if (amrex::Math::abs(
+            expected_energy - s.sensible_energy_j_m2)
+        > combustion_scaled_tolerance(expected_energy)) {
+        return false;
+    }
+
+    const amrex::Real expected_water =
+        s.consumed_dry_fuel_kg_m2
+        * (p.fuel_moisture_fraction
+           + p.combustion_water_yield_kg_per_kg_dry);
+    return amrex::Math::abs(
+               expected_water - s.water_released_kg_m2)
+        <= combustion_scaled_tolerance(expected_water);
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+FireCombustionState
+add_fire_combustion_ignition_unchecked(
+    const FireCombustionState& state,
+    const FireCombustionParameters& p,
+    amrex::Real newly_ignited_area_fraction) noexcept
+{
+    const amrex::Real next_fraction =
+        state.ignited_area_fraction
+        + newly_ignited_area_fraction;
+
+    FireCombustionState next = state;
+    next.ignited_area_fraction =
+        amrex::Real(1) < next_fraction
+            ? amrex::Real(1)
+            : next_fraction;
+    next.remaining_dry_fuel_kg_m2 +=
+        newly_ignited_area_fraction
+        * p.dry_fuel_load_kg_m2;
+    return next;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+FireCombustionAdvance
+advance_fire_combustion_unchecked(
+    const FireCombustionState& state,
+    const FireCombustionParameters& p,
+    amrex::Real dt_s) noexcept
+{
+    const amrex::Real exponent =
+        -dt_s / p.burn_time_constant_s;
+    const amrex::Real newly_consumed =
+        -state.remaining_dry_fuel_kg_m2
+        * std::expm1(exponent);
+    const amrex::Real remaining =
+        state.remaining_dry_fuel_kg_m2
+        - newly_consumed;
+    const amrex::Real energy_increment =
+        newly_consumed
+        * p.sensible_heat_release_j_kg_dry;
+    const amrex::Real water_increment =
+        newly_consumed
+        * (p.fuel_moisture_fraction
+           + p.combustion_water_yield_kg_per_kg_dry);
+
+    FireCombustionState next = state;
+    next.remaining_dry_fuel_kg_m2 =
+        remaining < amrex::Real(0)
+            ? amrex::Real(0)
+            : remaining;
+    next.consumed_dry_fuel_kg_m2 += newly_consumed;
+    next.sensible_energy_j_m2 += energy_increment;
+    next.water_released_kg_m2 += water_increment;
+
+    return {
+        next,
+        newly_consumed,
+        energy_increment,
+        water_increment};
+}
+
+} // namespace detail
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+FireCombustionStatus
+try_add_fire_combustion_ignition(
+    const FireCombustionState& state,
+    const FireCombustionParameters& p,
+    amrex::Real newly_ignited_area_fraction,
+    FireCombustionState& result) noexcept
+{
+    result = {};
+    if (!detail::combustion_state_valid(state, p)
+        || !amrex::Math::isfinite(newly_ignited_area_fraction)
+        || newly_ignited_area_fraction < amrex::Real(0)
+        || newly_ignited_area_fraction > amrex::Real(1)) {
+        return FireCombustionStatus::invalid_argument;
+    }
+
+    const amrex::Real next_fraction =
+        state.ignited_area_fraction
+        + newly_ignited_area_fraction;
+    if (next_fraction
+        > amrex::Real(1)
+            + detail::combustion_scaled_tolerance(
+                amrex::Real(1))) {
+        return FireCombustionStatus::invalid_argument;
+    }
+
+    result = detail::add_fire_combustion_ignition_unchecked(
+        state, p, newly_ignited_area_fraction);
+    if (!amrex::Math::isfinite(
+            result.remaining_dry_fuel_kg_m2)) {
+        result = {};
+        return FireCombustionStatus::overflow_error;
+    }
+    if (!detail::combustion_state_valid(result, p)) {
+        result = {};
+        return FireCombustionStatus::invalid_argument;
+    }
+    return FireCombustionStatus::success;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+FireCombustionStatus
+try_advance_fire_combustion(
+    const FireCombustionState& state,
+    const FireCombustionParameters& p,
+    amrex::Real dt_s,
+    FireCombustionAdvance& result) noexcept
+{
+    result = {};
+    if (!detail::combustion_state_valid(state, p)
+        || !amrex::Math::isfinite(dt_s)
+        || dt_s < amrex::Real(0)) {
+        return FireCombustionStatus::invalid_argument;
+    }
+
+    result = detail::advance_fire_combustion_unchecked(
+        state, p, dt_s);
+    if (!amrex::Math::isfinite(
+            result.state.remaining_dry_fuel_kg_m2)
+        || !amrex::Math::isfinite(
+            result.state.consumed_dry_fuel_kg_m2)
+        || !amrex::Math::isfinite(
+            result.state.sensible_energy_j_m2)
+        || !amrex::Math::isfinite(
+            result.state.water_released_kg_m2)) {
+        result = {};
+        return FireCombustionStatus::overflow_error;
+    }
+    if (!detail::combustion_state_valid(result.state, p)) {
+        result = {};
+        return FireCombustionStatus::invalid_argument;
+    }
+    return FireCombustionStatus::success;
+}
 
 /**
  * Convert a fuel-burn calibration weight to the corresponding exponential

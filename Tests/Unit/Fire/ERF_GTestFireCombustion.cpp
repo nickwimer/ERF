@@ -1,6 +1,8 @@
 #include <ERF_FireCombustion.H>
 #include <ERF_RothermelFuel.H>
 
+#include <AMReX_Gpu.H>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -239,6 +241,137 @@ TEST(FireCombustion, ZeroDtIsExactlyIdempotent)
     EXPECT_EQ(update.sensible_energy_increment_j_m2, Real(0.0));
     EXPECT_EQ(update.water_released_increment_kg_m2, Real(0.0));
 }
+
+#ifdef AMREX_USE_GPU
+namespace
+{
+
+struct DeviceCombustionProbe
+{
+    ERFFire::FireCombustionAdvance update{};
+    int status{};
+    int invalid_status{};
+};
+
+DeviceCombustionProbe
+run_device_combustion_probe(
+    const FireCombustionParameters& p,
+    Real ignition_fraction,
+    Real dt)
+{
+    amrex::Gpu::DeviceScalar<ERFFire::FireCombustionAdvance>
+        device_update;
+    amrex::Gpu::DeviceScalar<int> device_status;
+    amrex::Gpu::DeviceScalar<int> device_invalid_status;
+
+    auto* update_ptr = device_update.dataPtr();
+    auto* status_ptr = device_status.dataPtr();
+    auto* invalid_status_ptr =
+        device_invalid_status.dataPtr();
+
+    amrex::ParallelFor(
+        1,
+        [=] AMREX_GPU_DEVICE (int) noexcept
+        {
+            FireCombustionState ignited{};
+            ERFFire::FireCombustionAdvance update{};
+            auto status =
+                ERFFire::try_add_fire_combustion_ignition(
+                    FireCombustionState{},
+                    p,
+                    ignition_fraction,
+                    ignited);
+            if (status
+                == ERFFire::FireCombustionStatus::success) {
+                status =
+                    ERFFire::try_advance_fire_combustion(
+                        ignited,
+                        p,
+                        dt,
+                        update);
+            }
+
+            ERFFire::FireCombustionAdvance rejected{};
+            const auto invalid_status =
+                ERFFire::try_advance_fire_combustion(
+                    ignited,
+                    p,
+                    Real(-1.0),
+                    rejected);
+
+            *update_ptr = update;
+            *status_ptr = static_cast<int>(status);
+            *invalid_status_ptr =
+                static_cast<int>(invalid_status);
+        });
+
+    return {
+        device_update.dataValue(),
+        device_status.dataValue(),
+        device_invalid_status.dataValue()};
+}
+
+} // namespace
+
+TEST(FireCombustion, DeviceSafeScalarApiMatchesHost)
+{
+    const auto p = synthetic_parameters();
+    const Real ignition_fraction = Real(0.8);
+    const Real dt = Real(4.0);
+
+    const FireCombustionState host_ignited =
+        ERFFire::add_fire_combustion_ignition(
+            FireCombustionState{},
+            p,
+            ignition_fraction);
+    const auto host_update =
+        ERFFire::advance_fire_combustion(
+            host_ignited,
+            p,
+            dt);
+
+    const DeviceCombustionProbe actual =
+        run_device_combustion_probe(
+            p,
+            ignition_fraction,
+            dt);
+
+    EXPECT_EQ(
+        actual.status,
+        static_cast<int>(
+            ERFFire::FireCombustionStatus::success));
+    EXPECT_EQ(
+        actual.invalid_status,
+        static_cast<int>(
+            ERFFire::FireCombustionStatus::invalid_argument));
+
+    EXPECT_NEAR(
+        actual.update.state.ignited_area_fraction,
+        host_update.state.ignited_area_fraction,
+        scaled_tolerance(
+            host_update.state.ignited_area_fraction));
+    EXPECT_NEAR(
+        actual.update.state.remaining_dry_fuel_kg_m2,
+        host_update.state.remaining_dry_fuel_kg_m2,
+        scaled_tolerance(
+            host_update.state.remaining_dry_fuel_kg_m2));
+    EXPECT_NEAR(
+        actual.update.state.consumed_dry_fuel_kg_m2,
+        host_update.state.consumed_dry_fuel_kg_m2,
+        scaled_tolerance(
+            host_update.state.consumed_dry_fuel_kg_m2));
+    EXPECT_NEAR(
+        actual.update.state.sensible_energy_j_m2,
+        host_update.state.sensible_energy_j_m2,
+        scaled_tolerance(
+            host_update.state.sensible_energy_j_m2));
+    EXPECT_NEAR(
+        actual.update.state.water_released_kg_m2,
+        host_update.state.water_released_kg_m2,
+        scaled_tolerance(
+            host_update.state.water_released_kg_m2));
+}
+#endif
 
 TEST(FireCombustion, RejectsInvalidParametersStateAndTransitions)
 {

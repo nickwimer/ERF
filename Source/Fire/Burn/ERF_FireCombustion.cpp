@@ -173,11 +173,11 @@ add_fire_combustion_ignition(
             + scaled_tolerance(amrex::Real(1)),
         "cumulative ignited fire area fraction exceeds one");
 
-    FireCombustionState next = state;
-    next.ignited_area_fraction =
-        std::min(next_fraction, amrex::Real(1));
-    next.remaining_dry_fuel_kg_m2 +=
-        newly_ignited_area_fraction * p.dry_fuel_load_kg_m2;
+    FireCombustionState next =
+        detail::add_fire_combustion_ignition_unchecked(
+            state,
+            p,
+            newly_ignited_area_fraction);
 
     if (!std::isfinite(next.remaining_dry_fuel_kg_m2)) {
         throw std::overflow_error(
@@ -200,42 +200,22 @@ advance_fire_combustion(
         std::isfinite(dt_s) && dt_s >= amrex::Real(0),
         "fire combustion dt must be finite and nonnegative");
 
-    const amrex::Real exponent = -dt_s / p.burn_time_constant_s;
-    const amrex::Real newly_consumed =
-        -state.remaining_dry_fuel_kg_m2 * std::expm1(exponent);
-    const amrex::Real remaining =
-        state.remaining_dry_fuel_kg_m2 - newly_consumed;
+    const FireCombustionAdvance result =
+        detail::advance_fire_combustion_unchecked(
+            state,
+            p,
+            dt_s);
 
-    const amrex::Real energy_increment =
-        newly_consumed * p.sensible_heat_release_j_kg_dry;
-    const amrex::Real water_increment =
-        newly_consumed
-        * (p.fuel_moisture_fraction
-           + p.combustion_water_yield_kg_per_kg_dry);
-
-    FireCombustionState next = state;
-    next.remaining_dry_fuel_kg_m2 =
-        std::max(remaining, amrex::Real(0));
-    next.consumed_dry_fuel_kg_m2 += newly_consumed;
-    next.sensible_energy_j_m2 += energy_increment;
-    next.water_released_kg_m2 += water_increment;
-
-    if (!std::isfinite(next.remaining_dry_fuel_kg_m2)
-        || !std::isfinite(next.consumed_dry_fuel_kg_m2)
-        || !std::isfinite(next.sensible_energy_j_m2)
-        || !std::isfinite(next.water_released_kg_m2)) {
+    if (!std::isfinite(result.state.remaining_dry_fuel_kg_m2)
+        || !std::isfinite(result.state.consumed_dry_fuel_kg_m2)
+        || !std::isfinite(result.state.sensible_energy_j_m2)
+        || !std::isfinite(result.state.water_released_kg_m2)) {
         throw std::overflow_error(
             "fire combustion advance produced non-finite accounting");
     }
 
-    validate_state(next, p);
-
-    return {
-        next,
-        newly_consumed,
-        energy_increment,
-        water_increment
-    };
+    validate_state(result.state, p);
+    return result;
 }
 
 } // namespace ERFFire

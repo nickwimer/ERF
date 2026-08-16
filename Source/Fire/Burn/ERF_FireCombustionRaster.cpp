@@ -986,6 +986,14 @@ FireCombustionRaster::advance_from_linear_sweep(
         throw std::invalid_argument(
             "fire combustion raster temporal substep is not representable");
     }
+    if (options_.temporal_substeps
+        > static_cast<std::size_t>(
+            std::numeric_limits<int>::max())) {
+        throw std::invalid_argument(
+            "fire combustion raster temporal substep count exceeds int");
+    }
+    const int temporal_substeps =
+        static_cast<int>(options_.temporal_substeps);
 
     amrex::MultiFab next_states(
         surface_layout_.box_array(),
@@ -999,6 +1007,12 @@ FireCombustionRaster::advance_from_linear_sweep(
         1,
         0,
         fire_surface_mf_info());
+    amrex::MultiFab ignition_schedule(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        temporal_substeps,
+        0,
+        fire_surface_mf_info());
 
     copy_distributed_state(
         states_mf_,
@@ -1009,6 +1023,8 @@ FireCombustionRaster::advance_from_linear_sweep(
     std::string local_error;
 
     try {
+        // Validate committed state and seed the CPU-side exact-geometry
+        // running coverage. No combustion arithmetic occurs in this stage.
         for (amrex::MFIter mfi(next_states);
              mfi.isValid(); ++mfi) {
             const amrex::Box& box = mfi.validbox();
@@ -1051,13 +1067,15 @@ FireCombustionRaster::advance_from_linear_sweep(
             }
         }
 
-        for (std::size_t substep = 1;
-             substep <= options_.temporal_substeps;
+        // Exact perimeter geometry remains CPU-side. Materialize only the
+        // regular per-cell ignition increments needed by combustion.
+        for (int substep = 0;
+             substep < temporal_substeps;
              ++substep) {
             const amrex::Real alpha =
-                static_cast<amrex::Real>(substep)
+                static_cast<amrex::Real>(substep + 1)
                 / static_cast<amrex::Real>(
-                    options_.temporal_substeps);
+                    temporal_substeps);
 
             const FirePerimeter sample_perimeter =
                 interpolate_fire_perimeter_linear_sweep(
@@ -1065,10 +1083,11 @@ FireCombustionRaster::advance_from_linear_sweep(
                     end_perimeter,
                     alpha);
 
-            for (amrex::MFIter mfi(next_states);
+            for (amrex::MFIter mfi(ignition_schedule);
                  mfi.isValid(); ++mfi) {
                 const amrex::Box& box = mfi.validbox();
-                const auto values = next_states.array(mfi);
+                const auto schedule =
+                    ignition_schedule.array(mfi);
                 const auto running =
                     running_burned_fraction.array(mfi);
 
@@ -1078,12 +1097,10 @@ FireCombustionRaster::advance_from_linear_sweep(
                     for (int i = box.smallEnd(0);
                          i <= box.bigEnd(0);
                          ++i) {
-                        const std::size_t ii =
-                            static_cast<std::size_t>(i);
-                        const std::size_t jj =
-                            static_cast<std::size_t>(j);
                         const FireCartesianCell2D cell =
-                            burned_before.cell_bounds(ii, jj);
+                            burned_before.cell_bounds(
+                                static_cast<std::size_t>(i),
+                                static_cast<std::size_t>(j));
 
                         const amrex::Real coverage =
                             fire_perimeter_cell_coverage_fraction(
@@ -1093,36 +1110,9 @@ FireCombustionRaster::advance_from_linear_sweep(
                             std::max(
                                 running(i, j, 0),
                                 coverage);
-                        const amrex::Real newly_ignited_fraction =
+                        schedule(i, j, 0, substep) =
                             next_burned_fraction
                             - running(i, j, 0);
-
-                        const FireCombustionState current =
-                            load_combustion_state(
-                                values,
-                                i,
-                                j);
-                        const FireCombustionAdvance first_half =
-                            advance_fire_combustion(
-                                current,
-                                parameters_,
-                                half_substep_dt_s);
-                        const FireCombustionState with_ignition =
-                            add_fire_combustion_ignition(
-                                first_half.state,
-                                parameters_,
-                                newly_ignited_fraction);
-                        const FireCombustionAdvance second_half =
-                            advance_fire_combustion(
-                                with_ignition,
-                                parameters_,
-                                half_substep_dt_s);
-
-                        store_combustion_state(
-                            values,
-                            i,
-                            j,
-                            second_half.state);
                         running(i, j, 0) =
                             next_burned_fraction;
                     }
@@ -1130,10 +1120,11 @@ FireCombustionRaster::advance_from_linear_sweep(
             }
         }
 
-        for (amrex::MFIter mfi(next_states);
+        // The CPU geometry schedule must reproduce the authoritative
+        // endpoint burned history before regular combustion consumes it.
+        for (amrex::MFIter mfi(running_burned_fraction);
              mfi.isValid(); ++mfi) {
             const amrex::Box& box = mfi.validbox();
-            const auto values = next_states.const_array(mfi);
             const auto running =
                 running_burned_fraction.const_array(mfi);
             const auto target_values =
@@ -1145,24 +1136,70 @@ FireCombustionRaster::advance_from_linear_sweep(
                 for (int i = box.smallEnd(0);
                      i <= box.bigEnd(0);
                      ++i) {
-                    const amrex::Real target =
-                        target_values(i, j, 0);
-                    const FireCombustionState current =
+                    require(
+                        fraction_equal(
+                            running(i, j, 0),
+                            target_values(i, j, 0)),
+                        "fire combustion temporal sampling does not reproduce endpoint burned history");
+                }
+            }
+        }
+
+        // Regular combustion is now independent of perimeter geometry. It
+        // consumes only the per-cell ignition schedule plus scalar parameters.
+        for (amrex::MFIter mfi(next_states);
+             mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto values = next_states.array(mfi);
+            const auto schedule =
+                ignition_schedule.const_array(mfi);
+            const auto target_values =
+                burned_after_mf.const_array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    FireCombustionState current =
                         load_combustion_state(
                             values,
                             i,
                             j);
 
-                    require(
-                        fraction_equal(
-                            running(i, j, 0),
-                            target),
-                        "fire combustion temporal sampling does not reproduce endpoint burned history");
+                    for (int substep = 0;
+                         substep < temporal_substeps;
+                         ++substep) {
+                        const FireCombustionAdvance first_half =
+                            advance_fire_combustion(
+                                current,
+                                parameters_,
+                                half_substep_dt_s);
+                        const FireCombustionState with_ignition =
+                            add_fire_combustion_ignition(
+                                first_half.state,
+                                parameters_,
+                                schedule(i, j, 0, substep));
+                        const FireCombustionAdvance second_half =
+                            advance_fire_combustion(
+                                with_ignition,
+                                parameters_,
+                                half_substep_dt_s);
+                        current = second_half.state;
+                    }
+
                     require(
                         fraction_equal(
                             current.ignited_area_fraction,
-                            target),
+                            target_values(i, j, 0)),
                         "fire combustion endpoint state is not synchronized with burned history");
+
+                    store_combustion_state(
+                        values,
+                        i,
+                        j,
+                        current);
                 }
             }
         }
