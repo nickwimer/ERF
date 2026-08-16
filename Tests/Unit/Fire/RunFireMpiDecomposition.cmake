@@ -32,9 +32,16 @@ endif()
 file(REAL_PATH "." test_root)
 set(one_rank_dir "${test_root}/fire_mpi_one_rank")
 set(two_rank_dir "${test_root}/fire_mpi_two_rank")
+set(rank_change_dir "${test_root}/fire_mpi_rank_change")
 
-file(REMOVE_RECURSE "${one_rank_dir}" "${two_rank_dir}")
-file(MAKE_DIRECTORY "${one_rank_dir}" "${two_rank_dir}")
+file(REMOVE_RECURSE
+  "${one_rank_dir}"
+  "${two_rank_dir}"
+  "${rank_change_dir}")
+file(MAKE_DIRECTORY
+  "${one_rank_dir}"
+  "${two_rank_dir}"
+  "${rank_change_dir}")
 
 function(run_parallel ranks working_dir description)
   execute_process(
@@ -150,5 +157,69 @@ if(NOT analysis_result EQUAL 0)
     "stderr:\n${analysis_error}")
 endif()
 
+run_parallel(
+  1
+  "${rank_change_dir}"
+  "one-rank pre-restart Fire segment"
+  "max_step=10")
+
+set(rank_change_checkpoint "${rank_change_dir}/chk00010")
+if(NOT IS_DIRECTORY "${rank_change_checkpoint}")
+  message(FATAL_ERROR
+    "rank-change pre-restart segment did not create ${rank_change_checkpoint}")
+endif()
+if(NOT EXISTS "${rank_change_checkpoint}/FireState")
+  message(FATAL_ERROR
+    "rank-change checkpoint is missing FireState metadata")
+endif()
+if(NOT EXISTS
+   "${rank_change_checkpoint}/Level_0/FireStateRaster_H")
+  message(FATAL_ERROR
+    "rank-change checkpoint is missing distributed FireStateRaster")
+endif()
+
+run_parallel(
+  2
+  "${rank_change_dir}"
+  "two-rank restart from one-rank Fire checkpoint"
+  "amr.restart=${rank_change_checkpoint}")
+
+compare_file(
+  "${two_rank_dir}/chk00020/FireState"
+  "${rank_change_dir}/chk00020/FireState"
+  "rank-change persistent Fire checkpoint metadata")
+
+compare_tree(
+  "${two_rank_dir}/fire_output"
+  "${rank_change_dir}/fire_output"
+  "rank-change Fire output history")
+
+set(rank_change_plot "${rank_change_dir}/plt00020")
+if(NOT IS_DIRECTORY "${rank_change_plot}")
+  message(FATAL_ERROR
+    "rank-change restart did not create final plotfile")
+endif()
+
+execute_process(
+  COMMAND
+    "${MPIEXEC}"
+    "${MPIEXEC_NUMPROC_FLAG}" "1"
+    ${mpiexec_preflags}
+    "${ANALYSIS_EXE}"
+    ${mpiexec_postflags}
+    "analysis.reference_plot=${two_plot}"
+    "analysis.comparison_plot=${rank_change_plot}"
+  WORKING_DIRECTORY "${test_root}"
+  RESULT_VARIABLE rank_change_analysis_result
+  OUTPUT_VARIABLE rank_change_analysis_output
+  ERROR_VARIABLE rank_change_analysis_error
+)
+if(NOT rank_change_analysis_result EQUAL 0)
+  message(FATAL_ERROR
+    "MPI rank-change restart atmospheric comparison failed\n"
+    "stdout:\n${rank_change_analysis_output}\n"
+    "stderr:\n${rank_change_analysis_error}")
+endif()
+
 message(STATUS
-  "ERF-Fire one-rank and two-rank decompositions produce identical Fire history and atmospheric state")
+  "ERF-Fire decomposition invariance includes one-rank-to-two-rank checkpoint restart")

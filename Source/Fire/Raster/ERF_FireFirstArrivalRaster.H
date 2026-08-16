@@ -76,6 +76,18 @@ public:
         const FireCartesianRasterGeometry2D& geometry,
         const FireFirstArrivalRasterState& state);
 
+    /**
+     * Collectively restore mask/time components from a distributed checkpoint
+     * raster. Canonical vectors in metadata may remain empty.
+     */
+    [[nodiscard]] static FireFirstArrivalRaster
+    collective_restore_from_checkpoint_raster(
+        const FireCartesianRasterGeometry2D& geometry,
+        const amrex::MultiFab& checkpoint,
+        int arrived_comp,
+        int first_arrival_time_comp,
+        const FireFirstArrivalRasterState& metadata);
+
     FireFirstArrivalRaster(
         const FireFirstArrivalRaster& other);
     FireFirstArrivalRaster& operator=(
@@ -115,6 +127,18 @@ public:
     surface_layout() const noexcept
     {
         return surface_layout_;
+    }
+
+    [[nodiscard]] const amrex::iMultiFab&
+    distributed_arrived() const noexcept
+    {
+        return arrived_mf_;
+    }
+
+    [[nodiscard]] const amrex::MultiFab&
+    distributed_first_arrival_time_s() const noexcept
+    {
+        return first_arrival_time_mf_;
     }
 
     [[nodiscard]] std::size_t cell_count () const noexcept

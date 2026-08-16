@@ -10,6 +10,7 @@
 #include <AMReX_ParallelDescriptor.H>
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -299,6 +300,168 @@ FireFirstArrivalRaster::collective_restore_from_io_rank_state(
         io_times, 0, 0, 1, 0, 0);
     result.arrived_cell_count_ =
         static_cast<std::size_t>(arrived_count);
+    result.has_initial_condition_ = flags[0] != 0;
+    result.initial_condition_time_s_ = times[0];
+    result.has_committed_sweep_ = flags[1] != 0;
+    result.last_sweep_end_time_s_ = times[1];
+    return result;
+}
+
+FireFirstArrivalRaster
+FireFirstArrivalRaster::collective_restore_from_checkpoint_raster(
+    const FireCartesianRasterGeometry2D& geometry,
+    const amrex::MultiFab& checkpoint,
+    int arrived_comp,
+    int first_arrival_time_comp,
+    const FireFirstArrivalRasterState& metadata)
+{
+    FireFirstArrivalRaster result(geometry);
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    int flags[2]{0, 0};
+    amrex::Real times[2]{
+        amrex::Real(0.0),
+        amrex::Real(0.0)};
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        flags[0] = metadata.has_initial_condition ? 1 : 0;
+        flags[1] = metadata.has_committed_sweep ? 1 : 0;
+        times[0] = metadata.initial_condition_time_s;
+        times[1] = metadata.last_sweep_end_time_s;
+    }
+
+    amrex::ParallelDescriptor::Bcast(flags, 2, io_rank);
+    amrex::ParallelDescriptor::Bcast(times, 2, io_rank);
+
+    if (flags[0] != 0) {
+        if (!std::isfinite(times[0])
+            || times[0] < amrex::Real(0.0)) {
+            throw std::invalid_argument(
+                "restored fire first-arrival initial time must be finite and nonnegative");
+        }
+    } else if (flags[1] != 0) {
+        throw std::invalid_argument(
+            "restored fire first-arrival state cannot have sweeps without an initial condition");
+    }
+    if (flags[1] != 0) {
+        if (!std::isfinite(times[1])
+            || times[1] < times[0]) {
+            throw std::invalid_argument(
+                "restored fire first-arrival sweep time is invalid");
+        }
+    } else if (!std::isfinite(times[1])) {
+        throw std::invalid_argument(
+            "restored fire first-arrival stored sweep time must be finite");
+    }
+
+    if (arrived_comp < 0
+        || first_arrival_time_comp < 0
+        || arrived_comp >= checkpoint.nComp()
+        || first_arrival_time_comp >= checkpoint.nComp()
+        || checkpoint.nGrow() != 0) {
+        throw std::invalid_argument(
+            "Fire first-arrival checkpoint MultiFab is incompatible");
+    }
+
+    amrex::MultiFab arrived_real(
+        result.surface_layout_.box_array(),
+        result.surface_layout_.distribution_map(),
+        1,
+        0,
+        fire_surface_mf_info());
+    arrived_real.setVal(amrex::Real(-1.0));
+    result.arrived_mf_.setVal(-1);
+    result.first_arrival_time_mf_.setVal(
+        std::numeric_limits<amrex::Real>::quiet_NaN());
+
+    arrived_real.ParallelCopy(
+        checkpoint,
+        arrived_comp,
+        0,
+        1,
+        0,
+        0);
+    result.first_arrival_time_mf_.ParallelCopy(
+        checkpoint,
+        first_arrival_time_comp,
+        0,
+        1,
+        0,
+        0);
+
+    int invalid_state = 0;
+    amrex::Long arrived_cell_count = 0;
+
+    for (amrex::MFIter mfi(arrived_real); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto masks = arrived_real.const_array(mfi);
+        const auto arrival_times =
+            result.first_arrival_time_mf_.const_array(mfi);
+        const auto arrived = result.arrived_mf_.array(mfi);
+
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                const amrex::Real mask = masks(i, j, 0);
+                int arrived_value = -1;
+                if (mask == amrex::Real(0.0)) {
+                    arrived_value = 0;
+                } else if (mask == amrex::Real(1.0)) {
+                    arrived_value = 1;
+                } else {
+                    invalid_state = 1;
+                    continue;
+                }
+
+                const amrex::Real arrival_time =
+                    arrival_times(i, j, 0);
+                if (!std::isfinite(arrival_time)) {
+                    invalid_state = 1;
+                    continue;
+                }
+
+                arrived(i, j, 0) = arrived_value;
+                if (arrived_value == 0) {
+                    continue;
+                }
+
+                ++arrived_cell_count;
+                if (flags[0] == 0
+                    || arrival_time < times[0]) {
+                    invalid_state = 1;
+                    continue;
+                }
+                if (flags[1] != 0) {
+                    if (arrival_time > times[1]) {
+                        invalid_state = 1;
+                    }
+                } else if (arrival_time != times[0]) {
+                    invalid_state = 1;
+                }
+            }
+        }
+    }
+
+    amrex::ParallelDescriptor::ReduceIntMax(invalid_state);
+    amrex::ParallelDescriptor::ReduceLongSum(arrived_cell_count);
+    if (invalid_state != 0) {
+        throw std::invalid_argument(
+            "distributed Fire first-arrival checkpoint data are invalid");
+    }
+    if (flags[0] == 0 && arrived_cell_count != 0) {
+        throw std::invalid_argument(
+            "restored fire first-arrival state has arrived cells without initialization");
+    }
+    if (arrived_cell_count < 0
+        || static_cast<unsigned long long>(arrived_cell_count)
+            > static_cast<unsigned long long>(
+                std::numeric_limits<std::size_t>::max())) {
+        throw std::overflow_error(
+            "restored Fire arrived-cell count is not representable");
+    }
+
+    result.arrived_cell_count_ =
+        static_cast<std::size_t>(arrived_cell_count);
     result.has_initial_condition_ = flags[0] != 0;
     result.initial_condition_time_s_ = times[0];
     result.has_committed_sweep_ = flags[1] != 0;

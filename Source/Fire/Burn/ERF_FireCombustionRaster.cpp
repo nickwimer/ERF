@@ -413,6 +413,106 @@ FireCombustionRaster::collective_restore_from_io_rank_state(
     return result;
 }
 
+FireCombustionRaster
+FireCombustionRaster::collective_restore_from_checkpoint_raster(
+    FireCartesianRasterGeometry2D geometry,
+    FireCombustionParameters parameters,
+    FireCombustionRasterOptions options,
+    const amrex::MultiFab& checkpoint,
+    int source_comp,
+    bool initialized)
+{
+    FireCombustionRaster result(
+        geometry, parameters, options);
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    int initialized_flag =
+        amrex::ParallelDescriptor::IOProcessor()
+            ? (initialized ? 1 : 0)
+            : 0;
+    amrex::ParallelDescriptor::Bcast(
+        &initialized_flag, 1, io_rank);
+
+    if (source_comp < 0
+        || source_comp + combustion_component_count
+            > checkpoint.nComp()
+        || checkpoint.nGrow() != 0) {
+        throw std::invalid_argument(
+            "Fire combustion checkpoint MultiFab is incompatible");
+    }
+
+    result.states_mf_.setVal(
+        std::numeric_limits<amrex::Real>::quiet_NaN());
+    result.states_mf_.ParallelCopy(
+        checkpoint,
+        source_comp,
+        0,
+        combustion_component_count,
+        0,
+        0);
+
+    int invalid_state = 0;
+    for (amrex::MFIter mfi(result.states_mf_);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values = result.states_mf_.const_array(mfi);
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                const FireCombustionState cell =
+                    load_combustion_state(values, i, j);
+                try {
+                    (void)advance_fire_combustion(
+                        cell,
+                        parameters,
+                        amrex::Real(0));
+                } catch (...) {
+                    invalid_state = 1;
+                    continue;
+                }
+
+                if (initialized_flag == 0
+                    && (cell.ignited_area_fraction != amrex::Real(0.0)
+                        || cell.remaining_dry_fuel_kg_m2 != amrex::Real(0.0)
+                        || cell.consumed_dry_fuel_kg_m2 != amrex::Real(0.0)
+                        || cell.sensible_energy_j_m2 != amrex::Real(0.0)
+                        || cell.water_released_kg_m2 != amrex::Real(0.0))) {
+                    invalid_state = 1;
+                }
+            }
+        }
+    }
+
+    amrex::ParallelDescriptor::ReduceIntMax(invalid_state);
+    if (invalid_state != 0) {
+        throw std::invalid_argument(
+            "distributed Fire combustion checkpoint data are invalid");
+    }
+
+    FireCombustionRasterTotals totals =
+        local_distributed_totals(
+            result.states_mf_,
+            geometry);
+    reduce_distributed_totals(totals);
+    require_finite_nonnegative(
+        totals.remaining_dry_fuel_kg,
+        "restored fire combustion remaining fuel is not finite");
+    require_finite_nonnegative(
+        totals.consumed_dry_fuel_kg,
+        "restored fire combustion consumed fuel is not finite");
+    require_finite_nonnegative(
+        totals.sensible_energy_j,
+        "restored fire combustion sensible energy is not finite");
+    require_finite_nonnegative(
+        totals.water_released_kg,
+        "restored fire combustion released water is not finite");
+
+    result.totals_ = totals;
+    result.initialized_ = initialized_flag != 0;
+    return result;
+}
+
 FireCombustionRaster::FireCombustionRaster(
     const FireCombustionRaster& other)
     : geometry_(other.geometry_),

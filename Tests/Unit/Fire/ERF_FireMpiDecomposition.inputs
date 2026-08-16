@@ -34,7 +34,7 @@ erf.plot_file_1 = plt
 erf.plot_int_1 = 20
 erf.plot_vars_1 = density rhotheta rhoQ1 z_velocity theta
 erf.plot_int_2 = -1
-erf.check_int = 20
+erf.check_int = 10
 
 prob.rho_0 = 1.0
 prob.T_0 = 300.0

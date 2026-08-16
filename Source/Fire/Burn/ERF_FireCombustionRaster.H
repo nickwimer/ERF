@@ -102,6 +102,19 @@ public:
         FireCombustionRasterOptions options,
         const FireCombustionRasterState& state);
 
+    /**
+     * Collectively restore five combustion components from a distributed
+     * checkpoint raster.
+     */
+    [[nodiscard]] static FireCombustionRaster
+    collective_restore_from_checkpoint_raster(
+        FireCartesianRasterGeometry2D geometry,
+        FireCombustionParameters parameters,
+        FireCombustionRasterOptions options,
+        const amrex::MultiFab& checkpoint,
+        int source_comp,
+        bool initialized);
+
     FireCombustionRaster(
         const FireCombustionRaster& other);
     FireCombustionRaster& operator=(

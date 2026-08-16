@@ -4,6 +4,9 @@
 #include <ERF_FireRuntimeOptions.H>
 #include <ERF_FireSpreadRuntime.H>
 
+#include <AMReX_MultiFab.H>
+
+#include <cstddef>
 #include <iosfwd>
 #include <string>
 
@@ -69,6 +72,56 @@ void write_erf_fire_checkpoint_state(
 
 [[nodiscard]] ERFFireCheckpointState
 read_erf_fire_checkpoint_state(std::istream& stream);
+
+/**
+ * Fixed component ordering for the distributed version-2 checkpoint raster.
+ */
+struct ERFFireCheckpointRasterComponents
+{
+    static constexpr int burned_fraction = 0;
+    static constexpr int arrived = 1;
+    static constexpr int first_arrival_time_s = 2;
+    static constexpr int ignited_area_fraction = 3;
+    static constexpr int remaining_dry_fuel_kg_m2 = 4;
+    static constexpr int consumed_dry_fuel_kg_m2 = 5;
+    static constexpr int sensible_energy_j_m2 = 6;
+    static constexpr int water_released_kg_m2 = 7;
+    static constexpr int component_count = 8;
+};
+
+/**
+ * Root-owned non-raster metadata for checkpoint format version 2.
+ *
+ * Storage is O(Nperimeter): configuration/scalars are O(1), while the ordered
+ * perimeter remains the intentionally replicated authoritative vector state.
+ * Canonical raster vectors remain empty; cell-resolved state is stored in
+ * FireStateRaster.
+ */
+struct ERFFireCheckpointV2Metadata
+{
+    ERFFireCheckpointState checkpoint{};
+};
+
+[[nodiscard]] int
+read_erf_fire_checkpoint_version(std::istream& stream);
+
+void write_erf_fire_checkpoint_v2_metadata(
+    const ERFFireSpreadRuntime& runtime,
+    const ERFFireRuntimeOptions& options,
+    std::ostream& stream);
+
+[[nodiscard]] ERFFireCheckpointV2Metadata
+read_erf_fire_checkpoint_v2_metadata(std::istream& stream);
+
+/**
+ * Build the distributed version-2 checkpoint payload.
+ *
+ * The BoxArray is deterministic from raster geometry and independent of MPI
+ * rank count; the DistributionMapping is rebuilt for the active run.
+ */
+[[nodiscard]] amrex::MultiFab
+make_erf_fire_checkpoint_v2_raster(
+    const ERFFireSpreadRuntime& runtime);
 
 } // namespace ERFFire
 

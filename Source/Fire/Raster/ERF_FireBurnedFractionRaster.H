@@ -65,6 +65,15 @@ public:
         const FireCartesianRasterGeometry2D& geometry,
         const FireBurnedFractionRasterState& state);
 
+    /**
+     * Collectively restore one component from a distributed checkpoint raster.
+     */
+    [[nodiscard]] static FireBurnedFractionRaster
+    collective_restore_from_checkpoint_raster(
+        const FireCartesianRasterGeometry2D& geometry,
+        const amrex::MultiFab& checkpoint,
+        int source_comp);
+
     FireBurnedFractionRaster(
         const FireBurnedFractionRaster& other);
     FireBurnedFractionRaster& operator=(

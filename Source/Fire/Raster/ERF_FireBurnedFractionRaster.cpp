@@ -6,7 +6,9 @@
 #include <AMReX_MFIter.H>
 #include <AMReX_ParallelDescriptor.H>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -179,6 +181,73 @@ FireBurnedFractionRaster::collective_restore_from_io_rank_state(
 
     result.burned_fraction_mf_.ParallelCopy(
         io_state, 0, 0, 1, 0, 0);
+    result.burned_area_m2_ = burned_area_m2;
+    return result;
+}
+
+FireBurnedFractionRaster
+FireBurnedFractionRaster::collective_restore_from_checkpoint_raster(
+    const FireCartesianRasterGeometry2D& geometry,
+    const amrex::MultiFab& checkpoint,
+    int source_comp)
+{
+    FireBurnedFractionRaster result(geometry);
+
+    if (source_comp < 0
+        || source_comp >= checkpoint.nComp()
+        || checkpoint.nGrow() != 0) {
+        throw std::invalid_argument(
+            "Fire burned-fraction checkpoint MultiFab is incompatible");
+    }
+
+    result.burned_fraction_mf_.setVal(
+        std::numeric_limits<amrex::Real>::quiet_NaN());
+    result.burned_fraction_mf_.ParallelCopy(
+        checkpoint,
+        source_comp,
+        0,
+        1,
+        0,
+        0);
+
+    int invalid_state = 0;
+    amrex::Real burned_area_m2 = amrex::Real(0.0);
+    const amrex::Real cell_area_m2 =
+        geometry.dx_m * geometry.dy_m;
+
+    for (amrex::MFIter mfi(result.burned_fraction_mf_);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values =
+            result.burned_fraction_mf_.const_array(mfi);
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                const amrex::Real value = values(i, j, 0);
+                if (!std::isfinite(value)
+                    || value < amrex::Real(0.0)
+                    || value > amrex::Real(1.0)) {
+                    invalid_state = 1;
+                    continue;
+                }
+                burned_area_m2 += value * cell_area_m2;
+            }
+        }
+    }
+
+    amrex::ParallelDescriptor::ReduceIntMax(invalid_state);
+    if (invalid_state != 0) {
+        throw std::invalid_argument(
+            "distributed Fire burned-fraction checkpoint data are invalid");
+    }
+
+    amrex::ParallelDescriptor::ReduceRealSum(burned_area_m2);
+    if (!std::isfinite(burned_area_m2)
+        || burned_area_m2 < amrex::Real(0.0)) {
+        throw std::overflow_error(
+            "restored Fire burned area is not finite and nonnegative");
+    }
+
     result.burned_area_m2_ = burned_area_m2;
     return result;
 }

@@ -1,4 +1,5 @@
 #include <ERF_FireSpreadRuntime.H>
+#include <ERF_FireSpreadOutput.H>
 #include <ERF_FireRuntimeOptions.H>
 #include <ERF_FireTerrainSurface.H>
 #include <ERF_FireCombustion.H>
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -745,6 +747,122 @@ TEST(
     ERFFireSpreadRuntime restored =
         ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
             std::move(packed));
+
+    expect_same_runtime_state(runtime, restored);
+}
+
+TEST(
+    FireSpreadRuntime,
+    LegacyVersionOneCheckpointSerializationStillRestoresExactly)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        24, 24,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    ERFFireSpreadRuntime runtime(
+        make_circle(
+            96,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.5)),
+        Real(0.0),
+        make_config(geometry));
+    const FireFlatEnvironmentSampler environment =
+        make_affine_sampler();
+    (void)runtime.advance_direct_reference_wind(
+        environment,
+        Real(1.0));
+
+    ERFFire::ERFFireRuntimeOptions options;
+    options.enabled = true;
+
+    ERFFireSpreadRuntimeState packed =
+        runtime.collective_snapshot_state_to_io_rank();
+    std::stringstream serialized;
+    ERFFire::write_erf_fire_checkpoint_state(
+        packed,
+        options,
+        serialized);
+
+    std::stringstream version_stream(serialized.str());
+    EXPECT_EQ(
+        ERFFire::read_erf_fire_checkpoint_version(
+            version_stream),
+        1);
+
+    std::stringstream read_stream(serialized.str());
+    ERFFire::ERFFireCheckpointState checkpoint =
+        ERFFire::read_erf_fire_checkpoint_state(
+            read_stream);
+    ERFFireSpreadRuntime restored =
+        ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
+            std::move(checkpoint.runtime_state));
+
+    expect_same_runtime_state(runtime, restored);
+}
+
+TEST(
+    FireSpreadRuntime,
+    VersionTwoDistributedCheckpointStateRestoresExactly)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        24, 24,
+        Real(0.0), Real(0.0),
+        Real(1.0), Real(1.0)};
+    ERFFireSpreadRuntime runtime(
+        make_circle(
+            96,
+            FireVec2{Real(8.0), Real(8.0)},
+            Real(1.5)),
+        Real(0.0),
+        make_config(geometry));
+    const FireFlatEnvironmentSampler environment =
+        make_affine_sampler();
+    (void)runtime.advance_direct_reference_wind(
+        environment,
+        Real(1.0));
+
+    ERFFire::ERFFireRuntimeOptions options;
+    options.enabled = true;
+
+    amrex::MultiFab checkpoint_raster =
+        ERFFire::make_erf_fire_checkpoint_v2_raster(
+            runtime);
+    std::stringstream serialized;
+    ERFFire::write_erf_fire_checkpoint_v2_metadata(
+        runtime,
+        options,
+        serialized);
+
+    std::stringstream version_stream(serialized.str());
+    EXPECT_EQ(
+        ERFFire::read_erf_fire_checkpoint_version(
+            version_stream),
+        2);
+
+    std::stringstream read_stream(serialized.str());
+    ERFFire::ERFFireCheckpointV2Metadata metadata =
+        ERFFire::read_erf_fire_checkpoint_v2_metadata(
+            read_stream);
+
+    EXPECT_TRUE(
+        metadata.checkpoint.runtime_state
+            .burned_fraction.burned_fraction.empty());
+    EXPECT_TRUE(
+        metadata.checkpoint.runtime_state
+            .first_arrival.arrived.empty());
+    EXPECT_TRUE(
+        metadata.checkpoint.runtime_state
+            .first_arrival.first_arrival_time_s.empty());
+    EXPECT_TRUE(
+        metadata.checkpoint.runtime_state
+            .combustion.cells.empty());
+
+    ERFFireSpreadRuntime restored =
+        ERFFireSpreadRuntime::
+            collective_restore_from_checkpoint_raster(
+                std::move(
+                    metadata.checkpoint.runtime_state),
+                checkpoint_raster);
 
     expect_same_runtime_state(runtime, restored);
 }

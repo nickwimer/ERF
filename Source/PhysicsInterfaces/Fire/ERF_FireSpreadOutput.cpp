@@ -1,7 +1,10 @@
 #include "ERF_FireSpreadOutput.H"
 
 #include <ERF_FireSpreadRuntime.H>
+#include <ERF_FireSurfaceLayout.H>
 
+#include <AMReX_IntVect.H>
+#include <AMReX_MFIter.H>
 #include <AMReX_ParallelDescriptor.H>
 
 #include <cmath>
@@ -17,6 +20,8 @@ namespace ERFFire
 {
 namespace
 {
+
+constexpr int fire_checkpoint_max_grid_size = 64;
 
 std::string
 indexed_name(const char* stem, int step_index)
@@ -361,6 +366,439 @@ write_erf_fire_spread_snapshot(
         << combustion_totals.water_released_kg << ","
         << perimeter_name << ","
         << raster_name << "\n";
+}
+
+int
+read_erf_fire_checkpoint_version(std::istream& stream)
+{
+    expect_token(stream, "ERF_FIRE_RUNTIME_STATE");
+    int version = 0;
+    require_stream_read(
+        static_cast<bool>(stream >> version),
+        "format version");
+    return version;
+}
+
+amrex::MultiFab
+make_erf_fire_checkpoint_v2_raster(
+    const ERFFireSpreadRuntime& runtime)
+{
+    const auto& geometry =
+        runtime.config().raster_geometry;
+    const FireSurfaceLayout domain_layout(geometry);
+
+    amrex::BoxArray checkpoint_boxes{
+        domain_layout.cell_domain()};
+    checkpoint_boxes.maxSize(
+        amrex::IntVect(
+            fire_checkpoint_max_grid_size,
+            fire_checkpoint_max_grid_size,
+            1));
+    const amrex::DistributionMapping checkpoint_dm{
+        checkpoint_boxes,
+        amrex::ParallelDescriptor::NProcs()};
+
+    amrex::MultiFab checkpoint_raster(
+        checkpoint_boxes,
+        checkpoint_dm,
+        ERFFireCheckpointRasterComponents::component_count,
+        0);
+    checkpoint_raster.setVal(
+        std::numeric_limits<amrex::Real>::quiet_NaN());
+
+    checkpoint_raster.ParallelCopy(
+        runtime.burned_fraction_raster()
+            .distributed_burned_fraction(),
+        0,
+        ERFFireCheckpointRasterComponents::burned_fraction,
+        1,
+        0,
+        0);
+
+    const auto& arrival =
+        runtime.first_arrival_raster();
+    const auto& arrived_mask =
+        arrival.distributed_arrived();
+    amrex::MultiFab arrived_real(
+        arrived_mask.boxArray(),
+        arrived_mask.DistributionMap(),
+        1,
+        0);
+
+    int invalid_mask = 0;
+    for (amrex::MFIter mfi(arrived_mask);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto source = arrived_mask.const_array(mfi);
+        const auto destination = arrived_real.array(mfi);
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                const int value = source(i, j, 0);
+                if (value != 0 && value != 1) {
+                    invalid_mask = 1;
+                }
+                destination(i, j, 0) =
+                    static_cast<amrex::Real>(value);
+            }
+        }
+    }
+    amrex::ParallelDescriptor::ReduceIntMax(invalid_mask);
+    if (invalid_mask != 0) {
+        throw std::logic_error(
+            "distributed Fire first-arrival mask is not 0 or 1");
+    }
+
+    checkpoint_raster.ParallelCopy(
+        arrived_real,
+        0,
+        ERFFireCheckpointRasterComponents::arrived,
+        1,
+        0,
+        0);
+    checkpoint_raster.ParallelCopy(
+        arrival.distributed_first_arrival_time_s(),
+        0,
+        ERFFireCheckpointRasterComponents::first_arrival_time_s,
+        1,
+        0,
+        0);
+    checkpoint_raster.ParallelCopy(
+        runtime.combustion_raster().distributed_states(),
+        0,
+        ERFFireCheckpointRasterComponents::ignited_area_fraction,
+        FireCombustionRaster::component_count,
+        0,
+        0);
+
+    return checkpoint_raster;
+}
+
+void
+write_erf_fire_checkpoint_v2_metadata(
+    const ERFFireSpreadRuntime& runtime,
+    const ERFFireRuntimeOptions& options,
+    std::ostream& stream)
+{
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint output stream is not writable");
+    }
+    if (!options.enabled) {
+        throw std::invalid_argument(
+            "cannot checkpoint disabled ERF-Fire runtime");
+    }
+
+    const auto& config = runtime.config();
+    const auto& fuel = config.fuel;
+    const auto& combustion_parameters =
+        config.combustion_parameters;
+    const auto& geometry = config.raster_geometry;
+    const auto& vertices =
+        runtime.perimeter().vertices_m();
+    const auto& arrival =
+        runtime.first_arrival_raster();
+    const auto& combustion =
+        runtime.combustion_raster();
+
+    stream
+        << std::setprecision(
+            std::numeric_limits<amrex::Real>::max_digits10);
+
+    stream << "ERF_FIRE_RUNTIME_STATE 2\n";
+    stream
+        << "coupling_mode "
+        << coupling_mode_token(options.coupling_mode)
+        << "\n";
+    stream
+        << "wind_mode "
+        << wind_mode_token(options.wind_mode)
+        << "\n";
+    stream
+        << "reference_height_agl_m "
+        << options.reference_height_agl_m
+        << "\n";
+    stream
+        << "wind_adjustment_factor "
+        << options.wind_adjustment_factor
+        << "\n";
+    stream
+        << "feedback_extinction_depth_m "
+        << options.feedback_extinction_depth_m
+        << "\n";
+
+    stream
+        << "fuel "
+        << fuel.dead_1h_load_kg_m2 << " "
+        << fuel.dead_1h_sav_m_inv << " "
+        << fuel.fuel_bed_depth_m << " "
+        << fuel.dead_heat_content_j_kg << " "
+        << fuel.particle_density_kg_m3 << " "
+        << fuel.total_mineral_fraction << " "
+        << fuel.effective_mineral_fraction << " "
+        << fuel.dead_moisture_of_extinction
+        << "\n";
+    stream
+        << "dead_fuel_moisture_fraction "
+        << config.dead_fuel_moisture_fraction
+        << "\n";
+    stream
+        << "combustion_parameters "
+        << combustion_parameters.dry_fuel_load_kg_m2 << " "
+        << combustion_parameters.sensible_heat_release_j_kg_dry << " "
+        << combustion_parameters.fuel_moisture_fraction << " "
+        << combustion_parameters.burn_time_constant_s << " "
+        << combustion_parameters
+               .combustion_water_yield_kg_per_kg_dry
+        << "\n";
+    stream
+        << "combustion_temporal_substeps "
+        << config.combustion_options.temporal_substeps
+        << "\n";
+    stream
+        << "remesh_options "
+        << config.remesh_options.min_edge_length_m << " "
+        << config.remesh_options.max_edge_length_m << " "
+        << config.remesh_options.max_chord_error_m
+        << "\n";
+    stream
+        << "raster_geometry "
+        << geometry.nx << " "
+        << geometry.ny << " "
+        << geometry.xlo_m << " "
+        << geometry.ylo_m << " "
+        << geometry.dx_m << " "
+        << geometry.dy_m
+        << "\n";
+    stream
+        << "arrival_time_tolerance_s "
+        << config.arrival_time_tolerance_s
+        << "\n";
+    stream
+        << "current_time_s "
+        << runtime.current_time_s()
+        << "\n";
+
+    stream
+        << "perimeter "
+        << vertices.size()
+        << "\n";
+    for (const FireVec2& vertex : vertices) {
+        stream << vertex.x << " " << vertex.y << "\n";
+    }
+
+    stream
+        << "first_arrival_metadata "
+        << (arrival.has_initial_condition() ? 1 : 0)
+        << " "
+        << arrival.initial_condition_time_s()
+        << " "
+        << (arrival.has_committed_sweep() ? 1 : 0)
+        << " "
+        << arrival.last_sweep_end_time_s()
+        << "\n";
+    stream
+        << "combustion_metadata "
+        << (combustion.initialized() ? 1 : 0)
+        << "\n";
+    stream
+        << "raster_components "
+        << ERFFireCheckpointRasterComponents::component_count
+        << "\n";
+    stream << "END_ERF_FIRE_RUNTIME_STATE\n";
+
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "failed while writing ERF-Fire checkpoint state");
+    }
+}
+
+ERFFireCheckpointV2Metadata
+read_erf_fire_checkpoint_v2_metadata(std::istream& stream)
+{
+    ERFFireCheckpointV2Metadata metadata;
+    auto& checkpoint = metadata.checkpoint;
+
+    expect_token(stream, "ERF_FIRE_RUNTIME_STATE");
+    int version = 0;
+    require_stream_read(
+        static_cast<bool>(stream >> version),
+        "format version");
+    if (version != 2) {
+        throw std::runtime_error(
+            "ERF-Fire version-2 metadata reader received another format");
+    }
+
+    expect_token(stream, "coupling_mode");
+    checkpoint.coupling_mode =
+        read_coupling_mode(stream);
+
+    expect_token(stream, "wind_mode");
+    checkpoint.wind_mode =
+        read_wind_mode(stream);
+
+    expect_token(stream, "reference_height_agl_m");
+    require_stream_read(
+        static_cast<bool>(
+            stream >> checkpoint.reference_height_agl_m),
+        "reference_height_agl_m");
+
+    expect_token(stream, "wind_adjustment_factor");
+    require_stream_read(
+        static_cast<bool>(
+            stream >> checkpoint.wind_adjustment_factor),
+        "wind_adjustment_factor");
+
+    expect_token(stream, "feedback_extinction_depth_m");
+    require_stream_read(
+        static_cast<bool>(
+            stream >> checkpoint.feedback_extinction_depth_m),
+        "feedback_extinction_depth_m");
+
+    auto& state = checkpoint.runtime_state;
+    auto& config = state.config;
+    auto& fuel = config.fuel;
+    auto& combustion_parameters =
+        config.combustion_parameters;
+    auto& geometry = config.raster_geometry;
+
+    expect_token(stream, "fuel");
+    require_stream_read(
+        static_cast<bool>(
+            stream
+            >> fuel.dead_1h_load_kg_m2
+            >> fuel.dead_1h_sav_m_inv
+            >> fuel.fuel_bed_depth_m
+            >> fuel.dead_heat_content_j_kg
+            >> fuel.particle_density_kg_m3
+            >> fuel.total_mineral_fraction
+            >> fuel.effective_mineral_fraction
+            >> fuel.dead_moisture_of_extinction),
+        "fuel");
+
+    expect_token(stream, "dead_fuel_moisture_fraction");
+    require_stream_read(
+        static_cast<bool>(
+            stream >> config.dead_fuel_moisture_fraction),
+        "dead_fuel_moisture_fraction");
+
+    expect_token(stream, "combustion_parameters");
+    require_stream_read(
+        static_cast<bool>(
+            stream
+            >> combustion_parameters.dry_fuel_load_kg_m2
+            >> combustion_parameters.sensible_heat_release_j_kg_dry
+            >> combustion_parameters.fuel_moisture_fraction
+            >> combustion_parameters.burn_time_constant_s
+            >> combustion_parameters
+                   .combustion_water_yield_kg_per_kg_dry),
+        "combustion_parameters");
+
+    expect_token(stream, "combustion_temporal_substeps");
+    config.combustion_options.temporal_substeps =
+        read_size(
+            stream,
+            "combustion_temporal_substeps");
+
+    expect_token(stream, "remesh_options");
+    require_stream_read(
+        static_cast<bool>(
+            stream
+            >> config.remesh_options.min_edge_length_m
+            >> config.remesh_options.max_edge_length_m
+            >> config.remesh_options.max_chord_error_m),
+        "remesh_options");
+
+    expect_token(stream, "raster_geometry");
+    geometry.nx = read_size(stream, "raster nx");
+    geometry.ny = read_size(stream, "raster ny");
+    require_stream_read(
+        static_cast<bool>(
+            stream
+            >> geometry.xlo_m
+            >> geometry.ylo_m
+            >> geometry.dx_m
+            >> geometry.dy_m),
+        "raster_geometry");
+
+    if (geometry.nx != 0
+        && geometry.ny
+            > std::numeric_limits<std::size_t>::max()
+                / geometry.nx) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint raster cell count overflows");
+    }
+
+    expect_token(stream, "arrival_time_tolerance_s");
+    require_stream_read(
+        static_cast<bool>(
+            stream >> config.arrival_time_tolerance_s),
+        "arrival_time_tolerance_s");
+
+    expect_token(stream, "current_time_s");
+    require_stream_read(
+        static_cast<bool>(
+            stream >> state.current_time_s),
+        "current_time_s");
+
+    expect_token(stream, "perimeter");
+    const std::size_t perimeter_count =
+        read_size(stream, "perimeter");
+    if (perimeter_count < 3) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint perimeter has fewer than three vertices");
+    }
+    state.perimeter_vertices_m.resize(perimeter_count);
+    for (FireVec2& vertex : state.perimeter_vertices_m) {
+        require_stream_read(
+            static_cast<bool>(
+                stream >> vertex.x >> vertex.y),
+            "perimeter vertex");
+    }
+
+    expect_token(stream, "first_arrival_metadata");
+    state.first_arrival.has_initial_condition =
+        read_bool(
+            stream,
+            "first-arrival initial-condition flag");
+    require_stream_read(
+        static_cast<bool>(
+            stream
+            >> state.first_arrival.initial_condition_time_s),
+        "first-arrival initial-condition time");
+    state.first_arrival.has_committed_sweep =
+        read_bool(
+            stream,
+            "first-arrival committed-sweep flag");
+    require_stream_read(
+        static_cast<bool>(
+            stream
+            >> state.first_arrival.last_sweep_end_time_s),
+        "first-arrival last-sweep time");
+
+    expect_token(stream, "combustion_metadata");
+    state.combustion.initialized =
+        read_bool(stream, "combustion initialized flag");
+
+    expect_token(stream, "raster_components");
+    const std::size_t raster_components =
+        read_size(stream, "raster_components");
+    if (raster_components
+        != static_cast<std::size_t>(
+            ERFFireCheckpointRasterComponents::component_count)) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint raster component count mismatch");
+    }
+
+    expect_token(stream, "END_ERF_FIRE_RUNTIME_STATE");
+
+    std::string trailing_token;
+    if (stream >> trailing_token) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint contains trailing data");
+    }
+
+    return metadata;
 }
 
 void

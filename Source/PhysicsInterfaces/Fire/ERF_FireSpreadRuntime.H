@@ -169,6 +169,16 @@ public:
         ERFFireSpreadRuntimeState state);
 
     /**
+     * Collectively restore version-2 state from a distributed checkpoint
+     * MultiFab. Config/current_time_s must already be identical on every rank;
+     * perimeter and scalar raster metadata may be populated only on IOProcessor().
+     */
+    [[nodiscard]] static ERFFireSpreadRuntime
+    collective_restore_from_checkpoint_raster(
+        ERFFireSpreadRuntimeState state,
+        const amrex::MultiFab& checkpoint_raster);
+
+    /**
      * Advance one fire step using sampled reference wind directly as the
      * Rothermel model wind.
      *

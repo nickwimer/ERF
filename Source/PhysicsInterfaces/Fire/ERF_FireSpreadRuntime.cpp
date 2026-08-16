@@ -1,5 +1,6 @@
 #include "ERF_FireSpreadRuntime.H"
 
+#include <ERF_FireSpreadOutput.H>
 #include <ERF_FireWindAdjustment.H>
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelModel.H>
@@ -476,6 +477,140 @@ ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
             state.config.combustion_parameters,
             state.config.combustion_options,
             state.combustion);
+
+    return ERFFireSpreadRuntime(
+        std::move(state.config),
+        std::move(perimeter),
+        std::move(burned),
+        std::move(arrival),
+        std::move(combustion),
+        state.current_time_s,
+        CollectiveRestoreStateTag{});
+}
+
+ERFFireSpreadRuntime
+ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
+    ERFFireSpreadRuntimeState state,
+    const amrex::MultiFab& checkpoint_raster)
+{
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    unsigned long long vertex_count =
+        amrex::ParallelDescriptor::IOProcessor()
+            ? static_cast<unsigned long long>(
+                state.perimeter_vertices_m.size())
+            : 0ULL;
+    amrex::ParallelDescriptor::Bcast(
+        &vertex_count, 1, io_rank);
+
+    if (vertex_count
+        > static_cast<unsigned long long>(
+            std::numeric_limits<std::size_t>::max() / 2)) {
+        throw std::overflow_error(
+            "collective Fire restore perimeter size is not representable");
+    }
+    const std::size_t count =
+        static_cast<std::size_t>(vertex_count);
+    std::vector<amrex::Real> packed_vertices(2 * count);
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        for (std::size_t index = 0; index < count; ++index) {
+            packed_vertices[2 * index] =
+                state.perimeter_vertices_m[index].x;
+            packed_vertices[2 * index + 1] =
+                state.perimeter_vertices_m[index].y;
+        }
+    }
+    if (!packed_vertices.empty()) {
+        amrex::ParallelDescriptor::Bcast(
+            packed_vertices.data(),
+            packed_vertices.size(),
+            io_rank);
+    }
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        state.perimeter_vertices_m.resize(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            state.perimeter_vertices_m[index] = {
+                packed_vertices[2 * index],
+                packed_vertices[2 * index + 1]};
+        }
+    }
+
+    if (checkpoint_raster.nComp()
+            != ERFFireCheckpointRasterComponents::component_count
+        || checkpoint_raster.nGrow() != 0) {
+        throw std::invalid_argument(
+            "ERF-Fire version-2 checkpoint raster has incompatible components or ghosts");
+    }
+
+    FirePerimeter perimeter(
+        std::move(state.perimeter_vertices_m));
+    FireBurnedFractionRaster burned =
+        FireBurnedFractionRaster::
+            collective_restore_from_checkpoint_raster(
+                state.config.raster_geometry,
+                checkpoint_raster,
+                ERFFireCheckpointRasterComponents::burned_fraction);
+    FireFirstArrivalRaster arrival =
+        FireFirstArrivalRaster::
+            collective_restore_from_checkpoint_raster(
+                state.config.raster_geometry,
+                checkpoint_raster,
+                ERFFireCheckpointRasterComponents::arrived,
+                ERFFireCheckpointRasterComponents::first_arrival_time_s,
+                state.first_arrival);
+    FireCombustionRaster combustion =
+        FireCombustionRaster::
+            collective_restore_from_checkpoint_raster(
+                state.config.raster_geometry,
+                state.config.combustion_parameters,
+                state.config.combustion_options,
+                checkpoint_raster,
+                ERFFireCheckpointRasterComponents::ignited_area_fraction,
+                state.combustion.initialized);
+
+    const auto& burned_values =
+        burned.distributed_burned_fraction();
+    const auto& combustion_values =
+        combustion.distributed_states();
+    if (burned_values.boxArray()
+            != combustion_values.boxArray()
+        || burned_values.DistributionMap()
+            != combustion_values.DistributionMap()) {
+        throw std::logic_error(
+            "restored Fire burn and combustion layouts are not co-located");
+    }
+
+    int inconsistent_history = 0;
+    for (amrex::MFIter mfi(burned_values);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto burned_array =
+            burned_values.const_array(mfi);
+        const auto combustion_array =
+            combustion_values.const_array(mfi);
+        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                if (!fraction_equal(
+                        burned_array(i, j, 0),
+                        combustion_array(
+                            i,
+                            j,
+                            0,
+                            FireCombustionRaster::
+                                ignited_area_fraction_comp))) {
+                    inconsistent_history = 1;
+                }
+            }
+        }
+    }
+    amrex::ParallelDescriptor::ReduceIntMax(
+        inconsistent_history);
+    if (inconsistent_history != 0) {
+        throw std::invalid_argument(
+            "restored fire combustion history is not synchronized with burned fraction");
+    }
 
     return ERFFireSpreadRuntime(
         std::move(state.config),
