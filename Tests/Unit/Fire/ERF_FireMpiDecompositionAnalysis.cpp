@@ -1,4 +1,6 @@
 #include <AMReX.H>
+#include <AMReX_Arena.H>
+#include <AMReX_Gpu.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_PlotFileUtil.H>
@@ -81,11 +83,29 @@ main(int argc, char** argv)
                 reference_field.nComp() == comparison_field.nComp(),
                 "ERF-Fire decomposition component counts differ for " + name);
 
-            for (amrex::MFIter mfi(reference_field);
+            amrex::MFInfo host_info;
+            host_info.SetArena(amrex::The_Pinned_Arena());
+            amrex::MultiFab reference_host(
+                reference_field.boxArray(),
+                reference_field.DistributionMap(),
+                reference_field.nComp(),
+                0,
+                host_info);
+            amrex::MultiFab comparison_host(
+                comparison_field.boxArray(),
+                comparison_field.DistributionMap(),
+                comparison_field.nComp(),
+                0,
+                host_info);
+            reference_host.ParallelCopy(reference_field);
+            comparison_host.ParallelCopy(comparison_field);
+            amrex::Gpu::streamSynchronize();
+
+            for (amrex::MFIter mfi(reference_host);
                  mfi.isValid(); ++mfi) {
                 const amrex::Box& box = mfi.validbox();
-                const auto a = reference_field.const_array(mfi);
-                const auto b = comparison_field.const_array(mfi);
+                const auto a = reference_host.const_array(mfi);
+                const auto b = comparison_host.const_array(mfi);
 
                 for (int component = 0;
                      component < reference_field.nComp(); ++component) {

@@ -185,6 +185,11 @@ struct TerrainWindFixture
 
     TerrainWindFixture()
     {
+        initialize();
+    }
+
+    void initialize()
+    {
         const GpuArray<Real, nz + 1> eta{{
             Real(0),
             Real(0.1),
@@ -205,7 +210,7 @@ struct TerrainWindFixture
                     const int kk =
                         amrex::max(
                             0,
-                            amrex::min(k, nz));
+                            amrex::min(k, static_cast<int>(nz)));
                     const Real x =
                         xlo + Real(i) * dx;
                     const Real y =

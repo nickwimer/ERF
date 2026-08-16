@@ -123,6 +123,17 @@ struct FlatAtmosphereFixture
         bool nonflat_sampled_level = false,
         bool nonflat_upper_nodal_level = false)
     {
+        initialize(
+            nonflat_surface,
+            nonflat_sampled_level,
+            nonflat_upper_nodal_level);
+    }
+
+    void initialize (
+        bool nonflat_surface,
+        bool nonflat_sampled_level,
+        bool nonflat_upper_nodal_level)
+    {
         const GpuArray<Real, nz> zcc{
             ground_z + Real(2),
             ground_z + Real(9),

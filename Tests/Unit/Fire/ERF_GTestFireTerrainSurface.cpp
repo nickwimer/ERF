@@ -110,6 +110,11 @@ struct TerrainFixture
 
     TerrainFixture()
     {
+        initialize();
+    }
+
+    void initialize()
+    {
         x_velocity.setVal(Real(0));
         y_velocity.setVal(Real(0));
 

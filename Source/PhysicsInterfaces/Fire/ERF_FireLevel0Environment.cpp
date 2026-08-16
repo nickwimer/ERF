@@ -4,6 +4,7 @@
 #include <AMReX_Box.H>
 #include <AMReX_BoxArray.H>
 #include <AMReX_DistributionMapping.H>
+#include <AMReX_Extension.H>
 #include <AMReX_FArrayBox.H>
 #include <AMReX_Gpu.H>
 #include <AMReX_IntVect.H>
@@ -352,6 +353,7 @@ make_flat_axis_stencil (
     return {lower, upper_weight};
 }
 
+AMREX_NO_INLINE
 amrex::Real
 flat_bilinear (
     amrex::Real q00,

@@ -159,6 +159,11 @@ struct CouplingFixture
     explicit CouplingFixture(
         bool nonflat_nodal = false)
     {
+        initialize(nonflat_nodal);
+    }
+
+    void initialize(bool nonflat_nodal)
+    {
         x_velocity.setVal(Real(1.0));
         y_velocity.setVal(Real(0.0));
         conserved.setVal(Real(0.0));
@@ -573,6 +578,11 @@ struct TerrainCouplingFixture
         0};
 
     TerrainCouplingFixture()
+    {
+        initialize();
+    }
+
+    void initialize()
     {
         x_velocity.setVal(Real(1.0));
         y_velocity.setVal(Real(0.0));

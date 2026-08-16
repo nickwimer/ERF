@@ -3,6 +3,8 @@
 #include <ERF_FireSpreadRuntime.H>
 #include <ERF_FireSurfaceLayout.H>
 
+#include <AMReX_Arena.H>
+#include <AMReX_Gpu.H>
 #include <AMReX_IntVect.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_ParallelDescriptor.H>
@@ -278,11 +280,14 @@ write_erf_fire_spread_snapshot(
             amrex::Vector<int> processor_map(1, io_rank);
             const amrex::DistributionMapping chunk_dm(
                 std::move(processor_map));
+            amrex::MFInfo chunk_info;
+            chunk_info.SetArena(amrex::The_Pinned_Arena());
             amrex::MultiFab io_chunk(
                 chunk_boxes,
                 chunk_dm,
                 ERFFireCheckpointRasterComponents::component_count,
-                0);
+                0,
+                chunk_info);
 
             io_chunk.ParallelCopy(
                 distributed_raster,
@@ -291,6 +296,7 @@ write_erf_fire_spread_snapshot(
                 ERFFireCheckpointRasterComponents::component_count,
                 0,
                 0);
+            amrex::Gpu::streamSynchronize();
 
             int chunk_io_failed = 0;
             if (amrex::ParallelDescriptor::IOProcessor()) {
@@ -614,11 +620,14 @@ make_erf_fire_checkpoint_v2_raster(
         runtime.first_arrival_raster();
     const auto& arrived_mask =
         arrival.distributed_arrived();
+    amrex::MFInfo arrived_info;
+    arrived_info.SetArena(amrex::The_Pinned_Arena());
     amrex::MultiFab arrived_real(
         arrived_mask.boxArray(),
         arrived_mask.DistributionMap(),
         1,
-        0);
+        0,
+        arrived_info);
 
     int invalid_mask = 0;
     for (amrex::MFIter mfi(arrived_mask);
