@@ -93,6 +93,68 @@ fire_surface_mf_info()
     return info;
 }
 
+amrex::MFInfo
+combustion_state_mf_info()
+{
+#ifdef AMREX_USE_GPU
+    return amrex::MFInfo{};
+#else
+    return fire_surface_mf_info();
+#endif
+}
+
+#ifdef AMREX_USE_GPU
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+bool
+device_fraction_equal(
+    amrex::Real a,
+    amrex::Real b) noexcept
+{
+    const amrex::Real abs_a = amrex::Math::abs(a);
+    const amrex::Real abs_b = amrex::Math::abs(b);
+    const amrex::Real scale =
+        abs_a > abs_b ? abs_a : abs_b;
+    const amrex::Real bounded_scale =
+        scale > amrex::Real(1)
+            ? scale
+            : amrex::Real(1);
+    const amrex::Real tolerance =
+        amrex::Real(1024)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * bounded_scale;
+    return amrex::Math::abs(a - b) <= tolerance;
+}
+
+void
+copy_local_pinned_to_device(
+    const amrex::MultiFab& source,
+    amrex::MultiFab& destination)
+{
+    require(
+        source.boxArray() == destination.boxArray()
+            && source.DistributionMap()
+                == destination.DistributionMap()
+            && source.nComp() == destination.nComp()
+            && source.nGrow() == destination.nGrow(),
+        "Fire combustion host/device staging layout mismatch");
+
+    for (amrex::MFIter mfi(source);
+         mfi.isValid(); ++mfi) {
+        const auto& source_fab = source[mfi];
+        auto& destination_fab = destination[mfi];
+        require(
+            source_fab.nBytes()
+                == destination_fab.nBytes(),
+            "Fire combustion host/device staging size mismatch");
+        amrex::Gpu::htod_memcpy_async(
+            destination_fab.dataPtr(),
+            source_fab.dataPtr(),
+            destination_fab.nBytes());
+    }
+    amrex::Gpu::streamSynchronize();
+}
+#endif
+
 [[noreturn]] void
 throw_distributed_failure(
     DistributedFailure failure,
@@ -179,6 +241,63 @@ local_distributed_totals(
     const amrex::MultiFab& states,
     const FireCartesianRasterGeometry2D& geometry) noexcept
 {
+#ifdef AMREX_USE_GPU
+    const amrex::Real cell_area_m2 =
+        geometry.dx_m * geometry.dy_m;
+    const auto arrays = states.const_arrays();
+
+    const auto reduced =
+        amrex::ParReduce(
+            amrex::TypeList<
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum>{},
+            amrex::TypeList<
+                amrex::Real,
+                amrex::Real,
+                amrex::Real,
+                amrex::Real>{},
+            states,
+            [=] AMREX_GPU_DEVICE (
+                int box_no,
+                int i,
+                int j,
+                int k) noexcept
+                -> amrex::GpuTuple<
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real>
+            {
+                const auto values =
+                    arrays[box_no];
+                return {
+                    values(
+                        i, j, k,
+                        remaining_dry_fuel_comp)
+                        * cell_area_m2,
+                    values(
+                        i, j, k,
+                        consumed_dry_fuel_comp)
+                        * cell_area_m2,
+                    values(
+                        i, j, k,
+                        sensible_energy_comp)
+                        * cell_area_m2,
+                    values(
+                        i, j, k,
+                        water_released_comp)
+                        * cell_area_m2};
+            });
+
+    return {
+        amrex::get<0>(reduced),
+        amrex::get<1>(reduced),
+        amrex::get<2>(reduced),
+        amrex::get<3>(reduced)};
+#else
+
     const amrex::Real cell_area_m2 =
         geometry.dx_m * geometry.dy_m;
 
@@ -205,8 +324,8 @@ local_distributed_totals(
     }
 
     return totals;
+#endif
 }
-
 void
 reduce_distributed_totals(
     FireCombustionRasterTotals& totals)
@@ -241,7 +360,7 @@ FireCombustionRaster::FireCombustionRaster(
           surface_layout_.distribution_map(),
           combustion_component_count,
           0,
-          fire_surface_mf_info())
+          combustion_state_mf_info())
 {
     (void)detail::validate_fire_cartesian_raster_geometry(
         geometry_);
@@ -412,6 +531,7 @@ FireCombustionRaster::collective_restore_from_io_rank_state(
 
     result.states_mf_.ParallelCopy(
         io_state, 0, 0, combustion_component_count, 0, 0);
+    amrex::Gpu::streamSynchronize();
     result.totals_ = {totals[0], totals[1], totals[2], totals[3]};
     result.initialized_ = initialized != 0;
     return result;
@@ -457,6 +577,63 @@ FireCombustionRaster::collective_restore_from_checkpoint_raster(
         0);
 
     int invalid_state = 0;
+#ifdef AMREX_USE_GPU
+    const auto state_arrays =
+        result.states_mf_.const_arrays();
+    const FireCombustionParameters
+        device_parameters = parameters;
+    const int device_initialized =
+        initialized_flag;
+
+    const auto validation =
+        amrex::ParReduce(
+            amrex::TypeList<
+                amrex::ReduceOpMax>{},
+            amrex::TypeList<int>{},
+            result.states_mf_,
+            [=] AMREX_GPU_DEVICE (
+                int box_no,
+                int i,
+                int j,
+                int k) noexcept
+                -> amrex::GpuTuple<int>
+            {
+                const auto values =
+                    state_arrays[box_no];
+                const FireCombustionState cell =
+                    load_combustion_state(
+                        values,
+                        i,
+                        j);
+
+                FireCombustionAdvance checked{};
+                if (try_advance_fire_combustion(
+                        cell,
+                        device_parameters,
+                        amrex::Real(0),
+                        checked)
+                    != FireCombustionStatus::success) {
+                    return {1};
+                }
+
+                if (device_initialized == 0
+                    && (cell.ignited_area_fraction
+                            != amrex::Real(0)
+                        || cell.remaining_dry_fuel_kg_m2
+                            != amrex::Real(0)
+                        || cell.consumed_dry_fuel_kg_m2
+                            != amrex::Real(0)
+                        || cell.sensible_energy_j_m2
+                            != amrex::Real(0)
+                        || cell.water_released_kg_m2
+                            != amrex::Real(0))) {
+                    return {1};
+                }
+                return {0};
+            });
+
+    invalid_state = validation;
+#else
     for (amrex::MFIter mfi(result.states_mf_);
          mfi.isValid();
          ++mfi) {
@@ -487,6 +664,8 @@ FireCombustionRaster::collective_restore_from_checkpoint_raster(
             }
         }
     }
+
+#endif
 
     amrex::ParallelDescriptor::ReduceIntMax(invalid_state);
     if (invalid_state != 0) {
@@ -528,7 +707,7 @@ FireCombustionRaster::FireCombustionRaster(
           surface_layout_.distribution_map(),
           combustion_component_count,
           0,
-          fire_surface_mf_info()),
+          combustion_state_mf_info()),
       totals_(other.totals_),
       initialized_(other.initialized_)
 {
@@ -587,6 +766,7 @@ collective_snapshot_state_to_io_rank() const
         combustion_component_count,
         0,
         0);
+    amrex::Gpu::streamSynchronize();
 
     FireCombustionRasterState state;
     state.initialized = initialized_;
@@ -652,7 +832,27 @@ FireCombustionRaster::state(
         static_cast<int>(i),
         static_cast<int>(j),
         0);
-    for (amrex::MFIter mfi(states_mf_); mfi.isValid(); ++mfi) {
+
+#ifdef AMREX_USE_GPU
+    amrex::FArrayBox host_cell(
+        amrex::Box(cell, cell),
+        combustion_component_count,
+        amrex::The_Pinned_Arena());
+    states_mf_.copyTo(
+        host_cell,
+        0,
+        0,
+        combustion_component_count,
+        0);
+    amrex::Gpu::streamSynchronize();
+
+    return load_combustion_state(
+        host_cell.const_array(),
+        cell[0],
+        cell[1]);
+#else
+    for (amrex::MFIter mfi(states_mf_);
+         mfi.isValid(); ++mfi) {
         if (mfi.validbox().contains(cell)) {
             return load_combustion_state(
                 states_mf_.const_array(mfi),
@@ -663,6 +863,7 @@ FireCombustionRaster::state(
 
     throw std::logic_error(
         "single-rank Fire combustion cell is not locally represented");
+#endif
 }
 
 void
@@ -684,12 +885,24 @@ FireCombustionRaster::scatter_canonical_to_distributed(
             "Fire combustion MultiFab does not match its surface layout");
     }
 
-    for (amrex::MFIter mfi(distributed); mfi.isValid(); ++mfi) {
-        const amrex::Box& box = mfi.validbox();
-        const auto values = distributed.array(mfi);
+    amrex::MultiFab host_state(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        combustion_component_count,
+        0,
+        fire_surface_mf_info());
 
-        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
-            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+    for (amrex::MFIter mfi(host_state);
+         mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const auto values = host_state.array(mfi);
+
+        for (int j = box.smallEnd(1);
+             j <= box.bigEnd(1);
+             ++j) {
+            for (int i = box.smallEnd(0);
+                 i <= box.bigEnd(0);
+                 ++i) {
                 const FireCombustionState& state_value =
                     canonical[
                         flat_index(
@@ -703,6 +916,15 @@ FireCombustionRaster::scatter_canonical_to_distributed(
             }
         }
     }
+
+    distributed.ParallelCopy(
+        host_state,
+        0,
+        0,
+        combustion_component_count,
+        0,
+        0);
+    amrex::Gpu::streamSynchronize();
 }
 
 void
@@ -725,22 +947,14 @@ FireCombustionRaster::copy_distributed_state(
             "Fire combustion MultiFab does not match its surface layout");
     }
 
-    for (amrex::MFIter mfi(destination); mfi.isValid(); ++mfi) {
-        const amrex::Box& box = mfi.validbox();
-        const auto src = source.const_array(mfi);
-        const auto dst = destination.array(mfi);
-
-        for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
-            for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
-                for (int component = 0;
-                     component < combustion_component_count;
-                     ++component) {
-                    dst(i, j, 0, component) =
-                        src(i, j, 0, component);
-                }
-            }
-        }
-    }
+    amrex::MultiFab::Copy(
+        destination,
+        source,
+        0,
+        0,
+        combustion_component_count,
+        0);
+    amrex::Gpu::streamSynchronize();
 }
 
 std::vector<FireCombustionState>
@@ -766,6 +980,7 @@ FireCombustionRaster::gather_distributed_to_canonical(
         0,
         combustion_component_count,
         0);
+    amrex::Gpu::streamSynchronize();
     const auto values = gathered.const_array();
 
     std::vector<FireCombustionState> canonical(
@@ -842,7 +1057,7 @@ FireCombustionRaster::initialize_from_burned_fraction(
         surface_layout_.distribution_map(),
         combustion_component_count,
         0,
-        fire_surface_mf_info());
+        combustion_state_mf_info());
     copy_distributed_state(
         states_mf_,
         next_states);
@@ -851,6 +1066,86 @@ FireCombustionRaster::initialize_from_burned_fraction(
         DistributedFailure::none;
     std::string local_error;
 
+#ifdef AMREX_USE_GPU
+    amrex::MultiFab burned_device(
+        burned_fraction_mf.boxArray(),
+        burned_fraction_mf.DistributionMap(),
+        1,
+        0);
+    copy_local_pinned_to_device(
+        burned_fraction_mf,
+        burned_device);
+
+    const auto state_arrays =
+        next_states.arrays();
+    const auto burned_arrays =
+        burned_device.const_arrays();
+    const FireCombustionParameters
+        device_parameters = parameters_;
+
+    const auto initialization_failure =
+        amrex::ParReduce(
+            amrex::TypeList<
+                amrex::ReduceOpMax,
+                amrex::ReduceOpMax>{},
+            amrex::TypeList<int, int>{},
+            next_states,
+            [=] AMREX_GPU_DEVICE (
+                int box_no,
+                int i,
+                int j,
+                int k) noexcept
+                -> amrex::GpuTuple<int, int>
+            {
+                const auto values =
+                    state_arrays[box_no];
+                const auto burned =
+                    burned_arrays[box_no];
+
+                const FireCombustionState current =
+                    load_combustion_state(
+                        values,
+                        i,
+                        j);
+                FireCombustionState next{};
+                const FireCombustionStatus status =
+                    try_add_fire_combustion_ignition(
+                        current,
+                        device_parameters,
+                        burned(i, j, k),
+                        next);
+
+                if (status
+                    == FireCombustionStatus::overflow_error) {
+                    return {0, 1};
+                }
+                if (status
+                    != FireCombustionStatus::success) {
+                    return {1, 0};
+                }
+
+                store_combustion_state(
+                    values,
+                    i,
+                    j,
+                    next);
+                return {0, 0};
+            });
+
+    if (amrex::get<1>(
+            initialization_failure) != 0) {
+        local_failure =
+            DistributedFailure::overflow_error;
+        local_error =
+            "fire combustion initialization produced non-finite accounting";
+    } else if (amrex::get<0>(
+                   initialization_failure) != 0) {
+        local_failure =
+            DistributedFailure::invalid_argument;
+        local_error =
+            "fire combustion initialization rejected combustion state";
+    }
+#else
     try {
         for (amrex::MFIter mfi(next_states);
              mfi.isValid(); ++mfi) {
@@ -903,6 +1198,8 @@ FireCombustionRaster::initialize_from_burned_fraction(
         local_failure = DistributedFailure::runtime_error;
         local_error = "unknown local Fire combustion initialization error";
     }
+
+#endif
 
     synchronize_distributed_failure(
         local_failure,
@@ -1004,7 +1301,7 @@ FireCombustionRaster::advance_from_linear_sweep(
         surface_layout_.distribution_map(),
         combustion_component_count,
         0,
-        fire_surface_mf_info());
+        combustion_state_mf_info());
     amrex::MultiFab running_burned_fraction(
         surface_layout_.box_array(),
         surface_layout_.distribution_map(),
@@ -1032,7 +1329,9 @@ FireCombustionRaster::advance_from_linear_sweep(
         for (amrex::MFIter mfi(next_states);
              mfi.isValid(); ++mfi) {
             const amrex::Box& box = mfi.validbox();
+#ifndef AMREX_USE_GPU
             const auto values = next_states.const_array(mfi);
+#endif
             const auto running =
                 running_burned_fraction.array(mfi);
             const auto before_values =
@@ -1050,21 +1349,22 @@ FireCombustionRaster::advance_from_linear_sweep(
                         before_values(i, j, 0);
                     const amrex::Real after =
                         after_values(i, j, 0);
+                    require(
+                        after + fraction_tolerance(after)
+                            >= before,
+                        "fire combustion raster burned history is not monotone");
+#ifndef AMREX_USE_GPU
                     const FireCombustionState current =
                         load_combustion_state(
                             values,
                             i,
                             j);
-
-                    require(
-                        after + fraction_tolerance(after)
-                            >= before,
-                        "fire combustion raster burned history is not monotone");
                     require(
                         fraction_equal(
                             current.ignited_area_fraction,
                             before),
                         "fire combustion raster state is not synchronized with burned history");
+#endif
 
                     running(i, j, 0) = before;
                 }
@@ -1150,45 +1450,44 @@ FireCombustionRaster::advance_from_linear_sweep(
         }
 
         // Regular combustion is independent of perimeter geometry. CUDA
-        // builds stage only regular state/schedule data to the device; exact
-        // perimeter interpolation and cell coverage remain CPU-side.
+        // builds keep combustion state device-resident and stage only the
+        // CPU-produced ignition and burned-history inputs; exact perimeter
+        // interpolation and cell coverage remain CPU-side.
 #ifdef AMREX_USE_GPU
-        amrex::MultiFab device_states(
-            next_states.boxArray(),
-            next_states.DistributionMap(),
-            combustion_component_count,
-            0);
         amrex::MultiFab device_ignition_schedule(
             ignition_schedule.boxArray(),
             ignition_schedule.DistributionMap(),
             temporal_substeps,
             0);
+        amrex::MultiFab device_burned_before(
+            burned_before_mf.boxArray(),
+            burned_before_mf.DistributionMap(),
+            1,
+            0);
+        amrex::MultiFab device_burned_after(
+            burned_after_mf.boxArray(),
+            burned_after_mf.DistributionMap(),
+            1,
+            0);
 
-        for (amrex::MFIter mfi(next_states);
-             mfi.isValid(); ++mfi) {
-            const auto& source = next_states[mfi];
-            auto& destination = device_states[mfi];
-            amrex::Gpu::htod_memcpy_async(
-                destination.dataPtr(),
-                source.dataPtr(),
-                destination.nBytes());
-        }
-        for (amrex::MFIter mfi(ignition_schedule);
-             mfi.isValid(); ++mfi) {
-            const auto& source = ignition_schedule[mfi];
-            auto& destination =
-                device_ignition_schedule[mfi];
-            amrex::Gpu::htod_memcpy_async(
-                destination.dataPtr(),
-                source.dataPtr(),
-                destination.nBytes());
-        }
-        amrex::Gpu::streamSynchronize();
+        copy_local_pinned_to_device(
+            ignition_schedule,
+            device_ignition_schedule);
+        copy_local_pinned_to_device(
+            burned_before_mf,
+            device_burned_before);
+        copy_local_pinned_to_device(
+            burned_after_mf,
+            device_burned_after);
 
         const auto state_arrays =
-            device_states.arrays();
+            next_states.arrays();
         const auto schedule_arrays =
             device_ignition_schedule.const_arrays();
+        const auto before_arrays =
+            device_burned_before.const_arrays();
+        const auto after_arrays =
+            device_burned_after.const_arrays();
         const FireCombustionParameters parameters =
             parameters_;
         const amrex::Real device_half_substep_dt_s =
@@ -1203,24 +1502,34 @@ FireCombustionRaster::advance_from_linear_sweep(
                     amrex::ReduceOpMax,
                     amrex::ReduceOpMax>{},
                 amrex::TypeList<int, int, int>{},
-                device_states,
+                next_states,
                 [=] AMREX_GPU_DEVICE (
                     int box_no,
                     int i,
                     int j,
-                    int) noexcept
+                    int k) noexcept
                     -> amrex::GpuTuple<int, int, int>
                 {
                     const auto values =
                         state_arrays[box_no];
                     const auto schedule =
                         schedule_arrays[box_no];
+                    const auto before =
+                        before_arrays[box_no];
+                    const auto after =
+                        after_arrays[box_no];
 
                     FireCombustionState current =
                         load_combustion_state(
                             values,
                             i,
                             j);
+
+                    if (!device_fraction_equal(
+                            current.ignited_area_fraction,
+                            before(i, j, k))) {
+                        return {1, 0, 0};
+                    }
 
                     for (int substep = 0;
                          substep < device_temporal_substeps;
@@ -1250,7 +1559,7 @@ FireCombustionRaster::advance_from_linear_sweep(
                             try_add_fire_combustion_ignition(
                                 first_half.state,
                                 parameters,
-                                schedule(i, j, 0, substep),
+                                schedule(i, j, k, substep),
                                 with_ignition);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
@@ -1288,6 +1597,12 @@ FireCombustionRaster::advance_from_linear_sweep(
                         current = second_half.state;
                     }
 
+                    if (!device_fraction_equal(
+                            current.ignited_area_fraction,
+                            after(i, j, k))) {
+                        return {1, 0, 0};
+                    }
+
                     store_combustion_state(
                         values,
                         i,
@@ -1307,47 +1622,6 @@ FireCombustionRaster::advance_from_linear_sweep(
         if (amrex::get<0>(device_failures) != 0) {
             throw std::invalid_argument(
                 "fire combustion device update rejected combustion state");
-        }
-
-        for (amrex::MFIter mfi(device_states);
-             mfi.isValid(); ++mfi) {
-            const auto& source = device_states[mfi];
-            auto& destination = next_states[mfi];
-            amrex::Gpu::dtoh_memcpy_async(
-                destination.dataPtr(),
-                source.dataPtr(),
-                source.nBytes());
-        }
-        amrex::Gpu::streamSynchronize();
-
-        // Preserve the host-side endpoint invariant check after the device
-        // arithmetic has been materialized back into the transactional state.
-        for (amrex::MFIter mfi(next_states);
-             mfi.isValid(); ++mfi) {
-            const amrex::Box& box = mfi.validbox();
-            const auto values =
-                next_states.const_array(mfi);
-            const auto target_values =
-                burned_after_mf.const_array(mfi);
-
-            for (int j = box.smallEnd(1);
-                 j <= box.bigEnd(1);
-                 ++j) {
-                for (int i = box.smallEnd(0);
-                     i <= box.bigEnd(0);
-                     ++i) {
-                    const FireCombustionState current =
-                        load_combustion_state(
-                            values,
-                            i,
-                            j);
-                    require(
-                        fraction_equal(
-                            current.ignited_area_fraction,
-                            target_values(i, j, 0)),
-                        "fire combustion endpoint state is not synchronized with burned history");
-                }
-            }
         }
 #else
         for (amrex::MFIter mfi(next_states);
@@ -1429,6 +1703,101 @@ FireCombustionRaster::advance_from_linear_sweep(
         local_error,
         "distributed Fire combustion sweep");
 
+#ifdef AMREX_USE_GPU
+    const amrex::Real cell_area_m2 =
+        geometry_.dx_m * geometry_.dy_m;
+    const auto previous_arrays =
+        states_mf_.const_arrays();
+    const auto next_arrays =
+        next_states.const_arrays();
+
+    const auto local_accounting =
+        amrex::ParReduce(
+            amrex::TypeList<
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum>{},
+            amrex::TypeList<
+                amrex::Real,
+                amrex::Real,
+                amrex::Real,
+                amrex::Real,
+                amrex::Real,
+                amrex::Real,
+                amrex::Real>{},
+            next_states,
+            [=] AMREX_GPU_DEVICE (
+                int box_no,
+                int i,
+                int j,
+                int k) noexcept
+                -> amrex::GpuTuple<
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real>
+            {
+                const auto previous =
+                    previous_arrays[box_no];
+                const auto next =
+                    next_arrays[box_no];
+
+                return {
+                    next(
+                        i, j, k,
+                        remaining_dry_fuel_comp)
+                        * cell_area_m2,
+                    next(
+                        i, j, k,
+                        consumed_dry_fuel_comp)
+                        * cell_area_m2,
+                    next(
+                        i, j, k,
+                        sensible_energy_comp)
+                        * cell_area_m2,
+                    next(
+                        i, j, k,
+                        water_released_comp)
+                        * cell_area_m2,
+                    (next(
+                         i, j, k,
+                         consumed_dry_fuel_comp)
+                     - previous(
+                         i, j, k,
+                         consumed_dry_fuel_comp))
+                        * cell_area_m2,
+                    (next(
+                         i, j, k,
+                         sensible_energy_comp)
+                     - previous(
+                         i, j, k,
+                         sensible_energy_comp))
+                        * cell_area_m2,
+                    (next(
+                         i, j, k,
+                         water_released_comp)
+                     - previous(
+                         i, j, k,
+                         water_released_comp))
+                        * cell_area_m2};
+            });
+
+    amrex::Real accounting[7]{
+        amrex::get<0>(local_accounting),
+        amrex::get<1>(local_accounting),
+        amrex::get<2>(local_accounting),
+        amrex::get<3>(local_accounting),
+        amrex::get<4>(local_accounting),
+        amrex::get<5>(local_accounting),
+        amrex::get<6>(local_accounting)};
+#else
     const FireCombustionRasterTotals local_next_totals =
         local_distributed_totals(
             next_states,
@@ -1467,6 +1836,8 @@ FireCombustionRaster::advance_from_linear_sweep(
             }
         }
     }
+
+#endif
 
     amrex::ParallelDescriptor::ReduceRealSum(accounting, 7);
 

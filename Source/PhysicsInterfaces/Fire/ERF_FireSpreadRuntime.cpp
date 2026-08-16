@@ -6,6 +6,9 @@
 #include <ERF_RothermelModel.H>
 #include <ERF_VectorPerimeterPropagator.H>
 
+#include <AMReX_Arena.H>
+#include <AMReX_Gpu.H>
+#include <AMReX_MultiFab.H>
 #include <AMReX_ParallelDescriptor.H>
 
 #include <algorithm>
@@ -581,6 +584,32 @@ ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
             "restored Fire burn and combustion layouts are not co-located");
     }
 
+#ifdef AMREX_USE_GPU
+    amrex::MFInfo combustion_host_info;
+    combustion_host_info.SetArena(
+        amrex::The_Pinned_Arena());
+    amrex::MultiFab combustion_host(
+        combustion_values.boxArray(),
+        combustion_values.DistributionMap(),
+        1,
+        0,
+        combustion_host_info);
+    combustion_host.ParallelCopy(
+        combustion_values,
+        FireCombustionRaster::
+            ignited_area_fraction_comp,
+        0,
+        1,
+        0,
+        0);
+    amrex::Gpu::streamSynchronize();
+    const amrex::MultiFab& combustion_check =
+        combustion_host;
+#else
+    const amrex::MultiFab& combustion_check =
+        combustion_values;
+#endif
+
     int inconsistent_history = 0;
     for (amrex::MFIter mfi(burned_values);
          mfi.isValid();
@@ -589,7 +618,7 @@ ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
         const auto burned_array =
             burned_values.const_array(mfi);
         const auto combustion_array =
-            combustion_values.const_array(mfi);
+            combustion_check.const_array(mfi);
         for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
             for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
                 if (!fraction_equal(
@@ -598,8 +627,7 @@ ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
                             i,
                             j,
                             0,
-                            FireCombustionRaster::
-                                ignited_area_fraction_comp))) {
+                            0))) {
                     inconsistent_history = 1;
                 }
             }

@@ -447,44 +447,16 @@ make_fire_surface_feedback_increment(
     std::string local_error;
 
 #ifdef AMREX_USE_GPU
-    amrex::MultiFab before_device(
-        before_states.boxArray(),
-        before_states.DistributionMap(),
-        before_states.nComp(),
-        0);
-    amrex::MultiFab after_device(
-        after_states.boxArray(),
-        after_states.DistributionMap(),
-        after_states.nComp(),
-        0);
     amrex::MultiFab result_device(
         result.cells_mf_.boxArray(),
         result.cells_mf_.DistributionMap(),
         FireSurfaceFeedbackRaster::component_count,
         0);
 
-    for (amrex::MFIter mfi(before_states); mfi.isValid(); ++mfi) {
-        const auto& source = before_states[mfi];
-        auto& destination = before_device[mfi];
-        amrex::Gpu::htod_memcpy_async(
-            destination.dataPtr(),
-            source.dataPtr(),
-            destination.nBytes());
-    }
-    for (amrex::MFIter mfi(after_states); mfi.isValid(); ++mfi) {
-        const auto& source = after_states[mfi];
-        auto& destination = after_device[mfi];
-        amrex::Gpu::htod_memcpy_async(
-            destination.dataPtr(),
-            source.dataPtr(),
-            destination.nBytes());
-    }
-    amrex::Gpu::streamSynchronize();
-
     const auto before_arrays =
-        before_device.const_arrays();
+        before_states.const_arrays();
     const auto after_arrays =
-        after_device.const_arrays();
+        after_states.const_arrays();
     const auto result_arrays =
         result_device.arrays();
 
