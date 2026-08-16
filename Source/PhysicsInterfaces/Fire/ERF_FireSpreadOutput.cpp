@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace ERFFire
 {
@@ -22,6 +23,7 @@ namespace
 {
 
 constexpr int fire_checkpoint_max_grid_size = 64;
+constexpr std::size_t fire_output_chunk_max_cells = 4096;
 
 std::string
 indexed_name(const char* stem, int step_index)
@@ -176,196 +178,389 @@ write_erf_fire_spread_snapshot(
             "fire output step index must be nonnegative");
     }
 
-    const ERFFireSpreadRuntimeState state =
-        runtime.collective_snapshot_state_to_io_rank();
+    const auto& geometry =
+        runtime.config().raster_geometry;
+    (void)detail::validate_fire_cartesian_raster_geometry(
+        geometry);
 
-    if (!amrex::ParallelDescriptor::IOProcessor()) {
-        return;
-    }
-
-    const auto& geometry = state.config.raster_geometry;
-    const std::size_t cell_count =
-        detail::validate_fire_cartesian_raster_geometry(
-            geometry);
-    if (state.burned_fraction.burned_fraction.size()
-            != cell_count
-        || state.first_arrival.arrived.size()
-            != cell_count
-        || state.first_arrival.first_arrival_time_s.size()
-            != cell_count
-        || state.combustion.cells.size()
-            != cell_count) {
-        throw std::logic_error(
-            "packed ERF-Fire visualization raster state has inconsistent sizes");
-    }
+    const amrex::Real current_time_s =
+        runtime.current_time_s();
+    const auto& vertices =
+        runtime.perimeter().vertices_m();
 
     const std::filesystem::path directory(output_dir);
-    std::filesystem::create_directories(directory);
-
     const std::string perimeter_name =
         indexed_name("perimeter", step_index);
     const std::string raster_name =
         indexed_name("raster", step_index);
 
-    {
-        auto stream = open_output(directory / perimeter_name);
-        stream << "time_s,vertex_index,x_m,y_m\n";
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
 
-        const auto& vertices =
-            state.perimeter_vertices_m;
-        for (std::size_t i = 0; i < vertices.size(); ++i) {
-            stream
-                << state.current_time_s << ","
-                << i << ","
-                << vertices[i].x << ","
-                << vertices[i].y << "\n";
-        }
-    }
+    std::ofstream raster_stream;
+    int io_failed = 0;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        try {
+            std::filesystem::create_directories(directory);
 
-    {
-        auto stream = open_output(directory / raster_name);
-        stream
-            << "time_s,i,j,xlo_m,xhi_m,ylo_m,yhi_m,"
-            << "burned_fraction,has_arrived,first_arrival_time_s,"
-            << "ignited_area_fraction,remaining_dry_fuel_kg_m2,"
-            << "consumed_dry_fuel_kg_m2,sensible_energy_j_m2,"
-            << "water_released_kg_m2\n";
-
-        for (std::size_t j = 0; j < geometry.ny; ++j) {
-            for (std::size_t i = 0; i < geometry.nx; ++i) {
-                const std::size_t index =
-                    detail::fire_cartesian_raster_flat_index(
-                        geometry,
-                        i,
-                        j);
-                const auto cell =
-                    detail::fire_cartesian_raster_cell_bounds(
-                        geometry,
-                        i,
-                        j);
-                const bool arrived =
-                    state.first_arrival.arrived[index]
-                        != 0;
-
-                stream
-                    << state.current_time_s << ","
-                    << i << ","
-                    << j << ","
-                    << cell.xlo_m << ","
-                    << cell.xhi_m << ","
-                    << cell.ylo_m << ","
-                    << cell.yhi_m << ","
-                    << state.burned_fraction
-                           .burned_fraction[index]
-                    << ","
-                    << (arrived ? 1 : 0) << ",";
-
-                if (arrived) {
-                    stream
-                        << state.first_arrival
-                               .first_arrival_time_s[index];
+            {
+                auto perimeter_stream =
+                    open_output(directory / perimeter_name);
+                perimeter_stream
+                    << "time_s,vertex_index,x_m,y_m\n";
+                for (std::size_t index = 0;
+                     index < vertices.size();
+                     ++index) {
+                    perimeter_stream
+                        << current_time_s << ","
+                        << index << ","
+                        << vertices[index].x << ","
+                        << vertices[index].y << "\n";
                 }
-
-                const auto& combustion_state =
-                    state.combustion.cells[index];
-                stream
-                    << ","
-                    << combustion_state.ignited_area_fraction << ","
-                    << combustion_state.remaining_dry_fuel_kg_m2 << ","
-                    << combustion_state.consumed_dry_fuel_kg_m2 << ","
-                    << combustion_state.sensible_energy_j_m2 << ","
-                    << combustion_state.water_released_kg_m2
-                    << "\n";
+                perimeter_stream.close();
+                if (perimeter_stream.fail()) {
+                    throw std::runtime_error(
+                        "failed while writing ERF-Fire perimeter visualization");
+                }
             }
+
+            raster_stream =
+                open_output(directory / raster_name);
+            raster_stream
+                << "time_s,i,j,xlo_m,xhi_m,ylo_m,yhi_m,"
+                << "burned_fraction,has_arrived,first_arrival_time_s,"
+                << "ignited_area_fraction,remaining_dry_fuel_kg_m2,"
+                << "consumed_dry_fuel_kg_m2,sensible_energy_j_m2,"
+                << "water_released_kg_m2\n";
+            if (!raster_stream.good()) {
+                throw std::runtime_error(
+                    "failed while writing ERF-Fire raster visualization header");
+            }
+        } catch (...) {
+            io_failed = 1;
         }
     }
 
-    const std::filesystem::path summary_path =
-        directory / "summary.csv";
-    std::ofstream summary;
-    const bool write_summary_header =
-        step_index == 0
-        || !std::filesystem::exists(summary_path);
-    if (step_index == 0) {
-        summary.open(
-            summary_path,
-            std::ios::out | std::ios::trunc);
-    } else {
-        summary.open(
-            summary_path,
-            std::ios::out | std::ios::app);
-    }
-
-    if (!summary.is_open()) {
+    amrex::ParallelDescriptor::Bcast(
+        &io_failed, 1, io_rank);
+    if (io_failed != 0) {
         throw std::runtime_error(
-            "unable to open ERF-Fire visualization manifest "
-            + summary_path.string());
+            "IO rank failed to initialize ERF-Fire visualization output");
     }
 
-    amrex::Real burned_area_m2 = amrex::Real(0);
+    // Reuse the distributed eight-component raster assembly used by the
+    // native checkpoint path. This is O(Nxy/Nranks) on each rank and avoids
+    // materializing canonical full-domain vectors on the IO rank.
+    amrex::MultiFab distributed_raster =
+        make_erf_fire_checkpoint_v2_raster(runtime);
+
+    amrex::Real burned_area_m2 = amrex::Real(0.0);
     std::size_t arrived_cell_count = 0;
-    for (std::size_t j = 0; j < geometry.ny; ++j) {
-        for (std::size_t i = 0; i < geometry.nx; ++i) {
-            const std::size_t index =
-                detail::fire_cartesian_raster_flat_index(
-                    geometry,
-                    i,
-                    j);
-            const auto cell =
-                detail::fire_cartesian_raster_cell_bounds(
-                    geometry,
-                    i,
-                    j);
-            burned_area_m2 +=
-                state.burned_fraction.burned_fraction[index]
-                * detail::fire_cartesian_cell_area_m2(cell);
-            if (state.first_arrival.arrived[index]
-                != 0) {
-                ++arrived_cell_count;
-            }
-        }
-    }
-
+    FireCombustionRasterTotals combustion_totals{};
     const amrex::Real combustion_cell_area_m2 =
         geometry.dx_m * geometry.dy_m;
-    FireCombustionRasterTotals combustion_totals{};
-    for (const FireCombustionState& cell
-         : state.combustion.cells) {
-        combustion_totals.remaining_dry_fuel_kg +=
-            cell.remaining_dry_fuel_kg_m2
-            * combustion_cell_area_m2;
-        combustion_totals.consumed_dry_fuel_kg +=
-            cell.consumed_dry_fuel_kg_m2
-            * combustion_cell_area_m2;
-        combustion_totals.sensible_energy_j +=
-            cell.sensible_energy_j_m2
-            * combustion_cell_area_m2;
-        combustion_totals.water_released_kg +=
-            cell.water_released_kg_m2
-            * combustion_cell_area_m2;
+
+    const auto stream_chunk =
+        [&](std::size_t ilo,
+            std::size_t ihi,
+            std::size_t jlo,
+            std::size_t jhi) {
+            const amrex::Box chunk_box(
+                amrex::IntVect(
+                    static_cast<int>(ilo),
+                    static_cast<int>(jlo),
+                    0),
+                amrex::IntVect(
+                    static_cast<int>(ihi - 1),
+                    static_cast<int>(jhi - 1),
+                    0));
+            amrex::BoxArray chunk_boxes{chunk_box};
+            amrex::Vector<int> processor_map(1, io_rank);
+            const amrex::DistributionMapping chunk_dm(
+                std::move(processor_map));
+            amrex::MultiFab io_chunk(
+                chunk_boxes,
+                chunk_dm,
+                ERFFireCheckpointRasterComponents::component_count,
+                0);
+
+            io_chunk.ParallelCopy(
+                distributed_raster,
+                0,
+                0,
+                ERFFireCheckpointRasterComponents::component_count,
+                0,
+                0);
+
+            int chunk_io_failed = 0;
+            if (amrex::ParallelDescriptor::IOProcessor()) {
+                try {
+                    for (amrex::MFIter mfi(io_chunk);
+                         mfi.isValid();
+                         ++mfi) {
+                        const auto values =
+                            io_chunk.const_array(mfi);
+
+                        for (std::size_t j = jlo;
+                             j < jhi;
+                             ++j) {
+                            for (std::size_t i = ilo;
+                                 i < ihi;
+                                 ++i) {
+                                const int ii =
+                                    static_cast<int>(i);
+                                const int jj =
+                                    static_cast<int>(j);
+                                const auto cell =
+                                    detail::fire_cartesian_raster_cell_bounds(
+                                        geometry,
+                                        i,
+                                        j);
+
+                                const amrex::Real burned_fraction =
+                                    values(
+                                        ii,
+                                        jj,
+                                        0,
+                                        ERFFireCheckpointRasterComponents::
+                                            burned_fraction);
+                                const bool arrived =
+                                    values(
+                                        ii,
+                                        jj,
+                                        0,
+                                        ERFFireCheckpointRasterComponents::
+                                            arrived)
+                                    != amrex::Real(0.0);
+
+                                raster_stream
+                                    << current_time_s << ","
+                                    << i << ","
+                                    << j << ","
+                                    << cell.xlo_m << ","
+                                    << cell.xhi_m << ","
+                                    << cell.ylo_m << ","
+                                    << cell.yhi_m << ","
+                                    << burned_fraction << ","
+                                    << (arrived ? 1 : 0) << ",";
+
+                                if (arrived) {
+                                    raster_stream
+                                        << values(
+                                            ii,
+                                            jj,
+                                            0,
+                                            ERFFireCheckpointRasterComponents::
+                                                first_arrival_time_s);
+                                }
+
+                                const amrex::Real ignited_area_fraction =
+                                    values(
+                                        ii,
+                                        jj,
+                                        0,
+                                        ERFFireCheckpointRasterComponents::
+                                            ignited_area_fraction);
+                                const amrex::Real remaining_dry_fuel_kg_m2 =
+                                    values(
+                                        ii,
+                                        jj,
+                                        0,
+                                        ERFFireCheckpointRasterComponents::
+                                            remaining_dry_fuel_kg_m2);
+                                const amrex::Real consumed_dry_fuel_kg_m2 =
+                                    values(
+                                        ii,
+                                        jj,
+                                        0,
+                                        ERFFireCheckpointRasterComponents::
+                                            consumed_dry_fuel_kg_m2);
+                                const amrex::Real sensible_energy_j_m2 =
+                                    values(
+                                        ii,
+                                        jj,
+                                        0,
+                                        ERFFireCheckpointRasterComponents::
+                                            sensible_energy_j_m2);
+                                const amrex::Real water_released_kg_m2 =
+                                    values(
+                                        ii,
+                                        jj,
+                                        0,
+                                        ERFFireCheckpointRasterComponents::
+                                            water_released_kg_m2);
+
+                                raster_stream
+                                    << ","
+                                    << ignited_area_fraction << ","
+                                    << remaining_dry_fuel_kg_m2 << ","
+                                    << consumed_dry_fuel_kg_m2 << ","
+                                    << sensible_energy_j_m2 << ","
+                                    << water_released_kg_m2
+                                    << "\n";
+
+                                burned_area_m2 +=
+                                    burned_fraction
+                                    * detail::fire_cartesian_cell_area_m2(
+                                        cell);
+                                if (arrived) {
+                                    ++arrived_cell_count;
+                                }
+                                combustion_totals
+                                    .remaining_dry_fuel_kg +=
+                                        remaining_dry_fuel_kg_m2
+                                        * combustion_cell_area_m2;
+                                combustion_totals
+                                    .consumed_dry_fuel_kg +=
+                                        consumed_dry_fuel_kg_m2
+                                        * combustion_cell_area_m2;
+                                combustion_totals
+                                    .sensible_energy_j +=
+                                        sensible_energy_j_m2
+                                        * combustion_cell_area_m2;
+                                combustion_totals
+                                    .water_released_kg +=
+                                        water_released_kg_m2
+                                        * combustion_cell_area_m2;
+                            }
+                        }
+                    }
+
+                    if (!raster_stream.good()) {
+                        chunk_io_failed = 1;
+                    }
+                } catch (...) {
+                    chunk_io_failed = 1;
+                }
+            }
+
+            amrex::ParallelDescriptor::Bcast(
+                &chunk_io_failed, 1, io_rank);
+            if (chunk_io_failed != 0) {
+                throw std::runtime_error(
+                    "IO rank failed while streaming ERF-Fire raster visualization");
+            }
+        };
+
+    if (geometry.nx <= fire_output_chunk_max_cells) {
+        std::size_t rows_per_chunk =
+            fire_output_chunk_max_cells / geometry.nx;
+        if (rows_per_chunk == 0) {
+            rows_per_chunk = 1;
+        }
+
+        for (std::size_t jlo = 0;
+             jlo < geometry.ny;) {
+            std::size_t jhi =
+                jlo + rows_per_chunk;
+            if (jhi > geometry.ny) {
+                jhi = geometry.ny;
+            }
+            stream_chunk(
+                0,
+                geometry.nx,
+                jlo,
+                jhi);
+            jlo = jhi;
+        }
+    } else {
+        for (std::size_t j = 0;
+             j < geometry.ny;
+             ++j) {
+            for (std::size_t ilo = 0;
+                 ilo < geometry.nx;) {
+                std::size_t ihi =
+                    ilo + fire_output_chunk_max_cells;
+                if (ihi > geometry.nx) {
+                    ihi = geometry.nx;
+                }
+                stream_chunk(
+                    ilo,
+                    ihi,
+                    j,
+                    j + 1);
+                ilo = ihi;
+            }
+        }
     }
 
-    summary << std::setprecision(17);
-    if (write_summary_header) {
-        summary
-            << "step,time_s,vertex_count,burned_area_m2,"
-            << "arrived_cell_count,remaining_dry_fuel_kg,"
-            << "consumed_dry_fuel_kg,sensible_energy_j,"
-            << "water_released_kg,perimeter_file,raster_file\n";
+    int raster_close_failed = 0;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        raster_stream.close();
+        if (raster_stream.fail()) {
+            raster_close_failed = 1;
+        }
+    }
+    amrex::ParallelDescriptor::Bcast(
+        &raster_close_failed, 1, io_rank);
+    if (raster_close_failed != 0) {
+        throw std::runtime_error(
+            "IO rank failed while closing ERF-Fire raster visualization");
     }
 
-    summary
-        << step_index << ","
-        << state.current_time_s << ","
-        << state.perimeter_vertices_m.size() << ","
-        << burned_area_m2 << ","
-        << arrived_cell_count << ","
-        << combustion_totals.remaining_dry_fuel_kg << ","
-        << combustion_totals.consumed_dry_fuel_kg << ","
-        << combustion_totals.sensible_energy_j << ","
-        << combustion_totals.water_released_kg << ","
-        << perimeter_name << ","
-        << raster_name << "\n";
+    int summary_io_failed = 0;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        try {
+            const std::filesystem::path summary_path =
+                directory / "summary.csv";
+            std::ofstream summary;
+            const bool write_summary_header =
+                step_index == 0
+                || !std::filesystem::exists(summary_path);
+            if (step_index == 0) {
+                summary.open(
+                    summary_path,
+                    std::ios::out | std::ios::trunc);
+            } else {
+                summary.open(
+                    summary_path,
+                    std::ios::out | std::ios::app);
+            }
+
+            if (!summary.is_open()) {
+                throw std::runtime_error(
+                    "unable to open ERF-Fire visualization manifest "
+                    + summary_path.string());
+            }
+
+            summary << std::setprecision(17);
+            if (write_summary_header) {
+                summary
+                    << "step,time_s,vertex_count,burned_area_m2,"
+                    << "arrived_cell_count,remaining_dry_fuel_kg,"
+                    << "consumed_dry_fuel_kg,sensible_energy_j,"
+                    << "water_released_kg,perimeter_file,raster_file\n";
+            }
+
+            summary
+                << step_index << ","
+                << current_time_s << ","
+                << vertices.size() << ","
+                << burned_area_m2 << ","
+                << arrived_cell_count << ","
+                << combustion_totals.remaining_dry_fuel_kg << ","
+                << combustion_totals.consumed_dry_fuel_kg << ","
+                << combustion_totals.sensible_energy_j << ","
+                << combustion_totals.water_released_kg << ","
+                << perimeter_name << ","
+                << raster_name << "\n";
+
+            summary.close();
+            if (summary.fail()) {
+                throw std::runtime_error(
+                    "failed while writing ERF-Fire visualization manifest");
+            }
+        } catch (...) {
+            summary_io_failed = 1;
+        }
+    }
+
+    amrex::ParallelDescriptor::Bcast(
+        &summary_io_failed, 1, io_rank);
+    if (summary_io_failed != 0) {
+        throw std::runtime_error(
+            "IO rank failed while writing ERF-Fire visualization manifest");
+    }
 }
 
 int
