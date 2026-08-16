@@ -10,6 +10,8 @@
 #include <AMReX_GpuContainers.H>
 #include <AMReX_IntVect.H>
 #include <AMReX_MFIter.H>
+#include <AMReX_Math.H>
+#include <AMReX_ParReduce.H>
 #include <AMReX_Periodicity.H>
 #include <AMReX_ParallelDescriptor.H>
 
@@ -257,6 +259,97 @@ fire_column_mf_info()
     info.SetArena(amrex::The_Pinned_Arena());
     return info;
 }
+
+#ifdef AMREX_USE_GPU
+constexpr int flat_device_source_invalid_density = 1;
+constexpr int flat_device_source_invalid_rhotheta = 2;
+constexpr int flat_device_source_invalid_rhoqv = 3;
+constexpr int flat_device_source_invalid_source = 4;
+constexpr int flat_device_source_invalid_pressure = 5;
+constexpr int flat_device_source_overflow_source = 6;
+
+std::vector<amrex::Real>
+flat_normalized_layer_weights(
+    const std::vector<amrex::Real>& faces,
+    amrex::Real extinction_depth_m)
+{
+    require(
+        faces.size() >= 2,
+        "ERF Fire atmospheric source requires at least two vertical faces");
+
+    for (const amrex::Real value : faces) {
+        require(
+            std::isfinite(value),
+            "ERF Fire atmospheric source vertical faces must be finite");
+    }
+
+    const amrex::Real ground_tolerance =
+        amrex::Real(64)
+        * std::numeric_limits<amrex::Real>::epsilon();
+    require(
+        std::abs(faces.front()) <= ground_tolerance,
+        "ERF Fire atmospheric source first AGL face must be zero");
+
+    for (std::size_t k = 0; k + 1 < faces.size(); ++k) {
+        require(
+            faces[k + 1] > faces[k],
+            "ERF Fire atmospheric source vertical faces must increase strictly");
+    }
+
+    require(
+        std::isfinite(extinction_depth_m)
+            && extinction_depth_m > amrex::Real(0),
+        "ERF Fire atmospheric extinction depth must be finite and positive");
+
+    std::vector<amrex::Real> weights(
+        faces.size() - 1,
+        amrex::Real(0));
+    amrex::Real total = amrex::Real(0);
+
+    for (std::size_t k = 0; k < weights.size(); ++k) {
+        amrex::Real raw = amrex::Real(0);
+        const auto status =
+            try_erf_fire_atmospheric_source_raw_layer_weight(
+                faces[k],
+                faces[k + 1],
+                extinction_depth_m,
+                raw);
+        if (status
+            == ERFFireAtmosphericSourceStatus::overflow_error) {
+            throw std::overflow_error(
+                "ERF Fire atmospheric deposition weight is not finite and positive");
+        }
+        if (status
+            != ERFFireAtmosphericSourceStatus::success) {
+            throw std::invalid_argument(
+                "ERF Fire atmospheric source layer geometry is invalid");
+        }
+        weights[k] = raw;
+        total += raw;
+    }
+
+    if (!std::isfinite(total)
+        || !(total > amrex::Real(0))) {
+        throw std::overflow_error(
+            "ERF Fire atmospheric deposition normalization is invalid");
+    }
+
+    amrex::Real normalized_sum = amrex::Real(0);
+    for (std::size_t k = 0; k < weights.size(); ++k) {
+        if (k + 1 == weights.size()) {
+            weights[k] =
+                std::max(
+                    amrex::Real(0),
+                    amrex::Real(1) - normalized_sum);
+        } else {
+            weights[k] /= total;
+            normalized_sum += weights[k];
+        }
+    }
+
+    return weights;
+}
+#endif
 
 [[noreturn]] void
 throw_distributed_source_failure(
@@ -771,6 +864,309 @@ make_erf_fire_level0_source_tendency(
     const auto& column_dm =
         feedback.surface_layout().distribution_map();
 
+#ifdef AMREX_USE_GPU
+    validate_source_state_scope_and_layout(
+        environment_inputs.geometry,
+        conserved_state_tn,
+        moisture_type);
+    require(
+        std::isfinite(dt_s) && dt_s > amrex::Real(0),
+        "ERF Fire atmospheric source dt must be finite and positive");
+
+    const std::vector<amrex::Real> normalized_layer_weights =
+        flat_normalized_layer_weights(
+            vertical_faces_agl_m,
+            options.extinction_depth_m);
+
+    const amrex::Real horizontal_area_m2 =
+        feedback.geometry().dx_m
+        * feedback.geometry().dy_m;
+    std::vector<amrex::Real> physical_cell_volume_m3(
+        static_cast<std::size_t>(domain.length(2)),
+        amrex::Real(0));
+    for (std::size_t k = 0;
+         k < physical_cell_volume_m3.size();
+         ++k) {
+        physical_cell_volume_m3[k] =
+            horizontal_area_m2
+            * (vertical_faces_agl_m[k + 1]
+               - vertical_faces_agl_m[k]);
+        require(
+            std::isfinite(physical_cell_volume_m3[k])
+                && physical_cell_volume_m3[k] > amrex::Real(0),
+            "ERF Fire atmospheric source physical cell volume must be finite and positive");
+    }
+
+    amrex::MultiFab state_columns(
+        column_boxes,
+        column_dm,
+        fire_state_component_count,
+        0);
+    state_columns.ParallelCopy(
+        conserved_state_tn,
+        Rho_comp,
+        fire_state_rho_comp,
+        1,
+        0,
+        0);
+    state_columns.ParallelCopy(
+        conserved_state_tn,
+        RhoTheta_comp,
+        fire_state_rhotheta_comp,
+        1,
+        0,
+        0);
+    state_columns.ParallelCopy(
+        conserved_state_tn,
+        RhoQ1_comp,
+        fire_state_rhoqv_comp,
+        1,
+        0,
+        0);
+
+    const int klo = domain.smallEnd(2);
+    amrex::BoxArray surface_boxes(column_boxes.boxList());
+    for (int index = 0;
+         index < surface_boxes.size();
+         ++index) {
+        amrex::Box surface_box = surface_boxes[index];
+        surface_box.setRange(2, klo, 1);
+        surface_boxes.set(index, surface_box);
+    }
+
+    amrex::MultiFab surface_release(
+        surface_boxes,
+        column_dm,
+        fire_source_component_count,
+        0);
+    surface_release.setVal(amrex::Real(0));
+
+    const amrex::IntVect offset(
+        domain.smallEnd(0),
+        domain.smallEnd(1),
+        domain.smallEnd(2));
+    const amrex::IntVect no_ghost(0);
+    surface_release.ParallelCopy(
+        feedback.distributed_values(),
+        FireSurfaceFeedbackRaster::sensible_energy_comp,
+        fire_source_rhotheta_comp,
+        1,
+        no_ghost,
+        no_ghost,
+        offset,
+        amrex::Periodicity::NonPeriodic());
+    surface_release.ParallelCopy(
+        feedback.distributed_values(),
+        FireSurfaceFeedbackRaster::water_released_comp,
+        fire_source_rhoqv_comp,
+        1,
+        no_ghost,
+        no_ghost,
+        offset,
+        amrex::Periodicity::NonPeriodic());
+    amrex::Gpu::streamSynchronize();
+
+    amrex::MultiFab source_columns(
+        column_boxes,
+        column_dm,
+        fire_source_component_count,
+        0);
+    source_columns.setVal(amrex::Real(0));
+
+    amrex::Gpu::DeviceVector<amrex::Real> device_weights(
+        normalized_layer_weights.size());
+    amrex::Gpu::DeviceVector<amrex::Real> device_volumes(
+        physical_cell_volume_m3.size());
+    amrex::Gpu::copy(
+        amrex::Gpu::hostToDevice,
+        normalized_layer_weights.begin(),
+        normalized_layer_weights.end(),
+        device_weights.begin());
+    amrex::Gpu::copy(
+        amrex::Gpu::hostToDevice,
+        physical_cell_volume_m3.begin(),
+        physical_cell_volume_m3.end(),
+        device_volumes.begin());
+    amrex::Gpu::streamSynchronize();
+
+    const auto state_arrays =
+        state_columns.const_arrays();
+    const auto release_arrays =
+        surface_release.const_arrays();
+    const auto source_arrays =
+        source_columns.arrays();
+    const amrex::Real* weights =
+        device_weights.data();
+    const amrex::Real* volumes =
+        device_volumes.data();
+    const amrex::Real device_dt_s = dt_s;
+
+    const int local_device_failure =
+        amrex::ParReduce(
+            amrex::TypeList<
+                amrex::ReduceOpMax>{},
+            amrex::TypeList<int>{},
+            source_columns,
+            [=] AMREX_GPU_DEVICE (
+                int box_no,
+                int i,
+                int j,
+                int k) noexcept
+                -> amrex::GpuTuple<int>
+            {
+                const auto state =
+                    state_arrays[box_no];
+                const auto release =
+                    release_arrays[box_no];
+                const auto source =
+                    source_arrays[box_no];
+
+                const FireSurfaceFeedbackCell surface_feedback{
+                    amrex::Real(0),
+                    release(
+                        i, j, klo,
+                        fire_source_rhotheta_comp),
+                    release(
+                        i, j, klo,
+                        fire_source_rhoqv_comp)};
+
+                const amrex::Real rho =
+                    state(
+                        i, j, k,
+                        fire_state_rho_comp);
+                const amrex::Real rhotheta =
+                    state(
+                        i, j, k,
+                        fire_state_rhotheta_comp);
+                const amrex::Real rhoqv =
+                    state(
+                        i, j, k,
+                        fire_state_rhoqv_comp);
+
+                if (!amrex::Math::isfinite(rho)
+                    || !(rho > amrex::Real(0))) {
+                    return {
+                        flat_device_source_invalid_density};
+                }
+                if (!amrex::Math::isfinite(rhotheta)
+                    || !(rhotheta > amrex::Real(0))) {
+                    return {
+                        flat_device_source_invalid_rhotheta};
+                }
+                if (!amrex::Math::isfinite(rhoqv)
+                    || rhoqv < amrex::Real(0)) {
+                    return {
+                        flat_device_source_invalid_rhoqv};
+                }
+
+                const amrex::Real qv = rhoqv / rho;
+                const amrex::Real pressure =
+                    getPgivenRTh(rhotheta, qv);
+                if (!amrex::Math::isfinite(pressure)
+                    || !(pressure > amrex::Real(0))) {
+                    return {
+                        flat_device_source_invalid_pressure};
+                }
+
+                ERFFireAtmosphericSourceCell cell{};
+                const std::size_t local_k =
+                    static_cast<std::size_t>(
+                        k - klo);
+                const auto status =
+                    try_make_erf_fire_atmospheric_source_cell(
+                        surface_feedback,
+                        weights[local_k],
+                        volumes[local_k],
+                        pressure,
+                        device_dt_s,
+                        cell);
+
+                if (status
+                    == ERFFireAtmosphericSourceStatus::invalid_argument) {
+                    return {
+                        flat_device_source_invalid_source};
+                }
+                if (status
+                    == ERFFireAtmosphericSourceStatus::overflow_error) {
+                    return {
+                        flat_device_source_overflow_source};
+                }
+                if (status
+                    != ERFFireAtmosphericSourceStatus::success) {
+                    return {
+                        flat_device_source_overflow_source};
+                }
+
+                source(
+                    i, j, k,
+                    fire_source_rhotheta_comp) =
+                        cell.rhotheta_tendency_kg_K_m3_s;
+                source(
+                    i, j, k,
+                    fire_source_rhoqv_comp) =
+                        cell.rhoqv_tendency_kg_m3_s;
+
+                return {0};
+            });
+
+    int device_failure =
+        local_device_failure;
+    amrex::ParallelDescriptor::ReduceIntMax(
+        device_failure);
+
+    if (device_failure != 0) {
+        DistributedSourceFailure failure =
+            device_failure
+                    >= flat_device_source_invalid_pressure
+                    ? DistributedSourceFailure::overflow_error
+                : DistributedSourceFailure::invalid_argument;
+
+        std::string local_error;
+        if (local_device_failure == device_failure) {
+            switch (device_failure) {
+            case flat_device_source_invalid_density:
+                local_error =
+                    "ERF Fire source coupling dry density must be finite and positive";
+                break;
+            case flat_device_source_invalid_rhotheta:
+                local_error =
+                    "ERF Fire source coupling rho theta must be finite and positive";
+                break;
+            case flat_device_source_invalid_rhoqv:
+                local_error =
+                    "ERF Fire source coupling rho qv must be finite and nonnegative";
+                break;
+            case flat_device_source_invalid_source:
+                local_error =
+                    "ERF Fire atmospheric source received invalid layer inputs";
+                break;
+            case flat_device_source_invalid_pressure:
+                local_error =
+                    "ERF Fire source coupling diagnosed invalid pressure";
+                break;
+            case flat_device_source_overflow_source:
+                local_error =
+                    "ERF Fire atmospheric source produced invalid tendency";
+                break;
+            default:
+                failure =
+                    DistributedSourceFailure::runtime_error;
+                local_error =
+                    "invalid device flat source failure code";
+                break;
+            }
+        }
+
+        throw_distributed_source_failure(
+            failure,
+            local_error,
+            "distributed ERF Fire flat source projection");
+    }
+
+    return map_fire_columns_to_native_source(
+        source_columns,
+        conserved_state_tn);
+#else
     amrex::MultiFab state_columns =
         make_fire_state_columns(
             column_boxes,
@@ -869,6 +1265,7 @@ make_erf_fire_level0_source_tendency(
     return map_fire_columns_to_native_source(
         source_columns,
         conserved_state_tn);
+#endif
 }
 
 std::unique_ptr<amrex::MultiFab>

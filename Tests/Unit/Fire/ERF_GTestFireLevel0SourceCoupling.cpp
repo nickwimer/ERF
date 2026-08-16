@@ -1,3 +1,4 @@
+#include <ERF_FireAtmosphericSource.H>
 #include <ERF_FireLevel0SourceCoupling.H>
 
 #include <ERF_EOS.H>
@@ -330,6 +331,95 @@ TEST(
     }
     for (Real value : qv) {
         EXPECT_GT(value, Real(0.0));
+    }
+}
+
+TEST(
+    FireLevel0SourceCoupling,
+    FlatAdapterMatchesColumnOracle)
+{
+    CouplingFixture fixture;
+    const Real dt_s = Real(2.0);
+    const ERFFire::ERFFireAtmosphericSourceOptions options{
+        Real(7.0)};
+    const auto feedback =
+        make_feedback(
+            fixture.fire_geometry(),
+            dt_s);
+
+    const auto source =
+        ERFFire::make_erf_fire_level0_source_tendency(
+            feedback,
+            fixture.environment_inputs(),
+            fixture.conserved,
+            MoistureType::MoistNoCondensation,
+            dt_s,
+            options);
+
+    ASSERT_NE(source, nullptr);
+
+    const Real qv = Real(0.01);
+    const Real rhotheta =
+        getRhoThetagivenP(p_0, qv);
+    const Real pressure =
+        getPgivenRTh(rhotheta, qv);
+    const auto expected =
+        ERFFire::make_erf_fire_atmospheric_source_column(
+            feedback.cell(0, 0),
+            std::vector<Real>{
+                Real(0), Real(4), Real(12)},
+            std::vector<Real>{
+                Real(24), Real(48)},
+            std::vector<Real>{
+                pressure, pressure},
+            dt_s,
+            options);
+    ASSERT_EQ(expected.size(), std::size_t(2));
+
+    const auto theta =
+        component_values(
+            *source,
+            RhoTheta_comp);
+    const auto vapor =
+        component_values(
+            *source,
+            RhoQ1_comp);
+    ASSERT_EQ(theta.size(), std::size_t(8));
+    ASSERT_EQ(vapor.size(), std::size_t(8));
+
+    constexpr std::size_t horizontal_cells =
+        std::size_t(CouplingFixture::nx)
+        * std::size_t(CouplingFixture::ny);
+    for (std::size_t k = 0; k < expected.size(); ++k) {
+        const Real expected_theta =
+            expected[k].rhotheta_tendency_kg_K_m3_s;
+        const Real expected_vapor =
+            expected[k].rhoqv_tendency_kg_m3_s;
+        const Real theta_tolerance =
+            Real(2.0e-13)
+            * std::max(
+                Real(1),
+                std::abs(expected_theta));
+        const Real vapor_tolerance =
+            Real(2.0e-13)
+            * std::max(
+                Real(1),
+                std::abs(expected_vapor));
+
+        for (std::size_t horizontal = 0;
+             horizontal < horizontal_cells;
+             ++horizontal) {
+            const std::size_t index =
+                k * horizontal_cells + horizontal;
+            EXPECT_NEAR(
+                theta[index],
+                expected_theta,
+                theta_tolerance);
+            EXPECT_NEAR(
+                vapor[index],
+                expected_vapor,
+                vapor_tolerance);
+        }
     }
 }
 
