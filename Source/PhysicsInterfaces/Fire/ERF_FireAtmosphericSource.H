@@ -1,11 +1,16 @@
 #ifndef ERF_FIRE_ATMOSPHERIC_SOURCE_H_
 #define ERF_FIRE_ATMOSPHERIC_SOURCE_H_
 
+#include <ERF_Constants.H>
 #include <ERF_FireRasterGeometry.H>
 #include <ERF_FireSurfaceFeedback.H>
 
+#include <AMReX_Extension.H>
+#include <AMReX_GpuQualifiers.H>
+#include <AMReX_Math.H>
 #include <AMReX_REAL.H>
 
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -40,6 +45,118 @@ struct ERFFireAtmosphericSourceCell
     amrex::Real rhoqv_tendency_kg_m3_s{};
 };
 
+
+enum class ERFFireAtmosphericSourceStatus : int
+{
+    success = 0,
+    invalid_argument = 1,
+    overflow_error = 2
+};
+
+namespace detail
+{
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real
+fire_atmospheric_raw_layer_weight_unchecked(
+    amrex::Real zlo_m,
+    amrex::Real zhi_m,
+    amrex::Real extinction_depth_m) noexcept
+{
+    const amrex::Real dz_m = zhi_m - zlo_m;
+    return std::exp(-zlo_m / extinction_depth_m)
+        * (-std::expm1(-dz_m / extinction_depth_m));
+}
+
+} // namespace detail
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+ERFFireAtmosphericSourceStatus
+try_erf_fire_atmospheric_source_raw_layer_weight(
+    amrex::Real zlo_m,
+    amrex::Real zhi_m,
+    amrex::Real extinction_depth_m,
+    amrex::Real& result) noexcept
+{
+    result = amrex::Real(0);
+    if (!amrex::Math::isfinite(zlo_m)
+        || !amrex::Math::isfinite(zhi_m)
+        || !(zhi_m > zlo_m)
+        || !amrex::Math::isfinite(extinction_depth_m)
+        || !(extinction_depth_m > amrex::Real(0))) {
+        return ERFFireAtmosphericSourceStatus::invalid_argument;
+    }
+
+    result = detail::fire_atmospheric_raw_layer_weight_unchecked(
+        zlo_m,
+        zhi_m,
+        extinction_depth_m);
+    if (!amrex::Math::isfinite(result)
+        || !(result > amrex::Real(0))) {
+        result = amrex::Real(0);
+        return ERFFireAtmosphericSourceStatus::overflow_error;
+    }
+    return ERFFireAtmosphericSourceStatus::success;
+}
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+ERFFireAtmosphericSourceStatus
+try_make_erf_fire_atmospheric_source_cell(
+    const FireSurfaceFeedbackCell& surface_feedback,
+    amrex::Real normalized_weight,
+    amrex::Real physical_cell_volume_m3,
+    amrex::Real pressure_pa,
+    amrex::Real dt_s,
+    ERFFireAtmosphericSourceCell& result) noexcept
+{
+    result = {};
+    if (!amrex::Math::isfinite(surface_feedback.sensible_energy_j)
+        || surface_feedback.sensible_energy_j < amrex::Real(0)
+        || !amrex::Math::isfinite(surface_feedback.water_released_kg)
+        || surface_feedback.water_released_kg < amrex::Real(0)
+        || !amrex::Math::isfinite(normalized_weight)
+        || normalized_weight < amrex::Real(0)
+        || !amrex::Math::isfinite(physical_cell_volume_m3)
+        || !(physical_cell_volume_m3 > amrex::Real(0))
+        || !amrex::Math::isfinite(pressure_pa)
+        || !(pressure_pa > amrex::Real(0))
+        || !amrex::Math::isfinite(dt_s)
+        || !(dt_s > amrex::Real(0))) {
+        return ERFFireAtmosphericSourceStatus::invalid_argument;
+    }
+
+    const amrex::Real exner =
+        std::pow(pressure_pa * ip_0, RdoCp);
+    const amrex::Real volume_dt =
+        physical_cell_volume_m3 * dt_s;
+    if (!amrex::Math::isfinite(exner)
+        || !(exner > amrex::Real(0))
+        || !amrex::Math::isfinite(volume_dt)
+        || !(volume_dt > amrex::Real(0))) {
+        return ERFFireAtmosphericSourceStatus::overflow_error;
+    }
+
+    result.rhotheta_tendency_kg_K_m3_s =
+        surface_feedback.sensible_energy_j
+        * normalized_weight
+        / (volume_dt * Cp_d * exner);
+    result.rhoqv_tendency_kg_m3_s =
+        surface_feedback.water_released_kg
+        * normalized_weight
+        / volume_dt;
+
+    if (!amrex::Math::isfinite(
+            result.rhotheta_tendency_kg_K_m3_s)
+        || result.rhotheta_tendency_kg_K_m3_s < amrex::Real(0)
+        || !amrex::Math::isfinite(
+            result.rhoqv_tendency_kg_m3_s)
+        || result.rhoqv_tendency_kg_m3_s < amrex::Real(0)) {
+        result = {};
+        return ERFFireAtmosphericSourceStatus::overflow_error;
+    }
+
+    return ERFFireAtmosphericSourceStatus::success;
+}
 
 /**
  * Project one horizontal Fire feedback cell through one atmospheric column.

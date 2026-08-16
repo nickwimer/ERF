@@ -5,6 +5,8 @@
 #include <ERF_FireCombustionRaster.H>
 #include <ERF_FireSurfaceFeedback.H>
 
+#include <AMReX_Gpu.H>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -114,6 +116,129 @@ exner_from_pressure(Real pressure_pa)
 }
 
 } // namespace
+
+#ifdef AMREX_USE_GPU
+namespace
+{
+
+struct DeviceAtmosphericSourceProbe
+{
+    Real raw_weight{};
+    ERFFire::ERFFireAtmosphericSourceCell cell{};
+    int raw_status{};
+    int cell_status{};
+    int invalid_status{};
+};
+
+DeviceAtmosphericSourceProbe
+run_device_atmospheric_source_probe()
+{
+    amrex::Gpu::DeviceScalar<Real> device_raw_weight;
+    amrex::Gpu::DeviceScalar<ERFFire::ERFFireAtmosphericSourceCell> device_cell;
+    amrex::Gpu::DeviceScalar<int> device_raw_status;
+    amrex::Gpu::DeviceScalar<int> device_cell_status;
+    amrex::Gpu::DeviceScalar<int> device_invalid_status;
+
+    Real* raw_weight = device_raw_weight.dataPtr();
+    auto* cell = device_cell.dataPtr();
+    int* raw_status = device_raw_status.dataPtr();
+    int* cell_status = device_cell_status.dataPtr();
+    int* invalid_status = device_invalid_status.dataPtr();
+
+    const ERFFire::FireSurfaceFeedbackCell feedback{
+        Real(0), Real(200), Real(3)};
+    constexpr Real extinction_depth_m = Real(50);
+
+    amrex::ParallelFor(
+        1,
+        [=] AMREX_GPU_DEVICE (int) noexcept
+        {
+            Real raw{};
+            ERFFire::ERFFireAtmosphericSourceCell output{};
+            const auto weight_result =
+                ERFFire::try_erf_fire_atmospheric_source_raw_layer_weight(
+                    Real(0),
+                    Real(10),
+                    extinction_depth_m,
+                    raw);
+            const auto cell_result =
+                ERFFire::try_make_erf_fire_atmospheric_source_cell(
+                    feedback,
+                    Real(1),
+                    Real(60),
+                    p_0,
+                    Real(2),
+                    output);
+            ERFFire::ERFFireAtmosphericSourceCell rejected{};
+            const auto rejected_result =
+                ERFFire::try_make_erf_fire_atmospheric_source_cell(
+                    feedback,
+                    Real(1),
+                    Real(0),
+                    p_0,
+                    Real(2),
+                    rejected);
+
+            *raw_weight = raw;
+            *cell = output;
+            *raw_status = static_cast<int>(weight_result);
+            *cell_status = static_cast<int>(cell_result);
+            *invalid_status = static_cast<int>(rejected_result);
+        });
+
+    return {
+        device_raw_weight.dataValue(),
+        device_cell.dataValue(),
+        device_raw_status.dataValue(),
+        device_cell_status.dataValue(),
+        device_invalid_status.dataValue()};
+}
+
+} // namespace
+
+TEST(FireAtmosphericSource, DeviceSafeScalarApiMatchesHost)
+{
+    const ERFFire::FireSurfaceFeedbackCell feedback{
+        Real(0), Real(200), Real(3)};
+    const auto host =
+        ERFFire::make_erf_fire_atmospheric_source_column(
+            feedback,
+            std::vector<Real>{Real(0), Real(10)},
+            std::vector<Real>{Real(60)},
+            std::vector<Real>{p_0},
+            Real(2),
+            ERFFireAtmosphericSourceOptions{Real(50)});
+    ASSERT_EQ(host.size(), std::size_t(1));
+
+    const DeviceAtmosphericSourceProbe actual =
+        run_device_atmospheric_source_probe();
+
+    EXPECT_EQ(
+        actual.raw_status,
+        static_cast<int>(
+            ERFFire::ERFFireAtmosphericSourceStatus::success));
+    EXPECT_EQ(
+        actual.cell_status,
+        static_cast<int>(
+            ERFFire::ERFFireAtmosphericSourceStatus::success));
+    EXPECT_EQ(
+        actual.invalid_status,
+        static_cast<int>(
+            ERFFire::ERFFireAtmosphericSourceStatus::invalid_argument));
+
+    const Real expected_raw =
+        -std::expm1(-Real(10) / Real(50));
+    EXPECT_NEAR(actual.raw_weight, expected_raw, Real(2.0e-14));
+    EXPECT_NEAR(
+        actual.cell.rhotheta_tendency_kg_K_m3_s,
+        host[0].rhotheta_tendency_kg_K_m3_s,
+        Real(2.0e-14));
+    EXPECT_NEAR(
+        actual.cell.rhoqv_tendency_kg_m3_s,
+        host[0].rhoqv_tendency_kg_m3_s,
+        Real(2.0e-14));
+}
+#endif
 
 TEST(FireAtmosphericSource, OneLayerMatchesIndependentNativeUnitOracle)
 {
