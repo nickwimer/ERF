@@ -56,6 +56,15 @@ public:
         const FireCartesianRasterGeometry2D& geometry,
         FireBurnedFractionRasterState state);
 
+    /**
+     * Collectively restore version-1 canonical state owned only by IOProcessor().
+     * Non-IO ranks may pass an empty state vector.
+     */
+    [[nodiscard]] static FireBurnedFractionRaster
+    collective_restore_from_io_rank_state(
+        const FireCartesianRasterGeometry2D& geometry,
+        const FireBurnedFractionRasterState& state);
+
     FireBurnedFractionRaster(
         const FireBurnedFractionRaster& other);
     FireBurnedFractionRaster& operator=(

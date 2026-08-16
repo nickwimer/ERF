@@ -96,6 +96,93 @@ FireBurnedFractionRaster::FireBurnedFractionRaster (
         burned_fraction_mf_);
 }
 
+FireBurnedFractionRaster
+FireBurnedFractionRaster::collective_restore_from_io_rank_state(
+    const FireCartesianRasterGeometry2D& geometry,
+    const FireBurnedFractionRasterState& state)
+{
+    FireBurnedFractionRaster result(geometry);
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    int invalid_state = 0;
+    amrex::Real burned_area_m2 = amrex::Real(0.0);
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        try {
+            const std::size_t cell_count =
+                geometry.nx * geometry.ny;
+            if (state.burned_fraction.size() != cell_count) {
+                throw std::invalid_argument(
+                    "restored fire burned-fraction state has the wrong cell count");
+            }
+
+            for (const amrex::Real value : state.burned_fraction) {
+                if (!std::isfinite(value)
+                    || value < amrex::Real(0.0)
+                    || value > amrex::Real(1.0)) {
+                    throw std::invalid_argument(
+                        "restored fire burned fraction must be finite in [0,1]");
+                }
+            }
+
+            for (std::size_t j = 0; j < geometry.ny; ++j) {
+                for (std::size_t i = 0; i < geometry.nx; ++i) {
+                    const std::size_t index =
+                        result.flat_index(i, j);
+                    burned_area_m2 +=
+                        state.burned_fraction[index]
+                        * detail::fire_cartesian_cell_area_m2(
+                            result.cell_bounds(i, j));
+                }
+            }
+            if (!std::isfinite(burned_area_m2)) {
+                throw std::overflow_error(
+                    "restored fire burned area is not finite");
+            }
+        } catch (...) {
+            invalid_state = 1;
+        }
+    }
+
+    amrex::ParallelDescriptor::Bcast(
+        &invalid_state, 1, io_rank);
+    if (invalid_state != 0) {
+        throw std::invalid_argument(
+            "collective Fire burned-fraction restore rejected IO-rank state");
+    }
+    amrex::ParallelDescriptor::Bcast(
+        &burned_area_m2, 1, io_rank);
+
+    amrex::BoxArray io_boxes{
+        result.surface_layout_.cell_domain()};
+    amrex::Vector<int> processor_map(1, io_rank);
+    const amrex::DistributionMapping io_dm(
+        std::move(processor_map));
+    amrex::MultiFab io_state(
+        io_boxes, io_dm, 1, 0, fire_surface_mf_info());
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        for (amrex::MFIter mfi(io_state); mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto values = io_state.array(mfi);
+            for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+                for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                    values(i, j, 0) =
+                        state.burned_fraction[
+                            result.flat_index(
+                                static_cast<std::size_t>(i),
+                                static_cast<std::size_t>(j))];
+                }
+            }
+        }
+    }
+
+    result.burned_fraction_mf_.ParallelCopy(
+        io_state, 0, 0, 1, 0, 0);
+    result.burned_area_m2_ = burned_area_m2;
+    return result;
+}
+
 FireBurnedFractionRaster::FireBurnedFractionRaster(
     const FireBurnedFractionRaster& other)
     : geometry_(other.geometry_),

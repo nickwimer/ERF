@@ -311,6 +311,108 @@ FireCombustionRaster::FireCombustionRaster(
         states_mf_);
 }
 
+FireCombustionRaster
+FireCombustionRaster::collective_restore_from_io_rank_state(
+    FireCartesianRasterGeometry2D geometry,
+    FireCombustionParameters parameters,
+    FireCombustionRasterOptions options,
+    const FireCombustionRasterState& state)
+{
+    FireCombustionRaster result(
+        geometry, parameters, options);
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    int invalid_state = 0;
+    int initialized = 0;
+    amrex::Real totals[4]{
+        amrex::Real(0), amrex::Real(0),
+        amrex::Real(0), amrex::Real(0)};
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        try {
+            if (state.cells.size() != geometry.nx * geometry.ny) {
+                throw std::invalid_argument(
+                    "restored fire combustion state has the wrong cell count");
+            }
+            for (const FireCombustionState& cell : state.cells) {
+                (void)advance_fire_combustion(
+                    cell, parameters, amrex::Real(0));
+                if (!state.initialized
+                    && (cell.ignited_area_fraction != amrex::Real(0.0)
+                        || cell.remaining_dry_fuel_kg_m2 != amrex::Real(0.0)
+                        || cell.consumed_dry_fuel_kg_m2 != amrex::Real(0.0)
+                        || cell.sensible_energy_j_m2 != amrex::Real(0.0)
+                        || cell.water_released_kg_m2 != amrex::Real(0.0))) {
+                    throw std::invalid_argument(
+                        "uninitialized restored fire combustion state must be zero");
+                }
+            }
+
+            const FireCombustionRasterTotals restored_totals =
+                result.totals_for(state.cells);
+            require_finite_nonnegative(
+                restored_totals.remaining_dry_fuel_kg,
+                "restored fire combustion remaining fuel is not finite");
+            require_finite_nonnegative(
+                restored_totals.consumed_dry_fuel_kg,
+                "restored fire combustion consumed fuel is not finite");
+            require_finite_nonnegative(
+                restored_totals.sensible_energy_j,
+                "restored fire combustion sensible energy is not finite");
+            require_finite_nonnegative(
+                restored_totals.water_released_kg,
+                "restored fire combustion released water is not finite");
+
+            initialized = state.initialized ? 1 : 0;
+            totals[0] = restored_totals.remaining_dry_fuel_kg;
+            totals[1] = restored_totals.consumed_dry_fuel_kg;
+            totals[2] = restored_totals.sensible_energy_j;
+            totals[3] = restored_totals.water_released_kg;
+        } catch (...) {
+            invalid_state = 1;
+        }
+    }
+
+    amrex::ParallelDescriptor::Bcast(&invalid_state, 1, io_rank);
+    if (invalid_state != 0) {
+        throw std::invalid_argument(
+            "collective Fire combustion restore rejected IO-rank state");
+    }
+    amrex::ParallelDescriptor::Bcast(&initialized, 1, io_rank);
+    amrex::ParallelDescriptor::Bcast(totals, 4, io_rank);
+
+    amrex::BoxArray io_boxes{result.surface_layout_.cell_domain()};
+    amrex::Vector<int> processor_map(1, io_rank);
+    const amrex::DistributionMapping io_dm(std::move(processor_map));
+    amrex::MultiFab io_state(
+        io_boxes, io_dm, combustion_component_count, 0,
+        fire_surface_mf_info());
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        for (amrex::MFIter mfi(io_state); mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto values = io_state.array(mfi);
+            for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+                for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                    store_combustion_state(
+                        values, i, j,
+                        state.cells[
+                            result.flat_index(
+                                static_cast<std::size_t>(i),
+                                static_cast<std::size_t>(j))]);
+                }
+            }
+        }
+    }
+
+    result.states_mf_.ParallelCopy(
+        io_state, 0, 0, combustion_component_count, 0, 0);
+    result.totals_ = {totals[0], totals[1], totals[2], totals[3]};
+    result.initialized_ = initialized != 0;
+    return result;
+}
+
 FireCombustionRaster::FireCombustionRaster(
     const FireCombustionRaster& other)
     : geometry_(other.geometry_),

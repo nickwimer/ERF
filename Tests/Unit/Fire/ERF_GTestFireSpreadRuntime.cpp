@@ -743,7 +743,7 @@ TEST(
     ERFFireSpreadRuntimeState packed =
         runtime.collective_snapshot_state_to_io_rank();
     ERFFireSpreadRuntime restored =
-        ERFFireSpreadRuntime::restore_from_state(
+        ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
             std::move(packed));
 
     expect_same_runtime_state(runtime, restored);

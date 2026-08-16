@@ -6,6 +6,7 @@
 #include <fstream>
 #include <exception>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 #include <string>
 
@@ -91,11 +92,11 @@ validate_fire_checkpoint_policy(
     const ERFFire::ERFFireRuntimeOptions& options)
 {
     if (checkpoint.coupling_mode != options.coupling_mode) {
-        amrex::Error(
+        throw std::runtime_error(
             "ERF-Fire checkpoint coupling mode does not match current inputs");
     }
     if (checkpoint.wind_mode != options.wind_mode) {
-        amrex::Error(
+        throw std::runtime_error(
             "ERF-Fire checkpoint wind mode does not match current inputs");
     }
 
@@ -103,13 +104,13 @@ validate_fire_checkpoint_policy(
             == ERFFire::ERFFireWindMode::DirectReference) {
         if (checkpoint.reference_height_agl_m
             != options.reference_height_agl_m) {
-            amrex::Error(
+            throw std::runtime_error(
                 "ERF-Fire checkpoint reference height does not match current inputs");
         }
     } else {
         if (checkpoint.wind_adjustment_factor
             != options.wind_adjustment_factor) {
-            amrex::Error(
+            throw std::runtime_error(
                 "ERF-Fire checkpoint wind adjustment factor does not match current inputs");
         }
     }
@@ -118,7 +119,7 @@ validate_fire_checkpoint_policy(
             == ERFFire::ERFFireCouplingMode::TwoWay
         && checkpoint.feedback_extinction_depth_m
             != options.feedback_extinction_depth_m) {
-        amrex::Error(
+        throw std::runtime_error(
             "ERF-Fire checkpoint feedback extinction depth does not match current inputs");
     }
 }
@@ -1399,49 +1400,70 @@ ERF::ReadCheckpointFile ()
                 + restart_chkfile);
         }
 
-        Vector<char> fire_state_chars;
-        ParallelDescriptor::ReadAndBcastFile(
-            fire_state_name,
-            fire_state_chars);
-        std::string fire_state_text(
-            fire_state_chars.dataPtr());
-        std::istringstream fire_state_stream(
-            fire_state_text,
-            std::istringstream::in);
-
         try {
-            ERFFire::ERFFireCheckpointState checkpoint =
-                ERFFire::read_erf_fire_checkpoint_state(
-                    fire_state_stream);
+            const ERFFire::ERFFireSpreadConfig expected_config =
+                ERFFire::make_erf_fire_spread_config(
+                    m_fire_runtime_options,
+                    geom[0]);
 
-            validate_fire_checkpoint_policy(
-                checkpoint,
-                m_fire_runtime_options);
+            ERFFire::ERFFireSpreadRuntimeState restore_state;
+            restore_state.config = expected_config;
+            restore_state.current_time_s =
+                static_cast<Real>(t_new[0]);
 
-            const ERFFire::ERFFireSpreadConfig
-                expected_config =
-                    ERFFire::make_erf_fire_spread_config(
-                        m_fire_runtime_options,
-                        geom[0]);
+            int fire_state_read_failed = 0;
+            if (ParallelDescriptor::IOProcessor()) {
+                try {
+                    std::ifstream fire_state_stream(
+                        fire_state_name,
+                        std::ios::in | std::ios::binary);
+                    if (!fire_state_stream.good()) {
+                        throw std::runtime_error(
+                            "unable to open ERF-Fire checkpoint state "
+                            + fire_state_name);
+                    }
 
-            if (!same_fire_spread_config(
-                    checkpoint.runtime_state.config,
-                    expected_config)) {
-                Error(
-                    "ERF-Fire checkpoint spread configuration does not match current inputs or level-0 geometry");
+                    ERFFire::ERFFireCheckpointState checkpoint =
+                        ERFFire::read_erf_fire_checkpoint_state(
+                            fire_state_stream);
+
+                    validate_fire_checkpoint_policy(
+                        checkpoint,
+                        m_fire_runtime_options);
+
+                    if (!same_fire_spread_config(
+                            checkpoint.runtime_state.config,
+                            expected_config)) {
+                        throw std::runtime_error(
+                            "ERF-Fire checkpoint spread configuration does not match current inputs or level-0 geometry");
+                    }
+
+                    if (checkpoint.runtime_state.current_time_s
+                        != static_cast<Real>(t_new[0])) {
+                        throw std::runtime_error(
+                            "ERF-Fire checkpoint clock does not match ERF level-0 checkpoint time");
+                    }
+
+                    restore_state =
+                        std::move(checkpoint.runtime_state);
+                } catch (const std::exception&) {
+                    fire_state_read_failed = 1;
+                }
             }
 
-            if (checkpoint.runtime_state.current_time_s
-                != static_cast<Real>(t_new[0])) {
-                Error(
-                    "ERF-Fire checkpoint clock does not match ERF level-0 checkpoint time");
+            ParallelDescriptor::Bcast(
+                &fire_state_read_failed,
+                1,
+                ParallelDescriptor::IOProcessorNumber());
+            if (fire_state_read_failed != 0) {
+                throw std::runtime_error(
+                    "IO rank failed to read or validate ERF-Fire checkpoint state");
             }
 
             ERFFire::ERFFireSpreadRuntime restored =
                 ERFFire::ERFFireSpreadRuntime::
-                    restore_from_state(
-                        std::move(
-                            checkpoint.runtime_state));
+                    collective_restore_from_io_rank_state(
+                        std::move(restore_state));
 
             m_fire_spread_runtime =
                 std::make_unique<

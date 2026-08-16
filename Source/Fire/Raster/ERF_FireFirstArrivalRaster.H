@@ -67,6 +67,15 @@ public:
         const FireCartesianRasterGeometry2D& geometry,
         FireFirstArrivalRasterState state);
 
+    /**
+     * Collectively restore version-1 canonical state owned only by IOProcessor().
+     * Non-IO ranks may pass empty canonical mask/time vectors.
+     */
+    [[nodiscard]] static FireFirstArrivalRaster
+    collective_restore_from_io_rank_state(
+        const FireCartesianRasterGeometry2D& geometry,
+        const FireFirstArrivalRasterState& state);
+
     FireFirstArrivalRaster(
         const FireFirstArrivalRaster& other);
     FireFirstArrivalRaster& operator=(

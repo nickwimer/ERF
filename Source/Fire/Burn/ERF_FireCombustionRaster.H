@@ -91,6 +91,17 @@ public:
         FireCombustionRasterOptions options,
         FireCombustionRasterState state);
 
+    /**
+     * Collectively restore version-1 canonical state owned only by IOProcessor().
+     * Non-IO ranks may pass an empty canonical cell vector.
+     */
+    [[nodiscard]] static FireCombustionRaster
+    collective_restore_from_io_rank_state(
+        FireCartesianRasterGeometry2D geometry,
+        FireCombustionParameters parameters,
+        FireCombustionRasterOptions options,
+        const FireCombustionRasterState& state);
+
     FireCombustionRaster(
         const FireCombustionRaster& other);
     FireCombustionRaster& operator=(

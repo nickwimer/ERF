@@ -166,6 +166,146 @@ FireFirstArrivalRaster::FireFirstArrivalRaster (
         first_arrival_time_mf_);
 }
 
+FireFirstArrivalRaster
+FireFirstArrivalRaster::collective_restore_from_io_rank_state(
+    const FireCartesianRasterGeometry2D& geometry,
+    const FireFirstArrivalRasterState& state)
+{
+    FireFirstArrivalRaster result(geometry);
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    int invalid_state = 0;
+    unsigned long long arrived_count = 0;
+    int flags[2]{0, 0};
+    amrex::Real times[2]{amrex::Real(0.0), amrex::Real(0.0)};
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        try {
+            const std::size_t cell_count = geometry.nx * geometry.ny;
+            if (state.arrived.size() != cell_count
+                || state.first_arrival_time_s.size() != cell_count) {
+                throw std::invalid_argument(
+                    "restored fire first-arrival state has the wrong cell count");
+            }
+            if (state.has_initial_condition) {
+                if (!std::isfinite(state.initial_condition_time_s)
+                    || state.initial_condition_time_s < amrex::Real(0.0)) {
+                    throw std::invalid_argument(
+                        "restored fire first-arrival initial time must be finite and nonnegative");
+                }
+            } else if (state.has_committed_sweep) {
+                throw std::invalid_argument(
+                    "restored fire first-arrival state cannot have sweeps without an initial condition");
+            }
+            if (state.has_committed_sweep) {
+                if (!std::isfinite(state.last_sweep_end_time_s)
+                    || state.last_sweep_end_time_s
+                        < state.initial_condition_time_s) {
+                    throw std::invalid_argument(
+                        "restored fire first-arrival sweep time is invalid");
+                }
+            } else if (!std::isfinite(state.last_sweep_end_time_s)) {
+                throw std::invalid_argument(
+                    "restored fire first-arrival stored sweep time must be finite");
+            }
+
+            std::size_t count = 0;
+            for (std::size_t index = 0; index < cell_count; ++index) {
+                const std::uint8_t mask = state.arrived[index];
+                const amrex::Real arrival_time =
+                    state.first_arrival_time_s[index];
+                if (mask != std::uint8_t(0) && mask != std::uint8_t(1)) {
+                    throw std::invalid_argument(
+                        "restored fire first-arrival mask must contain only 0 or 1");
+                }
+                if (!std::isfinite(arrival_time)) {
+                    throw std::invalid_argument(
+                        "restored fire first-arrival times must be finite");
+                }
+                if (mask == std::uint8_t(0)) {
+                    continue;
+                }
+                ++count;
+                if (!state.has_initial_condition
+                    || arrival_time < state.initial_condition_time_s) {
+                    throw std::invalid_argument(
+                        "restored fire arrival precedes the initial condition");
+                }
+                if (state.has_committed_sweep) {
+                    if (arrival_time > state.last_sweep_end_time_s) {
+                        throw std::invalid_argument(
+                            "restored fire arrival lies after the committed sweep");
+                    }
+                } else if (arrival_time != state.initial_condition_time_s) {
+                    throw std::invalid_argument(
+                        "restored fire arrival without a sweep must equal the initial time");
+                }
+            }
+            if (!state.has_initial_condition && count != 0) {
+                throw std::invalid_argument(
+                    "restored fire first-arrival state has arrived cells without initialization");
+            }
+
+            arrived_count = static_cast<unsigned long long>(count);
+            flags[0] = state.has_initial_condition ? 1 : 0;
+            flags[1] = state.has_committed_sweep ? 1 : 0;
+            times[0] = state.initial_condition_time_s;
+            times[1] = state.last_sweep_end_time_s;
+        } catch (...) {
+            invalid_state = 1;
+        }
+    }
+
+    amrex::ParallelDescriptor::Bcast(&invalid_state, 1, io_rank);
+    if (invalid_state != 0) {
+        throw std::invalid_argument(
+            "collective Fire first-arrival restore rejected IO-rank state");
+    }
+    amrex::ParallelDescriptor::Bcast(&arrived_count, 1, io_rank);
+    amrex::ParallelDescriptor::Bcast(flags, 2, io_rank);
+    amrex::ParallelDescriptor::Bcast(times, 2, io_rank);
+
+    amrex::BoxArray io_boxes{result.surface_layout_.cell_domain()};
+    amrex::Vector<int> processor_map(1, io_rank);
+    const amrex::DistributionMapping io_dm(std::move(processor_map));
+    amrex::iMultiFab io_arrived(
+        io_boxes, io_dm, 1, 0, fire_surface_mf_info());
+    amrex::MultiFab io_times(
+        io_boxes, io_dm, 1, 0, fire_surface_mf_info());
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        for (amrex::MFIter mfi(io_arrived); mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto masks = io_arrived.array(mfi);
+            const auto arrival_times = io_times.array(mfi);
+            for (int j = box.smallEnd(1); j <= box.bigEnd(1); ++j) {
+                for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
+                    const std::size_t index =
+                        result.flat_index(
+                            static_cast<std::size_t>(i),
+                            static_cast<std::size_t>(j));
+                    masks(i, j, 0) =
+                        static_cast<int>(state.arrived[index]);
+                    arrival_times(i, j, 0) =
+                        state.first_arrival_time_s[index];
+                }
+            }
+        }
+    }
+
+    result.arrived_mf_.ParallelCopy(io_arrived, 0, 0, 1, 0, 0);
+    result.first_arrival_time_mf_.ParallelCopy(
+        io_times, 0, 0, 1, 0, 0);
+    result.arrived_cell_count_ =
+        static_cast<std::size_t>(arrived_count);
+    result.has_initial_condition_ = flags[0] != 0;
+    result.initial_condition_time_s_ = times[0];
+    result.has_committed_sweep_ = flags[1] != 0;
+    result.last_sweep_end_time_s_ = times[1];
+    return result;
+}
+
 FireFirstArrivalRaster::FireFirstArrivalRaster(
     const FireFirstArrivalRaster& other)
     : geometry_(other.geometry_),

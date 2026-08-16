@@ -160,6 +160,15 @@ public:
     restore_from_state(ERFFireSpreadRuntimeState state);
 
     /**
+     * Collectively restore a version-1 state whose full canonical raster
+     * vectors and perimeter are present only on IOProcessor(). Config and
+     * current_time_s must already be valid and identical on every rank.
+     */
+    [[nodiscard]] static ERFFireSpreadRuntime
+    collective_restore_from_io_rank_state(
+        ERFFireSpreadRuntimeState state);
+
+    /**
      * Advance one fire step using sampled reference wind directly as the
      * Rothermel model wind.
      *
@@ -249,10 +258,20 @@ public:
 
 private:
     struct RestoreStateTag {};
+    struct CollectiveRestoreStateTag {};
 
     ERFFireSpreadRuntime(
         ERFFireSpreadRuntimeState state,
         RestoreStateTag);
+
+    ERFFireSpreadRuntime(
+        ERFFireSpreadConfig config,
+        FirePerimeter perimeter,
+        FireBurnedFractionRaster burned_fraction,
+        FireFirstArrivalRaster first_arrival,
+        FireCombustionRaster combustion,
+        amrex::Real current_time_s,
+        CollectiveRestoreStateTag);
 
     enum class WindInputMode
     {

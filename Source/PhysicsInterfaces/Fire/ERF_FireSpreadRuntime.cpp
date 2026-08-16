@@ -5,6 +5,8 @@
 #include <ERF_RothermelModel.H>
 #include <ERF_VectorPerimeterPropagator.H>
 
+#include <AMReX_ParallelDescriptor.H>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -278,6 +280,59 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 
 }
 
+ERFFireSpreadRuntime::ERFFireSpreadRuntime(
+    ERFFireSpreadConfig config,
+    FirePerimeter perimeter,
+    FireBurnedFractionRaster burned_fraction,
+    FireFirstArrivalRaster first_arrival,
+    FireCombustionRaster combustion,
+    amrex::Real current_time_s,
+    CollectiveRestoreStateTag)
+    : config_(std::move(config)),
+      perimeter_(std::move(perimeter)),
+      burned_fraction_(std::move(burned_fraction)),
+      first_arrival_(std::move(first_arrival)),
+      combustion_(std::move(combustion)),
+      current_time_s_(current_time_s)
+{
+    validate_runtime_scalars(config_, current_time_s_);
+    (void)remesh_perimeter(perimeter_, config_.remesh_options);
+
+    require(
+        first_arrival_.has_initial_condition(),
+        "restored fire runtime requires initialized first-arrival history");
+    if (first_arrival_.has_committed_sweep()) {
+        require(
+            first_arrival_.last_sweep_end_time_s() == current_time_s_,
+            "restored fire runtime clock does not match first-arrival history");
+    } else {
+        require(
+            first_arrival_.initial_condition_time_s() == current_time_s_,
+            "restored fire runtime initial clock does not match first-arrival history");
+    }
+    require(
+        combustion_.initialized(),
+        "restored fire runtime requires initialized combustion history");
+
+    const auto& geometry = config_.raster_geometry;
+    const amrex::Real xhi =
+        geometry.xlo_m
+        + static_cast<amrex::Real>(geometry.nx) * geometry.dx_m;
+    const amrex::Real yhi =
+        geometry.ylo_m
+        + static_cast<amrex::Real>(geometry.ny) * geometry.dy_m;
+    for (const FireVec2& vertex : perimeter_.vertices_m()) {
+        require(
+            std::isfinite(vertex.x)
+                && std::isfinite(vertex.y)
+                && vertex.x >= geometry.xlo_m
+                && vertex.x <= xhi
+                && vertex.y >= geometry.ylo_m
+                && vertex.y <= yhi,
+            "restored fire perimeter lies outside its raster geometry");
+    }
+}
+
 ERFFireSpreadRuntimeState
 ERFFireSpreadRuntime::snapshot_state() const
 {
@@ -334,6 +389,102 @@ ERFFireSpreadRuntime::restore_from_state(
     return ERFFireSpreadRuntime(
         std::move(state),
         RestoreStateTag{});
+}
+
+ERFFireSpreadRuntime
+ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
+    ERFFireSpreadRuntimeState state)
+{
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    unsigned long long vertex_count =
+        amrex::ParallelDescriptor::IOProcessor()
+            ? static_cast<unsigned long long>(
+                state.perimeter_vertices_m.size())
+            : 0ULL;
+    amrex::ParallelDescriptor::Bcast(&vertex_count, 1, io_rank);
+
+    if (vertex_count
+        > static_cast<unsigned long long>(
+            std::numeric_limits<std::size_t>::max() / 2)) {
+        throw std::overflow_error(
+            "collective Fire restore perimeter size is not representable");
+    }
+    const std::size_t count =
+        static_cast<std::size_t>(vertex_count);
+    std::vector<amrex::Real> packed_vertices(2 * count);
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        for (std::size_t index = 0; index < count; ++index) {
+            packed_vertices[2 * index] =
+                state.perimeter_vertices_m[index].x;
+            packed_vertices[2 * index + 1] =
+                state.perimeter_vertices_m[index].y;
+        }
+    }
+    if (!packed_vertices.empty()) {
+        amrex::ParallelDescriptor::Bcast(
+            packed_vertices.data(),
+            packed_vertices.size(),
+            io_rank);
+    }
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        state.perimeter_vertices_m.resize(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            state.perimeter_vertices_m[index] = {
+                packed_vertices[2 * index],
+                packed_vertices[2 * index + 1]};
+        }
+    }
+
+    int inconsistent_history = 0;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        if (state.burned_fraction.burned_fraction.size()
+            == state.combustion.cells.size()) {
+            for (std::size_t index = 0;
+                 index < state.burned_fraction.burned_fraction.size();
+                 ++index) {
+                if (!fraction_equal(
+                        state.burned_fraction.burned_fraction[index],
+                        state.combustion.cells[index].ignited_area_fraction)) {
+                    inconsistent_history = 1;
+                    break;
+                }
+            }
+        }
+    }
+    amrex::ParallelDescriptor::Bcast(
+        &inconsistent_history, 1, io_rank);
+    if (inconsistent_history != 0) {
+        throw std::invalid_argument(
+            "restored fire combustion history is not synchronized with burned fraction");
+    }
+
+    FirePerimeter perimeter(
+        std::move(state.perimeter_vertices_m));
+    FireBurnedFractionRaster burned =
+        FireBurnedFractionRaster::collective_restore_from_io_rank_state(
+            state.config.raster_geometry,
+            state.burned_fraction);
+    FireFirstArrivalRaster arrival =
+        FireFirstArrivalRaster::collective_restore_from_io_rank_state(
+            state.config.raster_geometry,
+            state.first_arrival);
+    FireCombustionRaster combustion =
+        FireCombustionRaster::collective_restore_from_io_rank_state(
+            state.config.raster_geometry,
+            state.config.combustion_parameters,
+            state.config.combustion_options,
+            state.combustion);
+
+    return ERFFireSpreadRuntime(
+        std::move(state.config),
+        std::move(perimeter),
+        std::move(burned),
+        std::move(arrival),
+        std::move(combustion),
+        state.current_time_s,
+        CollectiveRestoreStateTag{});
 }
 
 ERFFireStepDiagnostics
