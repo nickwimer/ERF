@@ -2,7 +2,10 @@
 
 #include <AMReX_Arena.H>
 #include <AMReX_FArrayBox.H>
+#include <AMReX_Gpu.H>
+#include <AMReX_Math.H>
 #include <AMReX_MFIter.H>
+#include <AMReX_ParReduce.H>
 #include <AMReX_ParallelDescriptor.H>
 
 #include <algorithm>
@@ -63,6 +66,7 @@ same_parameters(
             == b.combustion_water_yield_kg_per_kg_dry;
 }
 
+#ifndef AMREX_USE_GPU
 amrex::Real
 history_tolerance(amrex::Real scale) noexcept
 {
@@ -90,6 +94,8 @@ nonnegative_increment(
     return std::max(increment, amrex::Real(0));
 }
 
+#endif
+
 void
 require_finite_nonnegative(
     amrex::Real value,
@@ -99,6 +105,44 @@ require_finite_nonnegative(
         throw std::overflow_error(message);
     }
 }
+
+#ifdef AMREX_USE_GPU
+struct DeviceIncrement
+{
+    amrex::Real value{};
+    int invalid{};
+};
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+DeviceIncrement
+device_nonnegative_increment(
+    amrex::Real before,
+    amrex::Real after) noexcept
+{
+    const amrex::Real increment = after - before;
+    const amrex::Real before_abs = amrex::Math::abs(before);
+    const amrex::Real after_abs = amrex::Math::abs(after);
+    const amrex::Real scale =
+        before_abs > after_abs ? before_abs : after_abs;
+    const amrex::Real bounded_scale =
+        scale > amrex::Real(1) ? scale : amrex::Real(1);
+    const amrex::Real tolerance =
+        amrex::Real(1024)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * bounded_scale;
+
+    if (!amrex::Math::isfinite(increment)
+        || increment < -tolerance) {
+        return {amrex::Real(0), 1};
+    }
+
+    return {
+        increment < amrex::Real(0)
+            ? amrex::Real(0)
+            : increment,
+        0};
+}
+#endif
 
 amrex::MFInfo
 fire_surface_mf_info()
@@ -402,6 +446,244 @@ make_fire_surface_feedback_increment(
         DistributedFailure::none;
     std::string local_error;
 
+#ifdef AMREX_USE_GPU
+    amrex::MultiFab before_device(
+        before_states.boxArray(),
+        before_states.DistributionMap(),
+        before_states.nComp(),
+        0);
+    amrex::MultiFab after_device(
+        after_states.boxArray(),
+        after_states.DistributionMap(),
+        after_states.nComp(),
+        0);
+    amrex::MultiFab result_device(
+        result.cells_mf_.boxArray(),
+        result.cells_mf_.DistributionMap(),
+        FireSurfaceFeedbackRaster::component_count,
+        0);
+
+    for (amrex::MFIter mfi(before_states); mfi.isValid(); ++mfi) {
+        const auto& source = before_states[mfi];
+        auto& destination = before_device[mfi];
+        amrex::Gpu::htod_memcpy_async(
+            destination.dataPtr(),
+            source.dataPtr(),
+            destination.nBytes());
+    }
+    for (amrex::MFIter mfi(after_states); mfi.isValid(); ++mfi) {
+        const auto& source = after_states[mfi];
+        auto& destination = after_device[mfi];
+        amrex::Gpu::htod_memcpy_async(
+            destination.dataPtr(),
+            source.dataPtr(),
+            destination.nBytes());
+    }
+    amrex::Gpu::streamSynchronize();
+
+    const auto before_arrays =
+        before_device.const_arrays();
+    const auto after_arrays =
+        after_device.const_arrays();
+    const auto result_arrays =
+        result_device.arrays();
+
+    const auto local_reduction =
+        amrex::ParReduce(
+            amrex::TypeList<
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpSum,
+                amrex::ReduceOpMax>{},
+            amrex::TypeList<
+                amrex::Real,
+                amrex::Real,
+                amrex::Real,
+                int>{},
+            result_device,
+            [=] AMREX_GPU_DEVICE (
+                int box_no,
+                int i,
+                int j,
+                int k) noexcept
+                -> amrex::GpuTuple<
+                    amrex::Real,
+                    amrex::Real,
+                    amrex::Real,
+                    int>
+            {
+                const auto before_values =
+                    before_arrays[box_no];
+                const auto after_values =
+                    after_arrays[box_no];
+                const auto values =
+                    result_arrays[box_no];
+
+                const DeviceIncrement ignited =
+                    device_nonnegative_increment(
+                        before_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                ignited_area_fraction_comp),
+                        after_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                ignited_area_fraction_comp));
+                const DeviceIncrement consumed =
+                    device_nonnegative_increment(
+                        before_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                consumed_dry_fuel_comp),
+                        after_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                consumed_dry_fuel_comp));
+                const DeviceIncrement energy =
+                    device_nonnegative_increment(
+                        before_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                sensible_energy_comp),
+                        after_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                sensible_energy_comp));
+                const DeviceIncrement water =
+                    device_nonnegative_increment(
+                        before_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                water_released_comp),
+                        after_values(
+                            i, j, k,
+                            FireCombustionRaster::
+                                water_released_comp));
+
+                if (ignited.invalid
+                    || consumed.invalid
+                    || energy.invalid
+                    || water.invalid) {
+                    values(
+                        i, j, k,
+                        FireSurfaceFeedbackRaster::
+                            consumed_dry_fuel_comp) =
+                        amrex::Real(0);
+                    values(
+                        i, j, k,
+                        FireSurfaceFeedbackRaster::
+                            sensible_energy_comp) =
+                        amrex::Real(0);
+                    values(
+                        i, j, k,
+                        FireSurfaceFeedbackRaster::
+                            water_released_comp) =
+                        amrex::Real(0);
+                    return {
+                        amrex::Real(0),
+                        amrex::Real(0),
+                        amrex::Real(0),
+                        1};
+                }
+
+                const amrex::Real consumed_kg =
+                    consumed.value * cell_area_m2;
+                const amrex::Real energy_j =
+                    energy.value * cell_area_m2;
+                const amrex::Real water_kg =
+                    water.value * cell_area_m2;
+
+                if (!amrex::Math::isfinite(consumed_kg)
+                    || consumed_kg < amrex::Real(0)
+                    || !amrex::Math::isfinite(energy_j)
+                    || energy_j < amrex::Real(0)
+                    || !amrex::Math::isfinite(water_kg)
+                    || water_kg < amrex::Real(0)) {
+                    values(
+                        i, j, k,
+                        FireSurfaceFeedbackRaster::
+                            consumed_dry_fuel_comp) =
+                        amrex::Real(0);
+                    values(
+                        i, j, k,
+                        FireSurfaceFeedbackRaster::
+                            sensible_energy_comp) =
+                        amrex::Real(0);
+                    values(
+                        i, j, k,
+                        FireSurfaceFeedbackRaster::
+                            water_released_comp) =
+                        amrex::Real(0);
+                    return {
+                        amrex::Real(0),
+                        amrex::Real(0),
+                        amrex::Real(0),
+                        2};
+                }
+
+                values(
+                    i, j, k,
+                    FireSurfaceFeedbackRaster::
+                        consumed_dry_fuel_comp) =
+                    consumed_kg;
+                values(
+                    i, j, k,
+                    FireSurfaceFeedbackRaster::
+                        sensible_energy_comp) =
+                    energy_j;
+                values(
+                    i, j, k,
+                    FireSurfaceFeedbackRaster::
+                        water_released_comp) =
+                    water_kg;
+
+                return {
+                    consumed_kg,
+                    energy_j,
+                    water_kg,
+                    0};
+            });
+
+    local_totals[0] =
+        amrex::get<0>(local_reduction);
+    local_totals[1] =
+        amrex::get<1>(local_reduction);
+    local_totals[2] =
+        amrex::get<2>(local_reduction);
+
+    const int device_failure =
+        amrex::get<3>(local_reduction);
+    if (device_failure == 1) {
+        local_failure =
+            DistributedFailure::invalid_argument;
+        local_error =
+            "combustion history decreased";
+    } else if (device_failure == 2) {
+        local_failure =
+            DistributedFailure::overflow_error;
+        local_error =
+            "surface-feedback increment is not finite";
+    } else if (device_failure != 0) {
+        local_failure =
+            DistributedFailure::runtime_error;
+        local_error =
+            "invalid device surface-feedback failure code";
+    }
+
+    synchronize_distributed_failure(
+        local_failure,
+        local_error);
+
+    for (amrex::MFIter mfi(result_device); mfi.isValid(); ++mfi) {
+        const auto& source = result_device[mfi];
+        auto& destination = result.cells_mf_[mfi];
+        amrex::Gpu::dtoh_memcpy_async(
+            destination.dataPtr(),
+            source.dataPtr(),
+            source.nBytes());
+    }
+    amrex::Gpu::streamSynchronize();
+#else
     try {
         for (amrex::MFIter mfi(result.cells_mf_);
              mfi.isValid(); ++mfi) {
@@ -508,6 +790,7 @@ make_fire_surface_feedback_increment(
     synchronize_distributed_failure(
         local_failure,
         local_error);
+#endif
 
     amrex::ParallelDescriptor::ReduceRealSum(
         local_totals,
