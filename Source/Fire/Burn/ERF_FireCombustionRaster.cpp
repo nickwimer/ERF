@@ -5,7 +5,9 @@
 
 #include <AMReX_Arena.H>
 #include <AMReX_FArrayBox.H>
+#include <AMReX_Gpu.H>
 #include <AMReX_MFIter.H>
+#include <AMReX_ParReduce.H>
 #include <AMReX_ParallelDescriptor.H>
 
 #include <algorithm>
@@ -137,6 +139,7 @@ synchronize_distributed_failure(
 }
 
 template <typename T>
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 FireCombustionState
 load_combustion_state(
     const amrex::Array4<T>& values,
@@ -151,6 +154,7 @@ load_combustion_state(
         values(i, j, 0, water_released_comp)};
 }
 
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 void
 store_combustion_state(
     const amrex::Array4<amrex::Real>& values,
@@ -1145,8 +1149,207 @@ FireCombustionRaster::advance_from_linear_sweep(
             }
         }
 
-        // Regular combustion is now independent of perimeter geometry. It
-        // consumes only the per-cell ignition schedule plus scalar parameters.
+        // Regular combustion is independent of perimeter geometry. CUDA
+        // builds stage only regular state/schedule data to the device; exact
+        // perimeter interpolation and cell coverage remain CPU-side.
+#ifdef AMREX_USE_GPU
+        amrex::MultiFab device_states(
+            next_states.boxArray(),
+            next_states.DistributionMap(),
+            combustion_component_count,
+            0);
+        amrex::MultiFab device_ignition_schedule(
+            ignition_schedule.boxArray(),
+            ignition_schedule.DistributionMap(),
+            temporal_substeps,
+            0);
+
+        for (amrex::MFIter mfi(next_states);
+             mfi.isValid(); ++mfi) {
+            const auto& source = next_states[mfi];
+            auto& destination = device_states[mfi];
+            amrex::Gpu::htod_memcpy_async(
+                destination.dataPtr(),
+                source.dataPtr(),
+                destination.nBytes());
+        }
+        for (amrex::MFIter mfi(ignition_schedule);
+             mfi.isValid(); ++mfi) {
+            const auto& source = ignition_schedule[mfi];
+            auto& destination =
+                device_ignition_schedule[mfi];
+            amrex::Gpu::htod_memcpy_async(
+                destination.dataPtr(),
+                source.dataPtr(),
+                destination.nBytes());
+        }
+        amrex::Gpu::streamSynchronize();
+
+        const auto state_arrays =
+            device_states.arrays();
+        const auto schedule_arrays =
+            device_ignition_schedule.const_arrays();
+        const FireCombustionParameters parameters =
+            parameters_;
+        const amrex::Real device_half_substep_dt_s =
+            half_substep_dt_s;
+        const int device_temporal_substeps =
+            temporal_substeps;
+
+        const auto device_failures =
+            amrex::ParReduce(
+                amrex::TypeList<
+                    amrex::ReduceOpMax,
+                    amrex::ReduceOpMax,
+                    amrex::ReduceOpMax>{},
+                amrex::TypeList<int, int, int>{},
+                device_states,
+                [=] AMREX_GPU_DEVICE (
+                    int box_no,
+                    int i,
+                    int j,
+                    int) noexcept
+                    -> amrex::GpuTuple<int, int, int>
+                {
+                    const auto values =
+                        state_arrays[box_no];
+                    const auto schedule =
+                        schedule_arrays[box_no];
+
+                    FireCombustionState current =
+                        load_combustion_state(
+                            values,
+                            i,
+                            j);
+
+                    for (int substep = 0;
+                         substep < device_temporal_substeps;
+                         ++substep) {
+                        FireCombustionAdvance first_half{};
+                        FireCombustionStatus status =
+                            try_advance_fire_combustion(
+                                current,
+                                parameters,
+                                device_half_substep_dt_s,
+                                first_half);
+                        if (status
+                            == FireCombustionStatus::invalid_argument) {
+                            return {1, 0, 0};
+                        }
+                        if (status
+                            == FireCombustionStatus::overflow_error) {
+                            return {0, 1, 0};
+                        }
+                        if (status
+                            != FireCombustionStatus::success) {
+                            return {0, 0, 1};
+                        }
+
+                        FireCombustionState with_ignition{};
+                        status =
+                            try_add_fire_combustion_ignition(
+                                first_half.state,
+                                parameters,
+                                schedule(i, j, 0, substep),
+                                with_ignition);
+                        if (status
+                            == FireCombustionStatus::invalid_argument) {
+                            return {1, 0, 0};
+                        }
+                        if (status
+                            == FireCombustionStatus::overflow_error) {
+                            return {0, 1, 0};
+                        }
+                        if (status
+                            != FireCombustionStatus::success) {
+                            return {0, 0, 1};
+                        }
+
+                        FireCombustionAdvance second_half{};
+                        status =
+                            try_advance_fire_combustion(
+                                with_ignition,
+                                parameters,
+                                device_half_substep_dt_s,
+                                second_half);
+                        if (status
+                            == FireCombustionStatus::invalid_argument) {
+                            return {1, 0, 0};
+                        }
+                        if (status
+                            == FireCombustionStatus::overflow_error) {
+                            return {0, 1, 0};
+                        }
+                        if (status
+                            != FireCombustionStatus::success) {
+                            return {0, 0, 1};
+                        }
+
+                        current = second_half.state;
+                    }
+
+                    store_combustion_state(
+                        values,
+                        i,
+                        j,
+                        current);
+                    return {0, 0, 0};
+                });
+
+        if (amrex::get<2>(device_failures) != 0) {
+            throw std::runtime_error(
+                "fire combustion device update returned an invalid status");
+        }
+        if (amrex::get<1>(device_failures) != 0) {
+            throw std::overflow_error(
+                "fire combustion device update produced non-finite accounting");
+        }
+        if (amrex::get<0>(device_failures) != 0) {
+            throw std::invalid_argument(
+                "fire combustion device update rejected combustion state");
+        }
+
+        for (amrex::MFIter mfi(device_states);
+             mfi.isValid(); ++mfi) {
+            const auto& source = device_states[mfi];
+            auto& destination = next_states[mfi];
+            amrex::Gpu::dtoh_memcpy_async(
+                destination.dataPtr(),
+                source.dataPtr(),
+                source.nBytes());
+        }
+        amrex::Gpu::streamSynchronize();
+
+        // Preserve the host-side endpoint invariant check after the device
+        // arithmetic has been materialized back into the transactional state.
+        for (amrex::MFIter mfi(next_states);
+             mfi.isValid(); ++mfi) {
+            const amrex::Box& box = mfi.validbox();
+            const auto values =
+                next_states.const_array(mfi);
+            const auto target_values =
+                burned_after_mf.const_array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    const FireCombustionState current =
+                        load_combustion_state(
+                            values,
+                            i,
+                            j);
+                    require(
+                        fraction_equal(
+                            current.ignited_area_fraction,
+                            target_values(i, j, 0)),
+                        "fire combustion endpoint state is not synchronized with burned history");
+                }
+            }
+        }
+#else
         for (amrex::MFIter mfi(next_states);
              mfi.isValid(); ++mfi) {
             const amrex::Box& box = mfi.validbox();
@@ -1203,6 +1406,7 @@ FireCombustionRaster::advance_from_linear_sweep(
                 }
             }
         }
+#endif
     } catch (const std::invalid_argument& error) {
         local_failure = DistributedFailure::invalid_argument;
         local_error = error.what();
