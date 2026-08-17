@@ -147,9 +147,13 @@ device_nonnegative_increment(
 amrex::MFInfo
 fire_surface_mf_info()
 {
+#ifdef AMREX_USE_GPU
+    return amrex::MFInfo{};
+#else
     amrex::MFInfo info;
     info.SetArena(amrex::The_Pinned_Arena());
     return info;
+#endif
 }
 
 [[noreturn]] void
@@ -316,6 +320,7 @@ FireSurfaceFeedbackRaster::gather_distributed_to_canonical(
         0,
         component_count,
         0);
+    amrex::Gpu::streamSynchronize();
     const auto values = gathered.const_array();
 
     std::vector<FireSurfaceFeedbackCell> canonical(
@@ -367,6 +372,32 @@ FireSurfaceFeedbackRaster::cell(
         static_cast<int>(i),
         static_cast<int>(j),
         0);
+
+#ifdef AMREX_USE_GPU
+    amrex::FArrayBox host_cell(
+        amrex::Box(cell_index, cell_index),
+        component_count,
+        amrex::The_Pinned_Arena());
+    cells_mf_.copyTo(
+        host_cell,
+        0,
+        0,
+        component_count,
+        0);
+    amrex::Gpu::streamSynchronize();
+
+    const auto values = host_cell.const_array();
+    return {
+        values(
+            cell_index[0], cell_index[1], cell_index[2],
+            consumed_dry_fuel_comp),
+        values(
+            cell_index[0], cell_index[1], cell_index[2],
+            sensible_energy_comp),
+        values(
+            cell_index[0], cell_index[1], cell_index[2],
+            water_released_comp)};
+#else
     for (amrex::MFIter mfi(cells_mf_);
          mfi.isValid();
          ++mfi) {
@@ -389,6 +420,7 @@ FireSurfaceFeedbackRaster::cell(
 
     throw std::logic_error(
         "single-rank Fire surface-feedback cell is not locally represented");
+#endif
 }
 
 FireSurfaceFeedbackTotals
@@ -447,18 +479,12 @@ make_fire_surface_feedback_increment(
     std::string local_error;
 
 #ifdef AMREX_USE_GPU
-    amrex::MultiFab result_device(
-        result.cells_mf_.boxArray(),
-        result.cells_mf_.DistributionMap(),
-        FireSurfaceFeedbackRaster::component_count,
-        0);
-
     const auto before_arrays =
         before_states.const_arrays();
     const auto after_arrays =
         after_states.const_arrays();
     const auto result_arrays =
-        result_device.arrays();
+        result.cells_mf_.arrays();
 
     const auto local_reduction =
         amrex::ParReduce(
@@ -472,7 +498,7 @@ make_fire_surface_feedback_increment(
                 amrex::Real,
                 amrex::Real,
                 int>{},
-            result_device,
+            result.cells_mf_,
             [=] AMREX_GPU_DEVICE (
                 int box_no,
                 int i,
@@ -646,15 +672,6 @@ make_fire_surface_feedback_increment(
         local_failure,
         local_error);
 
-    for (amrex::MFIter mfi(result_device); mfi.isValid(); ++mfi) {
-        const auto& source = result_device[mfi];
-        auto& destination = result.cells_mf_[mfi];
-        amrex::Gpu::dtoh_memcpy_async(
-            destination.dataPtr(),
-            source.dataPtr(),
-            source.nBytes());
-    }
-    amrex::Gpu::streamSynchronize();
 #else
     try {
         for (amrex::MFIter mfi(result.cells_mf_);
