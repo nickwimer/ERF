@@ -1387,6 +1387,27 @@ FireCombustionRaster::advance_from_linear_sweep(
                     end_perimeter,
                     alpha);
 
+            const auto& sample_vertices =
+                sample_perimeter.vertices_m();
+            amrex::Real sample_xlo_m =
+                sample_vertices.front().x;
+            amrex::Real sample_xhi_m =
+                sample_vertices.front().x;
+            amrex::Real sample_ylo_m =
+                sample_vertices.front().y;
+            amrex::Real sample_yhi_m =
+                sample_vertices.front().y;
+            for (const FireVec2& vertex : sample_vertices) {
+                sample_xlo_m =
+                    std::min(sample_xlo_m, vertex.x);
+                sample_xhi_m =
+                    std::max(sample_xhi_m, vertex.x);
+                sample_ylo_m =
+                    std::min(sample_ylo_m, vertex.y);
+                sample_yhi_m =
+                    std::max(sample_yhi_m, vertex.y);
+            }
+
             for (amrex::MFIter mfi(ignition_schedule);
                  mfi.isValid(); ++mfi) {
                 const amrex::Box& box = mfi.validbox();
@@ -1401,10 +1422,29 @@ FireCombustionRaster::advance_from_linear_sweep(
                     for (int i = box.smallEnd(0);
                          i <= box.bigEnd(0);
                          ++i) {
+                        const amrex::Real previous_burned_fraction =
+                            running(i, j, 0);
+
+                        if (previous_burned_fraction
+                            == amrex::Real(1.0)) {
+                            schedule(i, j, 0, substep) =
+                                amrex::Real(0.0);
+                            continue;
+                        }
+
                         const FireCartesianCell2D cell =
                             burned_before.cell_bounds(
                                 static_cast<std::size_t>(i),
                                 static_cast<std::size_t>(j));
+
+                        if (cell.xhi_m < sample_xlo_m
+                            || cell.xlo_m > sample_xhi_m
+                            || cell.yhi_m < sample_ylo_m
+                            || cell.ylo_m > sample_yhi_m) {
+                            schedule(i, j, 0, substep) =
+                                amrex::Real(0.0);
+                            continue;
+                        }
 
                         const amrex::Real coverage =
                             fire_perimeter_cell_coverage_fraction(
@@ -1412,11 +1452,11 @@ FireCombustionRaster::advance_from_linear_sweep(
                                 cell);
                         const amrex::Real next_burned_fraction =
                             std::max(
-                                running(i, j, 0),
+                                previous_burned_fraction,
                                 coverage);
                         schedule(i, j, 0, substep) =
                             next_burned_fraction
-                            - running(i, j, 0);
+                            - previous_burned_fraction;
                         running(i, j, 0) =
                             next_burned_fraction;
                     }
