@@ -365,13 +365,15 @@ ERF::ERF_shared ()
                 Error(
                     "fire.feedback_extinction_depth_m must be finite and positive");
             }
-            if (m_fire_runtime_options.output_dir.empty()) {
+            if (m_fire_runtime_options.output_interval_steps < 0) {
                 Error(
-                    "fire.output_dir must not be empty");
+                    "fire.output_interval_steps must be nonnegative; "
+                    "zero disables diagnostic CSV snapshots");
             }
-            if (m_fire_runtime_options.output_interval_steps <= 0) {
+            if (m_fire_runtime_options.output_interval_steps > 0
+                && m_fire_runtime_options.output_dir.empty()) {
                 Error(
-                    "fire.output_interval_steps must be positive");
+                    "fire.output_dir must not be empty when diagnostic CSV snapshots are enabled");
             }
         }
     }

@@ -78,6 +78,14 @@ enum class DiagnosticID
     Temperature2m,
     WaterVaporMixingRatio2m,
     NearSurfaceDiagnosticSource,
+    FireBurnedFraction,
+    FireHasArrived,
+    FireFirstArrivalTime,
+    FireIgnitedAreaFraction,
+    FireRemainingDryFuel,
+    FireConsumedDryFuel,
+    FireSensibleEnergy,
+    FireWaterReleased,
     DynamicSoilBase
 };
 
@@ -92,6 +100,7 @@ enum class DiagnosticCategory
     Precipitation,
     ColumnIntegral,
     LandSurface,
+    Fire,
     SampledLevel
 };
 

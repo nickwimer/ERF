@@ -275,10 +275,45 @@ TEST(Plotfile2D, CatalogNamesMatchCanonicalOrder)
         "noahmp_water_vapor_mixing_ratio_2m_vegetated",
         "noahmp_water_vapor_mixing_ratio_2m_bare",
         "noahmp_vegetation_fraction", "temperature_2m",
-        "water_vapor_mixing_ratio_2m", "near_surface_diagnostic_source"
+        "water_vapor_mixing_ratio_2m", "near_surface_diagnostic_source",
+        "fire_burned_fraction", "fire_has_arrived", "fire_first_arrival_time_s",
+        "fire_ignited_area_fraction", "fire_remaining_dry_fuel_kg_m2",
+        "fire_consumed_dry_fuel_kg_m2", "fire_sensible_energy_j_m2",
+        "fire_water_released_kg_m2"
     };
 
     EXPECT_EQ(plotfile2d::diagnostic_names(), expected);
+}
+
+// Motivation: Fire diagnostics depend on live ERF runtime state. The generic
+// scheme/provider availability helper must not expose them by itself.
+TEST(Plotfile2D, GenericAvailabilityExcludesRuntimeFireDiagnostics)
+{
+    SolverChoice sc;
+    sc.moisture_type = MoistureType::None;
+
+    const auto available = plotfile2d::available_diagnostic_names(sc);
+    for (const char* name : {
+             "fire_burned_fraction",
+             "fire_has_arrived",
+             "fire_first_arrival_time_s",
+             "fire_ignited_area_fraction",
+             "fire_remaining_dry_fuel_kg_m2",
+             "fire_consumed_dry_fuel_kg_m2",
+             "fire_sensible_energy_j_m2",
+             "fire_water_released_kg_m2"}) {
+        EXPECT_FALSE(has_name(available, name)) << "unexpected runtime Fire field " << name;
+        const auto* descriptor = plotfile2d::find_diagnostic(name);
+        ASSERT_NE(descriptor, nullptr);
+        EXPECT_EQ(descriptor->category, plotfile2d::DiagnosticCategory::Fire);
+        EXPECT_EQ(descriptor->missing_policy,
+                  plotfile2d::MissingPolicy::AlwaysAvailable);
+    }
+
+    EXPECT_STREQ(
+        plotfile2d::diagnostic_category_to_string(
+            plotfile2d::DiagnosticCategory::Fire),
+        "Fire");
 }
 
 // Motivation: Surface precipitation accumulations are part of the canonical 2D
@@ -529,6 +564,7 @@ TEST(Plotfile2D, CatalogDescriptorsHaveRequiredMetadata)
         case plotfile2d::DiagnosticCategory::Precipitation:
         case plotfile2d::DiagnosticCategory::ColumnIntegral:
         case plotfile2d::DiagnosticCategory::LandSurface:
+        case plotfile2d::DiagnosticCategory::Fire:
         case plotfile2d::DiagnosticCategory::SampledLevel:
             valid_category = true;
             break;

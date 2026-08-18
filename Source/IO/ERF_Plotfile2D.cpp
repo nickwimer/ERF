@@ -18,6 +18,11 @@
 #include "ERF_Utils.H"
 #include "Diagnostics/ERF_SeaLevelPressure.H"
 
+#ifdef ERF_USE_FIRE
+#include <ERF_FireRuntimeInit.H>
+#include <ERF_FireSpreadOutput.H>
+#endif
+
 using namespace amrex;
 
 namespace
@@ -62,6 +67,39 @@ bool is_land_surface_diagnostic (const plotfile2d::DiagnosticDescriptor* descrip
 {
     return descriptor && descriptor->category == plotfile2d::DiagnosticCategory::LandSurface;
 }
+
+bool is_fire_diagnostic (const plotfile2d::DiagnosticDescriptor* descriptor) noexcept
+{
+    return descriptor && descriptor->category == plotfile2d::DiagnosticCategory::Fire;
+}
+
+#ifdef ERF_USE_FIRE
+int fire_checkpoint_raster_component (plotfile2d::DiagnosticID id) noexcept
+{
+    using Components = ERFFire::ERFFireCheckpointRasterComponents;
+
+    switch (id) {
+    case plotfile2d::DiagnosticID::FireBurnedFraction:
+        return Components::burned_fraction;
+    case plotfile2d::DiagnosticID::FireHasArrived:
+        return Components::arrived;
+    case plotfile2d::DiagnosticID::FireFirstArrivalTime:
+        return Components::first_arrival_time_s;
+    case plotfile2d::DiagnosticID::FireIgnitedAreaFraction:
+        return Components::ignited_area_fraction;
+    case plotfile2d::DiagnosticID::FireRemainingDryFuel:
+        return Components::remaining_dry_fuel_kg_m2;
+    case plotfile2d::DiagnosticID::FireConsumedDryFuel:
+        return Components::consumed_dry_fuel_kg_m2;
+    case plotfile2d::DiagnosticID::FireSensibleEnergy:
+        return Components::sensible_energy_j_m2;
+    case plotfile2d::DiagnosticID::FireWaterReleased:
+        return Components::water_released_kg_m2;
+    default:
+        return -1;
+    }
+}
+#endif
 
 Vector<Geometry> make_2d_plot_geometries (const Vector<Geometry>& geom,
                                           int finest_level)
@@ -133,9 +171,21 @@ ERF::setPlotVariables2D (const std::string& pp_plot_var_names, Vector<std::strin
     const bool has_surface_layer =
         phys_bc_type[Orientation(Direction::z, Orientation::low)] == ERF_BC::surface_layer;
     const auto active_lsm_names = lsm.Get_DataNames();
-    const auto available_names = plotfile2d::available_diagnostic_names(solverChoice,
-                                                                         has_surface_layer,
-                                                                         active_lsm_names);
+    auto available_names = plotfile2d::available_diagnostic_names(solverChoice,
+                                                                   has_surface_layer,
+                                                                   active_lsm_names);
+
+#ifdef ERF_USE_FIRE
+    // Runtime Fire diagnostics follow dynamic land-surface fields so every
+    // existing non-Fire component index remains unchanged.
+    if (m_fire_runtime_options.enabled) {
+        for (const auto& descriptor : plotfile2d::diagnostic_catalog()) {
+            if (descriptor.category == plotfile2d::DiagnosticCategory::Fire) {
+                available_names.push_back(descriptor.name);
+            }
+        }
+    }
+#endif
 
     // Keep the canonical built-in 2D ordering so the plotfile component layout
     // stays stable even if the input request order changes.
@@ -177,6 +227,45 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
     for (int lev = 0; lev <= finest_level; ++lev) {
         mf[lev].define(ba2d[lev], dmap[lev], ncomp_mf, 0);
     }
+
+#ifdef ERF_USE_FIRE
+    bool fire_plot_requested = false;
+    for (const auto& name : plot_var_names) {
+        fire_plot_requested =
+            fire_plot_requested
+            || is_fire_diagnostic(plotfile2d::find_diagnostic(name));
+    }
+
+    MultiFab fire_plot_raster;
+    std::unique_ptr<ERFFire::ERFFireSpreadRuntime> initial_fire_runtime;
+    if (fire_plot_requested) {
+        if (!m_fire_runtime_options.enabled) {
+            Abort("Fire 2D diagnostics were selected while fire.enabled is false");
+        }
+
+        const ERFFire::ERFFireSpreadRuntime* fire_runtime =
+            m_fire_spread_runtime.get();
+
+        // Initial-time output can precede construction by the coupling driver.
+        // Build an equivalent temporary runtime without mutating solver state.
+        if (fire_runtime == nullptr) {
+            if (istep[0] != 0 || t_new[0] != Real(0.0)) {
+                Abort("Fire 2D diagnostics requested but the Fire runtime is missing");
+            }
+            initial_fire_runtime =
+                ERFFire::make_erf_fire_spread_runtime(
+                    m_fire_runtime_options,
+                    geom[0],
+                    static_cast<Real>(t_new[0]));
+            fire_runtime = initial_fire_runtime.get();
+        }
+
+        // Reuse the version-2 checkpoint raster: this is the canonical
+        // distributed eight-component persistent Fire surface schema.
+        fire_plot_raster =
+            ERFFire::make_erf_fire_checkpoint_v2_raster(*fire_runtime);
+    }
+#endif
 
 
     // **********************************************************************************************
@@ -609,6 +698,37 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
                                            near_surface_source_comp,
                                            near_surface_sources);
         }
+
+#ifdef ERF_USE_FIRE
+        // Fire currently requires amr.max_level = 0, so its surface raster is
+        // copied directly into the level-0 2D plot slab.
+        if (fire_plot_requested) {
+            AMREX_ALWAYS_ASSERT(lev == 0);
+            for (const auto& name : plot_var_names) {
+                const auto* descriptor =
+                    plotfile2d::find_diagnostic(name);
+                if (!is_fire_diagnostic(descriptor)) {
+                    continue;
+                }
+
+                const int src_comp =
+                    fire_checkpoint_raster_component(descriptor->id);
+                AMREX_ALWAYS_ASSERT(src_comp >= 0);
+                AMREX_ALWAYS_ASSERT(
+                    src_comp
+                    < ERFFire::ERFFireCheckpointRasterComponents::component_count);
+
+                mf[lev].ParallelCopy(
+                    fire_plot_raster,
+                    src_comp,
+                    mf_comp,
+                    1,
+                    0,
+                    0);
+                ++mf_comp;
+            }
+        }
+#endif
 
         const int static_output_count = static_cast<int>(plot_var_names.size());
         for (int out_idx = static_output_count; out_idx < static_cast<int>(output_descriptors.size()); ++out_idx) {

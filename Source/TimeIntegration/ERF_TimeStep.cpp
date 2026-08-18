@@ -217,10 +217,12 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                     static_cast<Real>(time));
             m_fire_step_index = 0;
 
-            ERFFire::write_erf_fire_spread_snapshot(
-                *m_fire_spread_runtime,
-                m_fire_runtime_options.output_dir,
-                m_fire_step_index);
+            if (m_fire_runtime_options.output_interval_steps > 0) {
+                ERFFire::write_erf_fire_spread_snapshot(
+                    *m_fire_spread_runtime,
+                    m_fire_runtime_options.output_dir,
+                    m_fire_step_index);
+            }
         }
 
         if (m_fire_spread_runtime->current_time_s()
@@ -327,9 +329,10 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             next_fire_source_time;
 
         ++m_fire_step_index;
-        if (m_fire_step_index
-                % m_fire_runtime_options.output_interval_steps
-            == 0) {
+        if (m_fire_runtime_options.output_interval_steps > 0
+            && m_fire_step_index
+                   % m_fire_runtime_options.output_interval_steps
+               == 0) {
             ERFFire::write_erf_fire_spread_snapshot(
                 *m_fire_spread_runtime,
                 m_fire_runtime_options.output_dir,

@@ -70,7 +70,9 @@ struct ERFFireRuntimeOptions
     amrex::Real feedback_extinction_depth_m{amrex::Real(50.0)};
 
     std::string output_dir{"fire_output"};
-    int output_interval_steps{1};
+    // Diagnostic/development CSV snapshots only. Zero disables them; native
+    // ERF plotfiles/checkpoints are the production science/restart paths.
+    int output_interval_steps{0};
 };
 
 } // namespace ERFFire
