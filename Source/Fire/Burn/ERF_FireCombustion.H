@@ -169,10 +169,12 @@ advance_fire_combustion_unchecked(
     const amrex::Real energy_increment =
         newly_consumed
         * p.sensible_heat_release_j_kg_dry;
+    const amrex::Real water_release_kg_per_kg_dry =
+        p.fuel_moisture_fraction
+        + p.combustion_water_yield_kg_per_kg_dry;
     const amrex::Real water_increment =
         newly_consumed
-        * (p.fuel_moisture_fraction
-           + p.combustion_water_yield_kg_per_kg_dry);
+        * water_release_kg_per_kg_dry;
 
     FireCombustionState next = state;
     next.remaining_dry_fuel_kg_m2 =
@@ -180,8 +182,20 @@ advance_fire_combustion_unchecked(
             ? amrex::Real(0)
             : remaining;
     next.consumed_dry_fuel_kg_m2 += newly_consumed;
-    next.sensible_energy_j_m2 += energy_increment;
-    next.water_released_kg_m2 += water_increment;
+
+    // Sensible energy and released water are algebraically
+    // derived from cumulative consumed dry fuel.  Reconstruct
+    // them after every positive-time advance instead of
+    // independently accumulating roundoff in redundant state.
+    // Preserve exact zero-dt idempotence.
+    if (dt_s > amrex::Real(0)) {
+        next.sensible_energy_j_m2 =
+            next.consumed_dry_fuel_kg_m2
+            * p.sensible_heat_release_j_kg_dry;
+        next.water_released_kg_m2 =
+            next.consumed_dry_fuel_kg_m2
+            * water_release_kg_per_kg_dry;
+    }
 
     return {
         next,

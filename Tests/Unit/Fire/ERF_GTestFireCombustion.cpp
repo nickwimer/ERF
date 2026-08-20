@@ -217,6 +217,69 @@ TEST(FireCombustion, StaggeredIgnitionCohortsSuperposeInOneReservoir)
                + p.combustion_water_yield_kg_per_kg_dry)));
 }
 
+TEST(FireCombustion, ValidLongRunStateAdvancesWithoutDerivedEnergyDrift)
+{
+    const auto p =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+
+    // Regression fixture captured from the 1024^2 x 80
+    // four-H100 terrain/two-way capability run immediately
+    // before its long-time combustion accounting failure.
+    const FireCombustionState state{
+        Real(1.0),
+        Real(2.01719275819238694e-02),
+        Real(1.45830612055105335e-01),
+        Real(2.54226505995636247e+06),
+        Real(9.33315917152680308e-02)};
+
+    // This state is valid before the failing positive-time
+    // half-step.
+    ERFFire::FireCombustionAdvance zero_update{};
+    ASSERT_EQ(
+        ERFFire::try_advance_fire_combustion(
+            state,
+            p,
+            Real(0.0),
+            zero_update),
+        ERFFire::FireCombustionStatus::success);
+
+    // Reconstruct the production half-substep from the
+    // diagnosed remaining-fuel transition.
+    const Real target_remaining =
+        Real(2.01718481189893974e-02);
+    const Real half_substep_dt =
+        -p.burn_time_constant_s
+        * std::log(
+            target_remaining
+            / state.remaining_dry_fuel_kg_m2);
+
+    ERFFire::FireCombustionAdvance update{};
+    ASSERT_EQ(
+        ERFFire::try_advance_fire_combustion(
+            state,
+            p,
+            half_substep_dt,
+            update),
+        ERFFire::FireCombustionStatus::success);
+
+    EXPECT_NEAR(
+        update.state.remaining_dry_fuel_kg_m2,
+        target_remaining,
+        scaled_tolerance(target_remaining));
+
+    EXPECT_EQ(
+        update.state.sensible_energy_j_m2,
+        update.state.consumed_dry_fuel_kg_m2
+            * p.sensible_heat_release_j_kg_dry);
+
+    EXPECT_EQ(
+        update.state.water_released_kg_m2,
+        update.state.consumed_dry_fuel_kg_m2
+            * (p.fuel_moisture_fraction
+               + p.combustion_water_yield_kg_per_kg_dry));
+}
+
 TEST(FireCombustion, ZeroDtIsExactlyIdempotent)
 {
     const auto p = synthetic_parameters();
