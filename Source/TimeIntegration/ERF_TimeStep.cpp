@@ -225,6 +225,17 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             }
         }
 
+        if (next_terrain_sampler
+            && !m_fire_terrain_surface) {
+            m_fire_terrain_surface =
+                std::make_unique<ERFFire::FireTerrainSurface>(
+                    ERFFire::make_erf_level0_terrain_surface_on_geometry(
+                        fire_inputs,
+                        m_fire_spread_runtime
+                            ->config()
+                            .raster_geometry));
+        }
+
         if (m_fire_spread_runtime->current_time_s()
             != static_cast<Real>(time)) {
             Error(
@@ -256,6 +267,7 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 (void)next_fire_runtime
                     .advance_direct_reference_wind_batched(
                         terrain_environment,
+                        *m_fire_terrain_surface,
                         static_cast<Real>(dt[0]));
             } else {
                 (void)next_fire_runtime
@@ -269,6 +281,7 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 (void)next_fire_runtime
                     .advance_explicit_waf_20ft_batched(
                         terrain_environment,
+                        *m_fire_terrain_surface,
                         m_fire_runtime_options.wind_adjustment_factor,
                         static_cast<Real>(dt[0]));
             } else {

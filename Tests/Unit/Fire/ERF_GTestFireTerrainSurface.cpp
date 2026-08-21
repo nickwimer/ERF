@@ -420,6 +420,80 @@ TEST(
 
 TEST(
     FireTerrainSurface,
+    Level0SurfaceResamplesOntoFinerFireGridWithoutChangingPlanarTerrain)
+{
+    TerrainFixture fixture;
+
+    const FireCartesianRasterGeometry2D fire_geometry{
+        6U,
+        4U,
+        Real(10),
+        Real(-4),
+        Real(1),
+        Real(1.5)};
+
+    const FireTerrainSurface surface =
+        ERFFire::make_erf_level0_terrain_surface_on_geometry(
+            fixture.inputs(),
+            fire_geometry);
+
+    EXPECT_EQ(surface.geometry().nx, 6U);
+    EXPECT_EQ(surface.geometry().ny, 4U);
+    EXPECT_EQ(surface.geometry().dx_m, Real(1));
+    EXPECT_EQ(surface.geometry().dy_m, Real(1.5));
+
+    for (const auto point
+         : std::vector<ERFFire::FireVec2>{
+             {Real(10), Real(-4)},
+             {Real(10.75), Real(-2.25)},
+             {Real(12.7), Real(-1.1)},
+             {Real(15.25), Real(1.25)},
+             {Real(16), Real(2)}}) {
+        expect_near_real(
+            surface.ground_height_m(
+                point.x,
+                point.y),
+            plane_height(
+                point.x,
+                point.y));
+
+        const auto gradient =
+            surface.terrain_gradient_m_per_m(
+                point.x,
+                point.y);
+
+        expect_near_real(
+            gradient.x,
+            Real(0.125));
+        expect_near_real(
+            gradient.y,
+            Real(-0.2));
+    }
+}
+
+TEST(
+    FireTerrainSurface,
+    Level0SurfaceResamplingRejectsDifferentPhysicalDomain)
+{
+    TerrainFixture fixture;
+
+    const FireCartesianRasterGeometry2D wrong_geometry{
+        6U,
+        4U,
+        Real(10),
+        Real(-4),
+        Real(1.1),
+        Real(1.5)};
+
+    EXPECT_THROW(
+        (void)ERFFire::make_erf_level0_terrain_surface_on_geometry(
+            fixture.inputs(),
+            wrong_geometry),
+        std::invalid_argument);
+}
+
+TEST(
+    FireTerrainSurface,
     Level0ExtractionRejectsUnsupportedTerrainScopes)
 {
     TerrainFixture fixture;

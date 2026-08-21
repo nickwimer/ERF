@@ -101,6 +101,22 @@ make_erf_level0_terrain_surface (
     const ERFFireLevel0EnvironmentInputs& inputs);
 
 /**
+ * Resample the authoritative static-fitted level-0 terrain surface onto an
+ * arbitrary uniform Fire horizontal geometry spanning the same physical
+ * domain.
+ *
+ * The source surface remains the bilinear surface represented by level-0
+ * z_phys_nd. Resampling changes only the Fire storage/grid representation; it
+ * does not create terrain information below the atmospheric terrain
+ * resolution. This is the compatibility bridge used before an independent
+ * terrain source is supplied.
+ */
+[[nodiscard]] FireTerrainSurface
+make_erf_level0_terrain_surface_on_geometry (
+    const ERFFireLevel0EnvironmentInputs& inputs,
+    FireCartesianRasterGeometry2D target_geometry);
+
+/**
  * Freeze the already-fillpatched ERF level-0 horizontal wind at one
  * atmospheric reference height above the flat physical ground.
  *

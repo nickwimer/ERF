@@ -862,6 +862,84 @@ make_erf_level0_terrain_surface (
 }
 
 
+FireTerrainSurface
+make_erf_level0_terrain_surface_on_geometry (
+    const ERFFireLevel0EnvironmentInputs& inputs,
+    FireCartesianRasterGeometry2D target_geometry)
+{
+    validate_terrain_surface_scope_and_layout(inputs);
+
+    (void)detail::validate_fire_cartesian_raster_geometry(
+        target_geometry);
+
+    const auto prob_lo =
+        inputs.geometry.ProbLoArray();
+    const auto prob_hi =
+        inputs.geometry.ProbHiArray();
+
+    const amrex::Real target_xhi =
+        target_geometry.xlo_m
+        + static_cast<amrex::Real>(target_geometry.nx)
+            * target_geometry.dx_m;
+    const amrex::Real target_yhi =
+        target_geometry.ylo_m
+        + static_cast<amrex::Real>(target_geometry.ny)
+            * target_geometry.dy_m;
+
+    const auto coordinate_matches =
+        [] (amrex::Real a, amrex::Real b) noexcept {
+            const amrex::Real scale =
+                std::max(
+                    amrex::Real(1),
+                    std::max(std::abs(a), std::abs(b)));
+            return std::abs(a - b)
+                <= amrex::Real(4096)
+                    * std::numeric_limits<amrex::Real>::epsilon()
+                    * scale;
+        };
+
+    require(
+        coordinate_matches(target_geometry.xlo_m, prob_lo[0])
+            && coordinate_matches(target_geometry.ylo_m, prob_lo[1])
+            && coordinate_matches(target_xhi, prob_hi[0])
+            && coordinate_matches(target_yhi, prob_hi[1]),
+        "Fire terrain target geometry must span the level-0 horizontal physical domain");
+
+    const FireTerrainSurface level0_surface =
+        make_erf_level0_terrain_surface(inputs);
+
+    std::vector<amrex::Real> nodal_ground_height_m;
+    nodal_ground_height_m.reserve(
+        (target_geometry.nx + 1)
+        * (target_geometry.ny + 1));
+
+    for (std::size_t j = 0;
+         j <= target_geometry.ny;
+         ++j) {
+        const amrex::Real y =
+            target_geometry.ylo_m
+            + static_cast<amrex::Real>(j)
+                * target_geometry.dy_m;
+
+        for (std::size_t i = 0;
+             i <= target_geometry.nx;
+             ++i) {
+            const amrex::Real x =
+                target_geometry.xlo_m
+                + static_cast<amrex::Real>(i)
+                    * target_geometry.dx_m;
+
+            nodal_ground_height_m.push_back(
+                level0_surface.ground_height_m(x, y));
+        }
+    }
+
+    return FireTerrainSurface(
+        target_geometry,
+        std::move(nodal_ground_height_m));
+}
+
+
 std::vector<amrex::Real>
 erf_fire_level0_flat_vertical_faces_agl (
     const ERFFireLevel0EnvironmentInputs& inputs)

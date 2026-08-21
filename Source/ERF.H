@@ -762,6 +762,8 @@ private:
         m_fire_environment_snapshot;
     std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
         m_fire_spread_runtime;
+    std::unique_ptr<ERFFire::FireTerrainSurface>
+        m_fire_terrain_surface;
     std::unique_ptr<amrex::MultiFab>
         m_fire_atmospheric_source_tendency;
     double m_fire_atmospheric_source_time =
