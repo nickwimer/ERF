@@ -179,6 +179,63 @@ TEST(FireBurnedFractionRaster, OneUpdatePopulatesExactPartialFractionsAndArea)
         1.0);
 }
 
+TEST(FireBurnedFractionRaster, LinearSweepRetainsTransientCoverage)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        1,
+        1,
+        0.0,
+        0.0,
+        1.0,
+        1.0
+    };
+
+    const FirePerimeter start =
+        make_rectangle(
+            -1.0,
+            0.0,
+            0.0,
+            1.0);
+
+    const FirePerimeter end =
+        make_rectangle(
+            1.0,
+            2.0,
+            0.0,
+            1.0);
+
+    FireBurnedFractionRaster endpoint_only(
+        geometry);
+    const auto endpoint_update =
+        endpoint_only.update_from_perimeter(end);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            endpoint_update.burned_area_m2),
+        0.0);
+
+    FireBurnedFractionRaster swept(
+        geometry);
+    const auto swept_update =
+        swept.update_from_linear_sweep(
+            start,
+            end,
+            2);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            swept.burned_fraction(0, 0)),
+        1.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            swept_update.newly_burned_area_m2),
+        1.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            swept_update.burned_area_m2),
+        1.0);
+}
+
 TEST(FireBurnedFractionRaster, RepeatingSamePerimeterIsIdempotent)
 {
     FireBurnedFractionRaster raster({

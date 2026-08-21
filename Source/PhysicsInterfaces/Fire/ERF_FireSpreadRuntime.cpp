@@ -840,7 +840,10 @@ ERFFireSpreadRuntime::advance_wind_impl(
 
     FireBurnedFractionRaster next_burned = burned_fraction_;
     const FireRasterBurnedAreaUpdate burned_update =
-        next_burned.update_from_perimeter(advanced);
+        next_burned.update_from_linear_sweep(
+            perimeter_,
+            advanced,
+            config_.combustion_options.temporal_substeps);
 
     FireCombustionRaster next_combustion = combustion_;
     const FireCombustionRasterAdvance combustion_update =
@@ -1117,7 +1120,10 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
 
     FireBurnedFractionRaster next_burned = burned_fraction_;
     const FireRasterBurnedAreaUpdate burned_update =
-        next_burned.update_from_perimeter(advanced);
+        next_burned.update_from_linear_sweep(
+            perimeter_,
+            advanced,
+            config_.combustion_options.temporal_substeps);
 
     FireCombustionRaster next_combustion = combustion_;
     const FireCombustionRasterAdvance combustion_update =

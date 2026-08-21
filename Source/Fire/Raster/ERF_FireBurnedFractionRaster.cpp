@@ -1,5 +1,6 @@
 #include <ERF_FireBurnedFractionRaster.H>
 #include <ERF_FireCellCoverage.H>
+#include <ERF_FirePerimeterSweep.H>
 
 #include <AMReX_Arena.H>
 #include <AMReX_FArrayBox.H>
@@ -606,5 +607,212 @@ FireBurnedFractionRaster::update_from_perimeter (
         newly_burned_area_m2
     };
 }
+
+
+FireRasterBurnedAreaUpdate
+FireBurnedFractionRaster::update_from_linear_sweep (
+    const FirePerimeter& start_perimeter,
+    const FirePerimeter& end_perimeter,
+    std::size_t temporal_substeps)
+{
+    if (start_perimeter.size() != end_perimeter.size()) {
+        throw std::invalid_argument(
+            "Fire burned-fraction sweep requires matching perimeter vertex counts");
+    }
+
+    if (temporal_substeps == 0) {
+        throw std::invalid_argument(
+            "Fire burned-fraction sweep temporal_substeps must be positive");
+    }
+
+    amrex::MultiFab next_burned_fraction(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        1,
+        0,
+        fire_surface_mf_info());
+
+    copy_distributed_state(
+        burned_fraction_mf_,
+        next_burned_fraction);
+
+    amrex::Real local_newly_burned_area_m2 =
+        amrex::Real(0.0);
+    amrex::Real local_burned_area_m2 =
+        amrex::Real(0.0);
+
+    std::string local_error;
+
+    try {
+        for (std::size_t substep = 0;
+             substep < temporal_substeps;
+             ++substep) {
+            const amrex::Real alpha =
+                static_cast<amrex::Real>(substep + 1)
+                / static_cast<amrex::Real>(
+                    temporal_substeps);
+
+            const FirePerimeter sample_perimeter =
+                interpolate_fire_perimeter_linear_sweep(
+                    start_perimeter,
+                    end_perimeter,
+                    alpha);
+
+            const auto& sample_vertices =
+                sample_perimeter.vertices_m();
+
+            amrex::Real sample_xlo_m =
+                sample_vertices.front().x;
+            amrex::Real sample_xhi_m =
+                sample_vertices.front().x;
+            amrex::Real sample_ylo_m =
+                sample_vertices.front().y;
+            amrex::Real sample_yhi_m =
+                sample_vertices.front().y;
+
+            for (const FireVec2& vertex : sample_vertices) {
+                sample_xlo_m =
+                    std::min(sample_xlo_m, vertex.x);
+                sample_xhi_m =
+                    std::max(sample_xhi_m, vertex.x);
+                sample_ylo_m =
+                    std::min(sample_ylo_m, vertex.y);
+                sample_yhi_m =
+                    std::max(sample_yhi_m, vertex.y);
+            }
+
+            for (amrex::MFIter mfi(next_burned_fraction);
+                 mfi.isValid();
+                 ++mfi) {
+                const amrex::Box& box =
+                    mfi.validbox();
+                const auto next =
+                    next_burned_fraction.array(mfi);
+
+                for (int j = box.smallEnd(1);
+                     j <= box.bigEnd(1);
+                     ++j) {
+                    for (int i = box.smallEnd(0);
+                         i <= box.bigEnd(0);
+                         ++i) {
+                        const amrex::Real previous =
+                            next(i, j, 0);
+
+                        if (previous == amrex::Real(1.0)) {
+                            continue;
+                        }
+
+                        const FireCartesianCell2D cell =
+                            cell_bounds(
+                                static_cast<std::size_t>(i),
+                                static_cast<std::size_t>(j));
+
+                        if (cell.xhi_m < sample_xlo_m
+                            || cell.xlo_m > sample_xhi_m
+                            || cell.yhi_m < sample_ylo_m
+                            || cell.ylo_m > sample_yhi_m) {
+                            continue;
+                        }
+
+                        const amrex::Real coverage =
+                            fire_perimeter_cell_coverage_fraction(
+                                sample_perimeter,
+                                cell);
+
+                        next(i, j, 0) =
+                            update_fire_burned_fraction(
+                                previous,
+                                coverage)
+                                .burned_fraction;
+                    }
+                }
+            }
+        }
+
+        for (amrex::MFIter mfi(next_burned_fraction);
+             mfi.isValid();
+             ++mfi) {
+            const amrex::Box& box =
+                mfi.validbox();
+            const auto previous =
+                burned_fraction_mf_.const_array(mfi);
+            const auto next =
+                next_burned_fraction.const_array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    const FireCartesianCell2D cell =
+                        cell_bounds(
+                            static_cast<std::size_t>(i),
+                            static_cast<std::size_t>(j));
+
+                    const amrex::Real represented_area_m2 =
+                        detail::fire_cartesian_cell_area_m2(
+                            cell);
+
+                    local_newly_burned_area_m2 +=
+                        (next(i, j, 0)
+                         - previous(i, j, 0))
+                        * represented_area_m2;
+
+                    local_burned_area_m2 +=
+                        next(i, j, 0)
+                        * represented_area_m2;
+                }
+            }
+        }
+    } catch (const std::exception& error) {
+        local_error = error.what();
+    } catch (...) {
+        local_error =
+            "unknown local Fire burned-fraction sweep error";
+    }
+
+    int failed =
+        local_error.empty() ? 0 : 1;
+    amrex::ParallelDescriptor::ReduceIntMax(failed);
+
+    if (failed != 0) {
+        if (!local_error.empty()) {
+            throw std::runtime_error(
+                "distributed Fire burned-fraction sweep failed: "
+                + local_error);
+        }
+
+        throw std::runtime_error(
+            "distributed Fire burned-fraction sweep failed on another MPI rank");
+    }
+
+    amrex::Real newly_burned_area_m2 =
+        local_newly_burned_area_m2;
+    amrex::Real burned_area_m2 =
+        local_burned_area_m2;
+
+    amrex::ParallelDescriptor::ReduceRealSum(
+        newly_burned_area_m2);
+    amrex::ParallelDescriptor::ReduceRealSum(
+        burned_area_m2);
+
+    if (!std::isfinite(newly_burned_area_m2)
+        || !std::isfinite(burned_area_m2)) {
+        throw std::overflow_error(
+            "Fire raster swept burned-area accounting is not finite");
+    }
+
+    burned_fraction_mf_ =
+        std::move(next_burned_fraction);
+    burned_area_m2_ =
+        burned_area_m2;
+
+    return {
+        burned_area_m2,
+        newly_burned_area_m2
+    };
+}
+
 
 } // namespace ERFFire

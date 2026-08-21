@@ -147,6 +147,11 @@ public:
     [[nodiscard]] FireRasterBurnedAreaUpdate update_from_perimeter(
         const FirePerimeter& perimeter);
 
+    [[nodiscard]] FireRasterBurnedAreaUpdate update_from_linear_sweep(
+        const FirePerimeter& start_perimeter,
+        const FirePerimeter& end_perimeter,
+        std::size_t temporal_substeps);
+
 private:
     [[nodiscard]] std::size_t flat_index(
         std::size_t i,
