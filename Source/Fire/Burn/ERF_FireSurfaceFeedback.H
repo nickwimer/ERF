@@ -111,6 +111,11 @@ private:
         const FireCombustionRaster& before,
         const FireCombustionRaster& after);
 
+    friend FireSurfaceFeedbackRaster
+    conservatively_regrid_fire_surface_feedback(
+        const FireSurfaceFeedbackRaster& source,
+        FireCartesianRasterGeometry2D target_geometry);
+
     [[nodiscard]] std::size_t flat_index(
         std::size_t i,
         std::size_t j) const;
@@ -146,6 +151,24 @@ private:
 make_fire_surface_feedback_increment(
     const FireCombustionRaster& before,
     const FireCombustionRaster& after);
+
+/**
+ * Conservatively transfer step-integrated extensive Fire feedback between
+ * aligned, integer-nested horizontal rasters representing the same physical
+ * map-plane domain.
+ *
+ * Fine-to-coarse transfer sums child-cell kg/J quantities. Coarse-to-fine
+ * transfer partitions each parent quantity uniformly by represented overlap
+ * area. The operation therefore preserves total consumed dry fuel, sensible
+ * energy, and released water up to floating-point arithmetic.
+ *
+ * Each horizontal axis may have its own integer ratio, but both axes must
+ * refine in the same direction (with equality allowed on either axis).
+ */
+[[nodiscard]] FireSurfaceFeedbackRaster
+conservatively_regrid_fire_surface_feedback(
+    const FireSurfaceFeedbackRaster& source,
+    FireCartesianRasterGeometry2D target_geometry);
 
 } // namespace ERFFire
 

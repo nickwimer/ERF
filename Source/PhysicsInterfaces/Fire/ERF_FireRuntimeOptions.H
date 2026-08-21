@@ -56,6 +56,11 @@ struct ERFFireRuntimeOptions
     std::string fuel_model{"FM1"};
     amrex::Real dead_fuel_moisture_fraction{};
 
+    // Optional Fire horizontal cell counts over the same physical domain as
+    // atmospheric level 0. A zero pair preserves the legacy 1:1 L0 grid.
+    int n_cell_x{0};
+    int n_cell_y{0};
+
     amrex::Real ignition_center_x_m{};
     amrex::Real ignition_center_y_m{};
     amrex::Real ignition_radius_m{};

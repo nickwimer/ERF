@@ -21,6 +21,7 @@
 #ifdef ERF_USE_FIRE
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireSpreadOutput.H>
+#include <ERF_FireSpreadRuntime.H>
 #endif
 
 using namespace amrex;
@@ -74,6 +75,25 @@ bool is_fire_diagnostic (const plotfile2d::DiagnosticDescriptor* descriptor) noe
 }
 
 #ifdef ERF_USE_FIRE
+bool
+fire_raster_matches_level0_geometry(
+    const ERFFire::FireCartesianRasterGeometry2D& fire_geometry,
+    const Geometry& level0_geometry) noexcept
+{
+    const Box& domain = level0_geometry.Domain();
+    const auto prob_lo = level0_geometry.ProbLoArray();
+    const auto cell_size = level0_geometry.CellSizeArray();
+
+    return fire_geometry.nx
+            == static_cast<std::size_t>(domain.length(0))
+        && fire_geometry.ny
+            == static_cast<std::size_t>(domain.length(1))
+        && fire_geometry.xlo_m == prob_lo[0]
+        && fire_geometry.ylo_m == prob_lo[1]
+        && fire_geometry.dx_m == cell_size[0]
+        && fire_geometry.dy_m == cell_size[1];
+}
+
 int fire_checkpoint_raster_component (plotfile2d::DiagnosticID id) noexcept
 {
     using Components = ERFFire::ERFFireCheckpointRasterComponents;
@@ -262,6 +282,16 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
 
         // Reuse the version-2 checkpoint raster: this is the canonical
         // distributed eight-component persistent Fire surface schema.
+        const auto& fire_geometry =
+            fire_runtime->config().raster_geometry;
+
+        if (!fire_raster_matches_level0_geometry(
+                fire_geometry,
+                geom[0])) {
+            Abort(
+                "Fire diagnostics in the combined ERF 2D plotfile currently require fire.n_cell to match the level-0 atmospheric grid; independent native Fire-grid plot output has not yet been enabled");
+        }
+
         fire_plot_raster =
             ERFFire::make_erf_fire_checkpoint_v2_raster(*fire_runtime);
     }

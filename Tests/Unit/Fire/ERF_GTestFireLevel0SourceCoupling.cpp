@@ -294,6 +294,43 @@ component_values(
     return result;
 }
 
+void
+expect_source_components_near(
+    const MultiFab& actual,
+    const MultiFab& expected)
+{
+    for (int component :
+         {RhoTheta_comp, RhoQ1_comp}) {
+        const auto actual_values =
+            component_values(
+                actual,
+                component);
+        const auto expected_values =
+            component_values(
+                expected,
+                component);
+
+        ASSERT_EQ(
+            actual_values.size(),
+            expected_values.size());
+
+        for (std::size_t i = 0;
+             i < actual_values.size();
+             ++i) {
+            const Real tolerance =
+                Real(2.0e-11)
+                * std::max(
+                    Real(1.0),
+                    std::abs(expected_values[i]));
+
+            EXPECT_NEAR(
+                actual_values[i],
+                expected_values[i],
+                tolerance);
+        }
+    }
+}
+
 } // namespace
 
 TEST(
@@ -421,6 +458,104 @@ TEST(
                 vapor_tolerance);
         }
     }
+}
+
+TEST(
+    FireLevel0SourceCoupling,
+    FinerFireFeedbackMatchesOneToOneSourceProjection)
+{
+    CouplingFixture fixture;
+    const Real dt_s = Real(2.0);
+
+    const auto baseline_feedback =
+        make_feedback(
+            fixture.fire_geometry(),
+            dt_s);
+
+    const FireCartesianRasterGeometry2D fine_geometry{
+        std::size_t(4),
+        std::size_t(4),
+        Real(0),
+        Real(0),
+        Real(1),
+        Real(1.5)};
+
+    const auto fine_feedback =
+        make_feedback(
+            fine_geometry,
+            dt_s);
+
+    const auto baseline_source =
+        ERFFire::make_erf_fire_level0_source_tendency(
+            baseline_feedback,
+            fixture.environment_inputs(),
+            fixture.conserved,
+            MoistureType::MoistNoCondensation,
+            dt_s);
+
+    const auto fine_source =
+        ERFFire::make_erf_fire_level0_source_tendency(
+            fine_feedback,
+            fixture.environment_inputs(),
+            fixture.conserved,
+            MoistureType::MoistNoCondensation,
+            dt_s);
+
+    ASSERT_NE(baseline_source, nullptr);
+    ASSERT_NE(fine_source, nullptr);
+
+    expect_source_components_near(
+        *fine_source,
+        *baseline_source);
+}
+
+TEST(
+    FireLevel0SourceCoupling,
+    CoarserFireFeedbackMatchesOneToOneSourceProjection)
+{
+    CouplingFixture fixture;
+    const Real dt_s = Real(2.0);
+
+    const auto baseline_feedback =
+        make_feedback(
+            fixture.fire_geometry(),
+            dt_s);
+
+    const FireCartesianRasterGeometry2D coarse_geometry{
+        std::size_t(1),
+        std::size_t(1),
+        Real(0),
+        Real(0),
+        Real(4),
+        Real(6)};
+
+    const auto coarse_feedback =
+        make_feedback(
+            coarse_geometry,
+            dt_s);
+
+    const auto baseline_source =
+        ERFFire::make_erf_fire_level0_source_tendency(
+            baseline_feedback,
+            fixture.environment_inputs(),
+            fixture.conserved,
+            MoistureType::MoistNoCondensation,
+            dt_s);
+
+    const auto coarse_source =
+        ERFFire::make_erf_fire_level0_source_tendency(
+            coarse_feedback,
+            fixture.environment_inputs(),
+            fixture.conserved,
+            MoistureType::MoistNoCondensation,
+            dt_s);
+
+    ASSERT_NE(baseline_source, nullptr);
+    ASSERT_NE(coarse_source, nullptr);
+
+    expect_source_components_near(
+        *coarse_source,
+        *baseline_source);
 }
 
 TEST(

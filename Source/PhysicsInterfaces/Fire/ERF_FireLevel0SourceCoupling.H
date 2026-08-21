@@ -19,6 +19,11 @@ namespace ERFFire
  * Build one flat-grid native ERF level-0 conserved-variable source MultiFab
  * from a step-integrated Fire surface-feedback increment.
  *
+ * When the Fire raster and level-0 atmospheric grid have different aligned
+ * integer-nested horizontal resolutions, Fire extensive feedback is first
+ * transferred conservatively onto level 0. Fine Fire cells are summed into
+ * atmospheric cells; coarse Fire cells are partitioned by map-plane overlap.
+ *
  * The atmosphere state is the already-fillpatched t^n conserved state used for
  * this explicit coupling step. Total pressure is diagnosed from ERF's dry
  * rho_d*theta_d state and water-vapor mixing ratio, then performs the
@@ -42,8 +47,11 @@ make_erf_fire_level0_source_tendency(
  * Build one native ERF level-0 source tendency for static-fitted VariableDz
  * terrain.
  *
- * Each horizontal Fire cell owns one local AGL column. Local vertical faces
- * are the four-corner averages of z_phys_nd at each native vertical face,
+ * Fire feedback is conservatively transferred onto the level-0 horizontal
+ * grid before vertical terrain-following projection when Fire and atmosphere
+ * resolutions differ. Each resulting level-0 horizontal cell owns one local
+ * AGL column. Local vertical faces are the four-corner averages of z_phys_nd
+ * at each native vertical face,
  * referenced to that column's bottom face. The exponential deposition shape is
  * normalized independently in every column.
  *

@@ -240,6 +240,24 @@ ERF::ERF_shared ()
                     "fire.enabled requires fire.dead_fuel_moisture_fraction");
             }
 
+            if (pp_fire.contains("n_cell")) {
+                Vector<int> fire_n_cell(2);
+                if (pp_fire.countval("n_cell") != 2
+                    || !pp_fire.queryarr(
+                        "n_cell",
+                        fire_n_cell,
+                        0,
+                        2)) {
+                    Error(
+                        "fire.n_cell must contain exactly two horizontal cell counts");
+                }
+
+                m_fire_runtime_options.n_cell_x =
+                    fire_n_cell[0];
+                m_fire_runtime_options.n_cell_y =
+                    fire_n_cell[1];
+            }
+
             Vector<Real> ignition_center(2);
             if (!pp_fire.queryarr(
                     "ignition_center_m",
@@ -325,6 +343,13 @@ ERF::ERF_shared ()
                     m_fire_runtime_options.dead_fuel_moisture_fraction)) {
                 Error(
                     "fire.dead_fuel_moisture_fraction must be finite and nonnegative");
+            }
+            if ((m_fire_runtime_options.n_cell_x != 0
+                    || m_fire_runtime_options.n_cell_y != 0)
+                && (m_fire_runtime_options.n_cell_x <= 0
+                    || m_fire_runtime_options.n_cell_y <= 0)) {
+                Error(
+                    "fire.n_cell must contain two positive horizontal cell counts");
             }
             if (!std::isfinite(
                     m_fire_runtime_options.ignition_center_x_m)

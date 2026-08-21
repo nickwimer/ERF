@@ -3,6 +3,7 @@
 #include <AMReX_Arena.H>
 #include <AMReX_FArrayBox.H>
 #include <AMReX_Gpu.H>
+#include <AMReX_IntVect.H>
 #include <AMReX_Math.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_ParReduce.H>
@@ -47,6 +48,55 @@ same_geometry(
         && a.ylo_m == b.ylo_m
         && a.dx_m == b.dx_m
         && a.dy_m == b.dy_m;
+}
+
+amrex::Real
+represented_xhi(
+    const FireCartesianRasterGeometry2D& geometry) noexcept
+{
+    return geometry.xlo_m
+        + static_cast<amrex::Real>(geometry.nx)
+            * geometry.dx_m;
+}
+
+amrex::Real
+represented_yhi(
+    const FireCartesianRasterGeometry2D& geometry) noexcept
+{
+    return geometry.ylo_m
+        + static_cast<amrex::Real>(geometry.ny)
+            * geometry.dy_m;
+}
+
+bool
+physical_coordinate_equal(
+    amrex::Real a,
+    amrex::Real b) noexcept
+{
+    const amrex::Real scale =
+        std::max(
+            amrex::Real(1),
+            std::max(std::abs(a), std::abs(b)));
+
+    return std::abs(a - b)
+        <= amrex::Real(4096)
+            * std::numeric_limits<amrex::Real>::epsilon()
+            * scale;
+}
+
+bool
+same_physical_domain(
+    const FireCartesianRasterGeometry2D& a,
+    const FireCartesianRasterGeometry2D& b) noexcept
+{
+    return physical_coordinate_equal(a.xlo_m, b.xlo_m)
+        && physical_coordinate_equal(a.ylo_m, b.ylo_m)
+        && physical_coordinate_equal(
+            represented_xhi(a),
+            represented_xhi(b))
+        && physical_coordinate_equal(
+            represented_yhi(a),
+            represented_yhi(b));
 }
 
 bool
@@ -427,6 +477,220 @@ FireSurfaceFeedbackTotals
 FireSurfaceFeedbackRaster::totals() const noexcept
 {
     return totals_;
+}
+
+FireSurfaceFeedbackRaster
+conservatively_regrid_fire_surface_feedback(
+    const FireSurfaceFeedbackRaster& source,
+    FireCartesianRasterGeometry2D target_geometry)
+{
+    (void)detail::validate_fire_cartesian_raster_geometry(
+        target_geometry);
+
+    const auto& source_geometry =
+        source.geometry();
+
+    require(
+        same_physical_domain(
+            source_geometry,
+            target_geometry),
+        "Fire surface-feedback regrid requires identical physical horizontal domains");
+
+    const bool same_counts =
+        source_geometry.nx == target_geometry.nx
+        && source_geometry.ny == target_geometry.ny;
+
+    FireSurfaceFeedbackRaster result(target_geometry);
+
+    if (same_counts) {
+        result.cells_mf_.ParallelCopy(
+            source.cells_mf_,
+            0,
+            0,
+            FireSurfaceFeedbackRaster::component_count,
+            0,
+            0);
+        amrex::Gpu::streamSynchronize();
+        result.totals_ = source.totals_;
+        return result;
+    }
+
+    const bool source_finer_or_equal =
+        source_geometry.nx >= target_geometry.nx
+        && source_geometry.ny >= target_geometry.ny;
+
+    const bool source_coarser_or_equal =
+        source_geometry.nx <= target_geometry.nx
+        && source_geometry.ny <= target_geometry.ny;
+
+    require(
+        source_finer_or_equal || source_coarser_or_equal,
+        "Fire surface-feedback regrid does not support mixed finer/coarser horizontal axes");
+
+    if (source_finer_or_equal) {
+        require(
+            source_geometry.nx % target_geometry.nx == 0
+                && source_geometry.ny % target_geometry.ny == 0,
+            "fine Fire feedback dimensions must be integer multiples of target dimensions");
+
+        const int ratio_x =
+            static_cast<int>(
+                source_geometry.nx / target_geometry.nx);
+        const int ratio_y =
+            static_cast<int>(
+                source_geometry.ny / target_geometry.ny);
+
+        const amrex::IntVect ratio(
+            ratio_x,
+            ratio_y,
+            1);
+
+        amrex::BoxArray staged_fine_boxes =
+            result.surface_layout_.box_array();
+        staged_fine_boxes.refine(ratio);
+
+        amrex::MultiFab staged_fine(
+            staged_fine_boxes,
+            result.surface_layout_.distribution_map(),
+            FireSurfaceFeedbackRaster::component_count,
+            0,
+            fire_surface_mf_info());
+
+        staged_fine.ParallelCopy(
+            source.cells_mf_,
+            0,
+            0,
+            FireSurfaceFeedbackRaster::component_count,
+            0,
+            0);
+        amrex::Gpu::streamSynchronize();
+
+        for (amrex::MFIter mfi(
+                 result.cells_mf_,
+                 amrex::TilingIfNotGPU());
+             mfi.isValid();
+             ++mfi) {
+            const amrex::Box box =
+                mfi.tilebox();
+            const auto fine =
+                staged_fine.const_array(mfi);
+            const auto coarse =
+                result.cells_mf_.array(mfi);
+
+            amrex::ParallelFor(
+                box,
+                FireSurfaceFeedbackRaster::component_count,
+                [=] AMREX_GPU_DEVICE (
+                    int i,
+                    int j,
+                    int k,
+                    int n) noexcept {
+                    amrex::Real sum =
+                        amrex::Real(0);
+
+                    const int fine_i0 =
+                        i * ratio_x;
+                    const int fine_j0 =
+                        j * ratio_y;
+
+                    for (int jj = 0;
+                         jj < ratio_y;
+                         ++jj) {
+                        for (int ii = 0;
+                             ii < ratio_x;
+                             ++ii) {
+                            sum +=
+                                fine(
+                                    fine_i0 + ii,
+                                    fine_j0 + jj,
+                                    0,
+                                    n);
+                        }
+                    }
+
+                    coarse(i, j, k, n) = sum;
+                });
+        }
+
+        amrex::Gpu::streamSynchronize();
+    } else {
+        require(
+            target_geometry.nx % source_geometry.nx == 0
+                && target_geometry.ny % source_geometry.ny == 0,
+            "target Fire feedback dimensions must be integer multiples of source dimensions");
+
+        const int ratio_x =
+            static_cast<int>(
+                target_geometry.nx / source_geometry.nx);
+        const int ratio_y =
+            static_cast<int>(
+                target_geometry.ny / source_geometry.ny);
+
+        const amrex::IntVect ratio(
+            ratio_x,
+            ratio_y,
+            1);
+
+        amrex::BoxArray expanded_boxes =
+            source.surface_layout_.box_array();
+        expanded_boxes.refine(ratio);
+
+        amrex::MultiFab expanded(
+            expanded_boxes,
+            source.surface_layout_.distribution_map(),
+            FireSurfaceFeedbackRaster::component_count,
+            0,
+            fire_surface_mf_info());
+
+        const amrex::Real inverse_child_count =
+            amrex::Real(1)
+            / (static_cast<amrex::Real>(ratio_x)
+               * static_cast<amrex::Real>(ratio_y));
+
+        for (amrex::MFIter mfi(
+                 expanded,
+                 amrex::TilingIfNotGPU());
+             mfi.isValid();
+             ++mfi) {
+            const amrex::Box box =
+                mfi.tilebox();
+            const auto coarse =
+                source.cells_mf_.const_array(mfi);
+            const auto fine =
+                expanded.array(mfi);
+
+            amrex::ParallelFor(
+                box,
+                FireSurfaceFeedbackRaster::component_count,
+                [=] AMREX_GPU_DEVICE (
+                    int i,
+                    int j,
+                    int k,
+                    int n) noexcept {
+                    fine(i, j, k, n) =
+                        coarse(
+                            i / ratio_x,
+                            j / ratio_y,
+                            0,
+                            n)
+                        * inverse_child_count;
+                });
+        }
+
+        amrex::Gpu::streamSynchronize();
+
+        result.cells_mf_.ParallelCopy(
+            expanded,
+            0,
+            0,
+            FireSurfaceFeedbackRaster::component_count,
+            0,
+            0);
+        amrex::Gpu::streamSynchronize();
+    }
+
+    result.totals_ = source.totals_;
+    return result;
 }
 
 FireSurfaceFeedbackRaster

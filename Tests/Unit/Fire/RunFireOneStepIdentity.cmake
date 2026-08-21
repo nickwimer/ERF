@@ -73,6 +73,19 @@ function(run_identity_case mode label checkpoint_var)
       message(FATAL_ERROR
         "enabled one-way Fire combustion raster header does not match expected schema: ${raster_header}")
     endif()
+
+    if(DEFINED IDENTITY_EXPECTED_RASTER_CELLS)
+      file(STRINGS
+        "${case_dir}/fire_output/raster_000005.csv"
+        raster_lines)
+      list(LENGTH raster_lines raster_line_count)
+      math(EXPR expected_raster_line_count
+        "${IDENTITY_EXPECTED_RASTER_CELLS} + 1")
+      if(NOT raster_line_count EQUAL expected_raster_line_count)
+        message(FATAL_ERROR
+          "enabled one-way Fire raster has ${raster_line_count} lines; expected ${expected_raster_line_count}")
+      endif()
+    endif()
   elseif(EXISTS "${case_dir}/fire_output")
     message(FATAL_ERROR
       "disabled fire control unexpectedly produced fire_output")

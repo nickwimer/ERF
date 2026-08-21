@@ -19,10 +19,13 @@ make_erf_fire_spread_config(
     const amrex::Geometry& geometry);
 
 /**
- * Build the initial flat-grid fire state from ERF runtime options.
+ * Build the initial map-plane Fire state from ERF runtime options.
  *
- * The level-0 ERF horizontal cell geometry is also the fire history raster
- * geometry. The initial ignition is one circular, counter-clockwise perimeter.
+ * The Fire history raster spans the same physical horizontal domain as ERF
+ * level 0. When fire.n_cell is absent it inherits the level-0 horizontal cell
+ * counts; otherwise the configured integer-commensurate Fire counts define an
+ * independent raster. The initial ignition is one circular,
+ * counter-clockwise perimeter.
  */
 [[nodiscard]] std::unique_ptr<ERFFireSpreadRuntime>
 make_erf_fire_spread_runtime(

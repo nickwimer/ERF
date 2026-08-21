@@ -73,6 +73,7 @@ target_sources(erf_fire_unit_tests
 target_sources(erf_fire_unit_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireSpreadRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireRuntimeInit.cpp
 )
 target_sources(erf_fire_unit_tests
   PRIVATE
@@ -128,6 +129,23 @@ set_tests_properties(
 )
 
 add_test(
+  NAME FireTimeStepIntegration.OneWayIndependentFireGridPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIndependentGrid.inputs
+    -DIDENTITY_CASE_PREFIX=fire_independent_grid_identity
+    -DIDENTITY_EXPECTED_RASTER_CELLS=256
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayIndependentFireGridPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
   NAME FireTimeStepIntegration.TwoWayFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
     -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
@@ -136,6 +154,40 @@ add_test(
 )
 set_tests_properties(
   FireTimeStepIntegration.TwoWayFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayFineFireGridFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackFineFire.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_fine_fire
+    -DTWO_WAY_EXPECTED_RASTER_CELLS=256
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayFineFireGridFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayCoarseFireGridFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackCoarseFire.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_coarse_fire
+    -DTWO_WAY_EXPECTED_RASTER_CELLS=16
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayCoarseFireGridFeedbackChangesAtmosphere
   PROPERTIES
     LABELS unit
     TIMEOUT 900
@@ -168,6 +220,23 @@ add_test(
 )
 set_tests_properties(
   FireTimeStepIntegration.TwoWayTerrainFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayTerrainIndependentFireGridFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrainIndependentGrid.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain_independent_grid
+    -DTWO_WAY_EXPECTED_RASTER_CELLS=256
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayTerrainIndependentFireGridFeedbackChangesAtmosphere
   PROPERTIES
     LABELS unit
     TIMEOUT 900

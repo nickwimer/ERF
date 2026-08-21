@@ -97,6 +97,45 @@ initialized_combustion(
     return combustion;
 }
 
+FireSurfaceFeedbackRaster
+stationary_feedback(
+    const FireCartesianRasterGeometry2D& raster_geometry,
+    const FirePerimeter& perimeter,
+    Real dt_s = Real(4.0))
+{
+    const auto p = parameters();
+    const auto burned =
+        burned_from(raster_geometry, perimeter);
+
+    FireCombustionRaster before(
+        raster_geometry,
+        p,
+        FireCombustionRasterOptions{8});
+    (void)before.initialize_from_burned_fraction(
+        burned);
+
+    FireCombustionRaster after = before;
+    (void)after.advance_from_linear_sweep(
+        perimeter,
+        perimeter,
+        burned,
+        burned,
+        dt_s);
+
+    return ERFFire::make_fire_surface_feedback_increment(
+        before,
+        after);
+}
+
+Real
+feedback_tolerance(Real expected)
+{
+    return Real(2.0e-12)
+        * std::max(
+            Real(1.0),
+            std::abs(expected));
+}
+
 } // namespace
 
 TEST(FireSurfaceFeedback, IdenticalStatesProduceExactlyZeroFeedback)
@@ -322,6 +361,223 @@ TEST(FireSurfaceFeedback, NewIgnitionAndExistingBurnProducePositiveRelease)
             * (p.fuel_moisture_fraction
                + p.combustion_water_yield_kg_per_kg_dry),
         Real(2.0e-14));
+}
+
+TEST(FireSurfaceFeedback, ConservativeRegridSplitsCoarseCellsToFine)
+{
+    const auto source_geometry =
+        geometry(
+            2,
+            1,
+            Real(2.0),
+            Real(2.0));
+
+    const auto left_half =
+        rectangle(
+            Real(0.0),
+            Real(2.0),
+            Real(0.0),
+            Real(2.0));
+
+    const auto source =
+        stationary_feedback(
+            source_geometry,
+            left_half);
+
+    const auto target =
+        ERFFire::conservatively_regrid_fire_surface_feedback(
+            source,
+            geometry(
+                4,
+                2,
+                Real(1.0),
+                Real(1.0)));
+
+    const auto source_left =
+        source.cell(0, 0);
+    const auto source_right =
+        source.cell(1, 0);
+
+    EXPECT_GT(
+        source_left.sensible_energy_j,
+        Real(0.0));
+    EXPECT_EQ(
+        source_right.sensible_energy_j,
+        Real(0.0));
+
+    for (std::size_t j = 0; j < 2; ++j) {
+        for (std::size_t i = 0; i < 4; ++i) {
+            const auto cell =
+                target.cell(i, j);
+
+            if (i < 2) {
+                EXPECT_NEAR(
+                    cell.consumed_dry_fuel_kg,
+                    source_left.consumed_dry_fuel_kg
+                        / Real(4.0),
+                    feedback_tolerance(
+                        source_left.consumed_dry_fuel_kg));
+                EXPECT_NEAR(
+                    cell.sensible_energy_j,
+                    source_left.sensible_energy_j
+                        / Real(4.0),
+                    feedback_tolerance(
+                        source_left.sensible_energy_j));
+                EXPECT_NEAR(
+                    cell.water_released_kg,
+                    source_left.water_released_kg
+                        / Real(4.0),
+                    feedback_tolerance(
+                        source_left.water_released_kg));
+            } else {
+                EXPECT_EQ(
+                    cell.consumed_dry_fuel_kg,
+                    Real(0.0));
+                EXPECT_EQ(
+                    cell.sensible_energy_j,
+                    Real(0.0));
+                EXPECT_EQ(
+                    cell.water_released_kg,
+                    Real(0.0));
+            }
+        }
+    }
+
+    EXPECT_EQ(
+        target.totals().consumed_dry_fuel_kg,
+        source.totals().consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        target.totals().sensible_energy_j,
+        source.totals().sensible_energy_j);
+    EXPECT_EQ(
+        target.totals().water_released_kg,
+        source.totals().water_released_kg);
+}
+
+TEST(FireSurfaceFeedback, ConservativeRegridSumsFineCellsToCoarse)
+{
+    const auto source_geometry =
+        geometry(
+            4,
+            2,
+            Real(1.0),
+            Real(1.0));
+
+    const auto left_half =
+        rectangle(
+            Real(0.0),
+            Real(2.0),
+            Real(0.0),
+            Real(2.0));
+
+    const auto source =
+        stationary_feedback(
+            source_geometry,
+            left_half);
+
+    const auto target =
+        ERFFire::conservatively_regrid_fire_surface_feedback(
+            source,
+            geometry(
+                2,
+                1,
+                Real(2.0),
+                Real(2.0)));
+
+    const auto left =
+        target.cell(0, 0);
+    const auto right =
+        target.cell(1, 0);
+    const auto totals =
+        source.totals();
+
+    EXPECT_NEAR(
+        left.consumed_dry_fuel_kg,
+        totals.consumed_dry_fuel_kg,
+        feedback_tolerance(
+            totals.consumed_dry_fuel_kg));
+    EXPECT_NEAR(
+        left.sensible_energy_j,
+        totals.sensible_energy_j,
+        feedback_tolerance(
+            totals.sensible_energy_j));
+    EXPECT_NEAR(
+        left.water_released_kg,
+        totals.water_released_kg,
+        feedback_tolerance(
+            totals.water_released_kg));
+
+    EXPECT_EQ(
+        right.consumed_dry_fuel_kg,
+        Real(0.0));
+    EXPECT_EQ(
+        right.sensible_energy_j,
+        Real(0.0));
+    EXPECT_EQ(
+        right.water_released_kg,
+        Real(0.0));
+
+    EXPECT_EQ(
+        target.totals().consumed_dry_fuel_kg,
+        totals.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        target.totals().sensible_energy_j,
+        totals.sensible_energy_j);
+    EXPECT_EQ(
+        target.totals().water_released_kg,
+        totals.water_released_kg);
+}
+
+TEST(FireSurfaceFeedback, ConservativeRegridRejectsMixedAxisDirection)
+{
+    const auto source =
+        stationary_feedback(
+            geometry(
+                4,
+                1,
+                Real(1.0),
+                Real(2.0)),
+            rectangle(
+                Real(0.0),
+                Real(4.0),
+                Real(0.0),
+                Real(2.0)));
+
+    EXPECT_THROW(
+        (void)ERFFire::conservatively_regrid_fire_surface_feedback(
+            source,
+            geometry(
+                2,
+                2,
+                Real(2.0),
+                Real(1.0))),
+        std::invalid_argument);
+}
+
+TEST(FireSurfaceFeedback, ConservativeRegridRejectsDifferentDomain)
+{
+    const auto source =
+        stationary_feedback(
+            geometry(
+                2,
+                1,
+                Real(1.0),
+                Real(1.0)),
+            rectangle(
+                Real(0.0),
+                Real(2.0),
+                Real(0.0),
+                Real(1.0)));
+
+    EXPECT_THROW(
+        (void)ERFFire::conservatively_regrid_fire_surface_feedback(
+            source,
+            geometry(
+                1,
+                1,
+                Real(3.0),
+                Real(1.0))),
+        std::invalid_argument);
 }
 
 TEST(FireSurfaceFeedback, RejectsGeometryMismatch)

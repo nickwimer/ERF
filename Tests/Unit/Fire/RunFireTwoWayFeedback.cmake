@@ -54,6 +54,19 @@ function(run_case mode label checkpoint_var output_var)
     endif()
   endforeach()
 
+  if(DEFINED TWO_WAY_EXPECTED_RASTER_CELLS)
+    file(STRINGS
+      "${case_dir}/${output_dir}/raster_000001.csv"
+      raster_lines)
+    list(LENGTH raster_lines raster_line_count)
+    math(EXPR expected_raster_line_count
+      "${TWO_WAY_EXPECTED_RASTER_CELLS} + 1")
+    if(NOT raster_line_count EQUAL expected_raster_line_count)
+      message(FATAL_ERROR
+        "ERF Fire ${mode} raster has ${raster_line_count} lines; expected ${expected_raster_line_count}")
+    endif()
+  endif()
+
   file(GLOB checkpoint_dirs
     LIST_DIRECTORIES true
     "${case_dir}/chk*")

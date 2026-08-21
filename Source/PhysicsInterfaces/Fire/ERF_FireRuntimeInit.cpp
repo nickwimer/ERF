@@ -80,20 +80,65 @@ make_circular_ignition(
     return FirePerimeter(std::move(vertices));
 }
 
+bool
+integer_commensurate(int lhs, int rhs) noexcept
+{
+    return lhs % rhs == 0 || rhs % lhs == 0;
+}
+
 FireCartesianRasterGeometry2D
-make_level0_raster_geometry(const amrex::Geometry& geometry)
+make_fire_raster_geometry(
+    const ERFFireRuntimeOptions& options,
+    const amrex::Geometry& geometry)
 {
     const auto& domain = geometry.Domain();
+    const int atmosphere_nx = domain.length(0);
+    const int atmosphere_ny = domain.length(1);
+
+    require(
+        atmosphere_nx > 0 && atmosphere_ny > 0,
+        "ERF level-0 horizontal cell counts must be positive");
+
+    const bool use_level0_counts =
+        options.n_cell_x == 0 && options.n_cell_y == 0;
+
+    require(
+        use_level0_counts
+            || (options.n_cell_x > 0 && options.n_cell_y > 0),
+        "fire.n_cell must contain two positive horizontal cell counts");
+
+    const int fire_nx =
+        use_level0_counts ? atmosphere_nx : options.n_cell_x;
+    const int fire_ny =
+        use_level0_counts ? atmosphere_ny : options.n_cell_y;
+
+    require(
+        integer_commensurate(fire_nx, atmosphere_nx)
+            && integer_commensurate(fire_ny, atmosphere_ny),
+        "fire.n_cell must be integer-commensurate with the level-0 atmospheric grid");
+
     const auto prob_lo = geometry.ProbLoArray();
-    const auto cell_size = geometry.CellSizeArray();
+    const auto prob_hi = geometry.ProbHiArray();
+
+    const amrex::Real extent_x_m =
+        prob_hi[0] - prob_lo[0];
+    const amrex::Real extent_y_m =
+        prob_hi[1] - prob_lo[1];
+
+    require(
+        std::isfinite(extent_x_m)
+            && std::isfinite(extent_y_m)
+            && extent_x_m > amrex::Real(0.0)
+            && extent_y_m > amrex::Real(0.0),
+        "ERF level-0 horizontal physical extents must be finite and positive");
 
     return {
-        static_cast<std::size_t>(domain.length(0)),
-        static_cast<std::size_t>(domain.length(1)),
+        static_cast<std::size_t>(fire_nx),
+        static_cast<std::size_t>(fire_ny),
         prob_lo[0],
         prob_lo[1],
-        cell_size[0],
-        cell_size[1]
+        extent_x_m / static_cast<amrex::Real>(fire_nx),
+        extent_y_m / static_cast<amrex::Real>(fire_ny)
     };
 }
 
@@ -109,6 +154,30 @@ make_erf_fire_spread_config(
         options.fuel_model == "FM1",
         "ERF-Fire currently supports only fire.fuel_model = FM1");
 
+    const FireCartesianRasterGeometry2D raster_geometry =
+        make_fire_raster_geometry(options, geometry);
+
+    if (options.coupling_mode
+        == ERFFireCouplingMode::TwoWay) {
+        const auto& domain = geometry.Domain();
+        const std::size_t atmosphere_nx =
+            static_cast<std::size_t>(domain.length(0));
+        const std::size_t atmosphere_ny =
+            static_cast<std::size_t>(domain.length(1));
+
+        const bool fire_finer_or_equal =
+            raster_geometry.nx >= atmosphere_nx
+            && raster_geometry.ny >= atmosphere_ny;
+
+        const bool fire_coarser_or_equal =
+            raster_geometry.nx <= atmosphere_nx
+            && raster_geometry.ny <= atmosphere_ny;
+
+        require(
+            fire_finer_or_equal || fire_coarser_or_equal,
+            "two-way fire.n_cell cannot mix finer and coarser axes relative to level 0");
+    }
+
     return {
         make_fm1_fuel_parameters(),
         options.dead_fuel_moisture_fraction,
@@ -121,7 +190,7 @@ make_erf_fire_spread_config(
             options.remesh_min_edge_length_m,
             options.remesh_max_edge_length_m,
             options.remesh_max_chord_error_m},
-        make_level0_raster_geometry(geometry),
+        raster_geometry,
         options.arrival_time_tolerance_s};
 }
 

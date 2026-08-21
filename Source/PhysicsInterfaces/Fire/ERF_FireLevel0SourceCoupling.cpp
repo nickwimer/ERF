@@ -50,23 +50,40 @@ require_level0_coverage(
     }
 }
 
+FireCartesianRasterGeometry2D
+level0_horizontal_geometry(
+    const amrex::Geometry& erf_geometry)
+{
+    const amrex::Box& domain =
+        erf_geometry.Domain();
+    const auto prob_lo =
+        erf_geometry.ProbLoArray();
+    const auto cell_size =
+        erf_geometry.CellSizeArray();
+
+    return {
+        static_cast<std::size_t>(domain.length(0)),
+        static_cast<std::size_t>(domain.length(1)),
+        prob_lo[0],
+        prob_lo[1],
+        cell_size[0],
+        cell_size[1]};
+}
+
 bool
 same_horizontal_geometry(
     const FireCartesianRasterGeometry2D& fire_geometry,
     const amrex::Geometry& erf_geometry) noexcept
 {
-    const amrex::Box& domain = erf_geometry.Domain();
-    const auto prob_lo = erf_geometry.ProbLoArray();
-    const auto cell_size = erf_geometry.CellSizeArray();
+    const auto level0 =
+        level0_horizontal_geometry(erf_geometry);
 
-    return fire_geometry.nx
-            == static_cast<std::size_t>(domain.length(0))
-        && fire_geometry.ny
-            == static_cast<std::size_t>(domain.length(1))
-        && fire_geometry.xlo_m == prob_lo[0]
-        && fire_geometry.ylo_m == prob_lo[1]
-        && fire_geometry.dx_m == cell_size[0]
-        && fire_geometry.dy_m == cell_size[1];
+    return fire_geometry.nx == level0.nx
+        && fire_geometry.ny == level0.ny
+        && fire_geometry.xlo_m == level0.xlo_m
+        && fire_geometry.ylo_m == level0.ylo_m
+        && fire_geometry.dx_m == level0.dx_m
+        && fire_geometry.dy_m == level0.dy_m;
 }
 
 [[maybe_unused]]
@@ -929,11 +946,23 @@ make_erf_fire_level0_source_tendency(
     amrex::Real dt_s,
     ERFFireAtmosphericSourceOptions options)
 {
-    require(
-        same_horizontal_geometry(
+    if (!same_horizontal_geometry(
             feedback.geometry(),
-            environment_inputs.geometry),
-        "ERF Fire feedback raster does not match level-0 horizontal geometry");
+            environment_inputs.geometry)) {
+        const FireSurfaceFeedbackRaster level0_feedback =
+            conservatively_regrid_fire_surface_feedback(
+                feedback,
+                level0_horizontal_geometry(
+                    environment_inputs.geometry));
+
+        return make_erf_fire_level0_source_tendency(
+            level0_feedback,
+            environment_inputs,
+            conserved_state_tn,
+            moisture_type,
+            dt_s,
+            options);
+    }
 
     const std::vector<amrex::Real> vertical_faces_agl_m =
         erf_fire_level0_flat_vertical_faces_agl(
@@ -1324,11 +1353,24 @@ make_erf_fire_level0_terrain_source_tendency(
     amrex::Real dt_s,
     ERFFireAtmosphericSourceOptions options)
 {
-    require(
-        same_horizontal_geometry(
+    if (!same_horizontal_geometry(
             feedback.geometry(),
-            environment_inputs.geometry),
-        "ERF Fire feedback raster does not match level-0 horizontal geometry");
+            environment_inputs.geometry)) {
+        const FireSurfaceFeedbackRaster level0_feedback =
+            conservatively_regrid_fire_surface_feedback(
+                feedback,
+                level0_horizontal_geometry(
+                    environment_inputs.geometry));
+
+        return make_erf_fire_level0_terrain_source_tendency(
+            level0_feedback,
+            environment_inputs,
+            detJ_cc,
+            conserved_state_tn,
+            moisture_type,
+            dt_s,
+            options);
+    }
 
     validate_terrain_source_scope_and_layout(
         environment_inputs,
