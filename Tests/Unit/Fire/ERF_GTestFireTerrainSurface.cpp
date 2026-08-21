@@ -382,6 +382,210 @@ TEST(
 
 TEST(
     FireTerrainSurface,
+    ResamplingPlanarSurfacePreservesTerrainAcrossResolutions)
+{
+    const FireCartesianRasterGeometry2D source_geometry{
+        3U,
+        2U,
+        Real(10),
+        Real(-4),
+        Real(2),
+        Real(3)};
+
+    std::vector<Real> nodal;
+    nodal.reserve(
+        (source_geometry.nx + 1)
+        * (source_geometry.ny + 1));
+
+    for (std::size_t j = 0;
+         j <= source_geometry.ny;
+         ++j) {
+        for (std::size_t i = 0;
+             i <= source_geometry.nx;
+             ++i) {
+            const Real x =
+                source_geometry.xlo_m
+                + Real(i) * source_geometry.dx_m;
+            const Real y =
+                source_geometry.ylo_m
+                + Real(j) * source_geometry.dy_m;
+            nodal.push_back(
+                plane_height(x, y));
+        }
+    }
+
+    const FireTerrainSurface source(
+        source_geometry,
+        nodal);
+
+    const FireTerrainSurface fine =
+        ERFFire::resample_fire_terrain_surface(
+            source,
+            FireCartesianRasterGeometry2D{
+                6U,
+                4U,
+                Real(10),
+                Real(-4),
+                Real(1),
+                Real(1.5)});
+
+    const FireTerrainSurface coarse =
+        ERFFire::resample_fire_terrain_surface(
+            source,
+            FireCartesianRasterGeometry2D{
+                1U,
+                1U,
+                Real(10),
+                Real(-4),
+                Real(6),
+                Real(6)});
+
+    for (const auto point
+         : std::vector<ERFFire::FireVec2>{
+             {Real(10), Real(-4)},
+             {Real(12.7), Real(-1.1)},
+             {Real(15.25), Real(1.25)},
+             {Real(16), Real(2)}}) {
+        for (const FireTerrainSurface* surface
+             : std::vector<const FireTerrainSurface*>{
+                   &fine,
+                   &coarse}) {
+            expect_near_real(
+                surface->ground_height_m(
+                    point.x,
+                    point.y),
+                plane_height(
+                    point.x,
+                    point.y));
+
+            const auto gradient =
+                surface->terrain_gradient_m_per_m(
+                    point.x,
+                    point.y);
+
+            expect_near_real(
+                gradient.x,
+                Real(0.125));
+            expect_near_real(
+                gradient.y,
+                Real(-0.2));
+        }
+    }
+}
+
+TEST(
+    FireTerrainSurface,
+    FineTerrainCanContainSlopeInvisibleToCoarseTerrainNodes)
+{
+    const FireCartesianRasterGeometry2D fine_geometry{
+        8U,
+        2U,
+        Real(0),
+        Real(0),
+        Real(1),
+        Real(1)};
+
+    const std::vector<Real> x_profile{
+        Real(0),
+        Real(1),
+        Real(0),
+        Real(-1),
+        Real(0),
+        Real(1),
+        Real(0),
+        Real(-1),
+        Real(0)};
+
+    std::vector<Real> nodal;
+    nodal.reserve(
+        (fine_geometry.nx + 1)
+        * (fine_geometry.ny + 1));
+
+    for (std::size_t j = 0;
+         j <= fine_geometry.ny;
+         ++j) {
+        for (Real height : x_profile) {
+            nodal.push_back(height);
+        }
+    }
+
+    const FireTerrainSurface fine_source(
+        fine_geometry,
+        nodal);
+
+    const FireTerrainSurface coarse =
+        ERFFire::resample_fire_terrain_surface(
+            fine_source,
+            FireCartesianRasterGeometry2D{
+                2U,
+                1U,
+                Real(0),
+                Real(0),
+                Real(4),
+                Real(2)});
+
+    for (std::size_t j = 0;
+         j <= coarse.geometry().ny;
+         ++j) {
+        for (std::size_t i = 0;
+             i <= coarse.geometry().nx;
+             ++i) {
+            EXPECT_EQ(
+                coarse.nodal_height_m(i, j),
+                Real(0));
+        }
+    }
+
+    const auto fine_positive =
+        fine_source.terrain_gradient_m_per_m(
+            Real(0.5),
+            Real(0.5));
+    const auto fine_negative =
+        fine_source.terrain_gradient_m_per_m(
+            Real(2.5),
+            Real(0.5));
+    const auto coarse_gradient =
+        coarse.terrain_gradient_m_per_m(
+            Real(1),
+            Real(1));
+
+    EXPECT_EQ(fine_positive.x, Real(1));
+    EXPECT_EQ(fine_positive.y, Real(0));
+    EXPECT_EQ(fine_negative.x, Real(-1));
+    EXPECT_EQ(fine_negative.y, Real(0));
+    EXPECT_EQ(coarse_gradient.x, Real(0));
+    EXPECT_EQ(coarse_gradient.y, Real(0));
+}
+
+TEST(
+    FireTerrainSurface,
+    ResamplingRejectsDifferentPhysicalDomain)
+{
+    const FireTerrainSurface source(
+        FireCartesianRasterGeometry2D{
+            2U,
+            2U,
+            Real(0),
+            Real(0),
+            Real(1),
+            Real(1)},
+        std::vector<Real>(9, Real(0)));
+
+    EXPECT_THROW(
+        (void)ERFFire::resample_fire_terrain_surface(
+            source,
+            FireCartesianRasterGeometry2D{
+                2U,
+                2U,
+                Real(0),
+                Real(0),
+                Real(1.1),
+                Real(1)}),
+        std::invalid_argument);
+}
+
+TEST(
+    FireTerrainSurface,
     Level0VariableDzExtractionMatchesIndependentPlanarOracle)
 {
     TerrainFixture fixture;

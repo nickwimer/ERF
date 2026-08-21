@@ -5,8 +5,10 @@
 #include <iostream>
 #include <fstream>
 #include <exception>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <sstream>
 #include <vector>
 #include <string>
 
@@ -28,6 +30,255 @@ namespace
 bool provenance_warning_emitted = false;
 
 #ifdef ERF_USE_FIRE
+
+enum class FireTerrainSourcePolicyMode
+{
+    NotApplicable,
+    Level0,
+    RegularFile
+};
+
+struct FireTerrainSourcePolicy
+{
+    FireTerrainSourcePolicyMode mode{
+        FireTerrainSourcePolicyMode::NotApplicable};
+    std::uint64_t fingerprint_fnv1a64{};
+};
+
+const char*
+fire_terrain_source_policy_mode_token(
+    FireTerrainSourcePolicyMode mode)
+{
+    if (mode == FireTerrainSourcePolicyMode::NotApplicable) {
+        return "not_applicable";
+    }
+    if (mode == FireTerrainSourcePolicyMode::Level0) {
+        return "level0";
+    }
+    if (mode == FireTerrainSourcePolicyMode::RegularFile) {
+        return "regular_file";
+    }
+    throw std::logic_error(
+        "unsupported ERF-Fire terrain-source policy mode");
+}
+
+FireTerrainSourcePolicyMode
+read_fire_terrain_source_policy_mode(
+    std::istream& stream)
+{
+    std::string token;
+    if (!(stream >> token)) {
+        throw std::runtime_error(
+            "missing ERF-Fire terrain-source policy mode");
+    }
+    if (token == "not_applicable") {
+        return FireTerrainSourcePolicyMode::NotApplicable;
+    }
+    if (token == "level0") {
+        return FireTerrainSourcePolicyMode::Level0;
+    }
+    if (token == "regular_file") {
+        return FireTerrainSourcePolicyMode::RegularFile;
+    }
+    throw std::runtime_error(
+        "invalid ERF-Fire terrain-source policy mode");
+}
+
+void
+expect_fire_terrain_source_policy_token(
+    std::istream& stream,
+    const char* expected)
+{
+    std::string token;
+    if (!(stream >> token) || token != expected) {
+        throw std::runtime_error(
+            std::string(
+                "invalid ERF-Fire terrain-source policy field; expected ")
+            + expected);
+    }
+}
+
+FireTerrainSourcePolicy
+current_fire_terrain_source_policy(
+    const SolverChoice& choices,
+    const ERFTerrainSource* terrain_source)
+{
+    if (choices.mesh_type != MeshType::VariableDz
+        || choices.terrain_type
+            != TerrainType::StaticFittedMesh) {
+        return {
+            FireTerrainSourcePolicyMode::NotApplicable,
+            0};
+    }
+
+    std::string filename;
+    amrex::ParmParse pp("erf");
+
+    if (!pp.query(
+            "terrain_file_name",
+            filename)) {
+        return {
+            FireTerrainSourcePolicyMode::Level0,
+            0};
+    }
+
+    if (filename.empty()) {
+        throw std::runtime_error(
+            "erf.terrain_file_name must not be empty");
+    }
+
+    if (terrain_source == nullptr) {
+        throw std::runtime_error(
+            "regular ERF terrain source is not loaded while evaluating Fire checkpoint policy");
+    }
+
+    const auto fingerprint =
+        terrain_source->source_fingerprint_fnv1a64();
+
+    if (!fingerprint.has_value()) {
+        throw std::runtime_error(
+            "loaded regular ERF terrain source has no file fingerprint");
+    }
+
+    return {
+        FireTerrainSourcePolicyMode::RegularFile,
+        *fingerprint};
+}
+
+void
+write_fire_terrain_source_policy(
+    std::ostream& stream,
+    const SolverChoice& choices,
+    const ERFTerrainSource* terrain_source)
+{
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "ERF-Fire terrain-source policy stream is not writable");
+    }
+
+    const FireTerrainSourcePolicy policy =
+        current_fire_terrain_source_policy(
+            choices,
+            terrain_source);
+
+    stream
+        << "ERF_FIRE_TERRAIN_SOURCE_POLICY 1\n"
+        << "mode "
+        << fire_terrain_source_policy_mode_token(
+               policy.mode)
+        << "\n";
+
+    if (policy.mode
+        == FireTerrainSourcePolicyMode::RegularFile) {
+        stream
+            << "fingerprint_fnv1a64 "
+            << policy.fingerprint_fnv1a64
+            << "\n";
+    }
+
+    stream
+        << "END_ERF_FIRE_TERRAIN_SOURCE_POLICY\n";
+
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "failed while writing ERF-Fire terrain-source policy");
+    }
+}
+
+FireTerrainSourcePolicy
+read_fire_terrain_source_policy(
+    std::istream& stream)
+{
+    expect_fire_terrain_source_policy_token(
+        stream,
+        "ERF_FIRE_TERRAIN_SOURCE_POLICY");
+
+    int version = 0;
+    if (!(stream >> version)
+        || version != 1) {
+        throw std::runtime_error(
+            "unsupported ERF-Fire terrain-source policy version");
+    }
+
+    expect_fire_terrain_source_policy_token(
+        stream,
+        "mode");
+
+    FireTerrainSourcePolicy policy;
+    policy.mode =
+        read_fire_terrain_source_policy_mode(
+            stream);
+
+    if (policy.mode
+        == FireTerrainSourcePolicyMode::RegularFile) {
+        expect_fire_terrain_source_policy_token(
+            stream,
+            "fingerprint_fnv1a64");
+
+        if (!(stream
+              >> policy.fingerprint_fnv1a64)) {
+            throw std::runtime_error(
+                "invalid ERF-Fire terrain-source fingerprint");
+        }
+    }
+
+    expect_fire_terrain_source_policy_token(
+        stream,
+        "END_ERF_FIRE_TERRAIN_SOURCE_POLICY");
+
+    return policy;
+}
+
+void
+validate_fire_terrain_source_restart_policy(
+    const std::string& checkpoint_directory,
+    const SolverChoice& choices,
+    const ERFTerrainSource* terrain_source)
+{
+    const FireTerrainSourcePolicy current =
+        current_fire_terrain_source_policy(
+            choices,
+            terrain_source);
+
+    const std::string policy_name =
+        checkpoint_directory
+        + "/FireTerrainSourcePolicy";
+
+    if (!amrex::FileExists(policy_name)) {
+        if (current.mode
+            == FireTerrainSourcePolicyMode::RegularFile) {
+            throw std::runtime_error(
+                "legacy ERF-Fire checkpoint cannot verify the current regular terrain source");
+        }
+        return;
+    }
+
+    std::ifstream stream(
+        policy_name,
+        std::ios::in | std::ios::binary);
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "unable to open ERF-Fire terrain-source policy "
+            + policy_name);
+    }
+
+    const FireTerrainSourcePolicy checkpoint =
+        read_fire_terrain_source_policy(
+            stream);
+
+    if (checkpoint.mode != current.mode) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint terrain-source mode does not match current inputs");
+    }
+
+    if (checkpoint.mode
+            == FireTerrainSourcePolicyMode::RegularFile
+        && checkpoint.fingerprint_fnv1a64
+            != current.fingerprint_fnv1a64) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint terrain-source fingerprint does not match current terrain file");
+    }
+}
 
 bool
 same_fire_fuel(
@@ -620,6 +871,24 @@ ERF::WriteCheckpointFile () const
                     *fire_runtime_for_checkpoint,
                     m_fire_runtime_options,
                     fire_state);
+
+                const std::string fire_terrain_policy_name =
+                    checkpointname
+                    + "/FireTerrainSourcePolicy";
+                std::ofstream fire_terrain_policy(
+                    fire_terrain_policy_name,
+                    std::ios::out
+                        | std::ios::trunc
+                        | std::ios::binary);
+                if (!fire_terrain_policy.good()) {
+                    FileOpenFailed(
+                        fire_terrain_policy_name);
+                }
+
+                write_fire_terrain_source_policy(
+                    fire_terrain_policy,
+                    solverChoice,
+                    prob->loaded_terrain_source());
             } catch (const std::exception& error) {
                 Error(
                     std::string(
@@ -1456,9 +1725,17 @@ ERF::ReadCheckpointFile ()
                 static_cast<Real>(t_new[0]);
             ERFFire::ERFFireCheckpointV2Metadata v2_metadata;
 
+            const ERFTerrainSource* current_terrain_source =
+                prob->terrain_source();
+
             int fire_state_read_failed = 0;
             if (ParallelDescriptor::IOProcessor()) {
                 try {
+                    validate_fire_terrain_source_restart_policy(
+                        restart_chkfile,
+                        solverChoice,
+                        current_terrain_source);
+
                     std::ifstream fire_state_stream(
                         fire_state_name,
                         std::ios::in | std::ios::binary);
@@ -1501,7 +1778,11 @@ ERF::ReadCheckpointFile ()
 
                     restore_state =
                         std::move(checkpoint->runtime_state);
-                } catch (const std::exception&) {
+                } catch (const std::exception& error) {
+                    amrex::Print()
+                        << "ERF-Fire restart validation error: "
+                        << error.what()
+                        << "\n";
                     fire_state_read_failed = 1;
                 }
             }

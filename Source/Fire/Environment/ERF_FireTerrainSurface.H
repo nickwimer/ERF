@@ -88,6 +88,19 @@ private:
     std::vector<amrex::Real> nodal_ground_height_m_;
 };
 
+/**
+ * Sample one represented terrain surface onto another uniform map-plane
+ * geometry spanning the same physical domain.
+ *
+ * This operation changes only the terrain representation grid. It cannot
+ * create information absent from the source surface and imposes no
+ * integer-commensurability requirement on the two terrain grids.
+ */
+[[nodiscard]] FireTerrainSurface
+resample_fire_terrain_surface(
+    const FireTerrainSurface& source,
+    FireCartesianRasterGeometry2D target_geometry);
+
 } // namespace ERFFire
 
 #endif

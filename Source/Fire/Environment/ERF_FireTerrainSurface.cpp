@@ -1,5 +1,6 @@
 #include "ERF_FireTerrainSurface.H"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -51,6 +52,50 @@ represented_upper(
 {
     return lo
         + static_cast<amrex::Real>(n) * spacing;
+}
+
+bool
+physical_coordinate_equal(
+    amrex::Real a,
+    amrex::Real b) noexcept
+{
+    const amrex::Real scale =
+        std::max(
+            amrex::Real(1),
+            std::max(std::abs(a), std::abs(b)));
+
+    return std::abs(a - b)
+        <= amrex::Real(4096)
+            * std::numeric_limits<amrex::Real>::epsilon()
+            * scale;
+}
+
+bool
+same_physical_domain(
+    const FireCartesianRasterGeometry2D& a,
+    const FireCartesianRasterGeometry2D& b) noexcept
+{
+    return physical_coordinate_equal(a.xlo_m, b.xlo_m)
+        && physical_coordinate_equal(a.ylo_m, b.ylo_m)
+        && physical_coordinate_equal(
+            represented_upper(a.xlo_m, a.nx, a.dx_m),
+            represented_upper(b.xlo_m, b.nx, b.dx_m))
+        && physical_coordinate_equal(
+            represented_upper(a.ylo_m, a.ny, a.dy_m),
+            represented_upper(b.ylo_m, b.ny, b.dy_m));
+}
+
+bool
+same_geometry(
+    const FireCartesianRasterGeometry2D& a,
+    const FireCartesianRasterGeometry2D& b) noexcept
+{
+    return a.nx == b.nx
+        && a.ny == b.ny
+        && a.xlo_m == b.xlo_m
+        && a.ylo_m == b.ylo_m
+        && a.dx_m == b.dx_m
+        && a.dy_m == b.dy_m;
 }
 
 struct AxisLocation
@@ -286,6 +331,56 @@ FireTerrainSurface::terrain_gradient_m_per_m(
     }
 
     return {dhdx, dhdy};
+}
+
+FireTerrainSurface
+resample_fire_terrain_surface(
+    const FireTerrainSurface& source,
+    FireCartesianRasterGeometry2D target_geometry)
+{
+    const std::size_t target_nodal_count =
+        checked_nodal_count(target_geometry);
+
+    require(
+        same_physical_domain(
+            source.geometry(),
+            target_geometry),
+        "fire terrain resampling requires identical physical horizontal domains");
+
+    if (same_geometry(
+            source.geometry(),
+            target_geometry)) {
+        return source;
+    }
+
+    std::vector<amrex::Real> nodal_ground_height_m;
+    nodal_ground_height_m.reserve(
+        target_nodal_count);
+
+    for (std::size_t j = 0;
+         j <= target_geometry.ny;
+         ++j) {
+        const amrex::Real y =
+            target_geometry.ylo_m
+            + static_cast<amrex::Real>(j)
+                * target_geometry.dy_m;
+
+        for (std::size_t i = 0;
+             i <= target_geometry.nx;
+             ++i) {
+            const amrex::Real x =
+                target_geometry.xlo_m
+                + static_cast<amrex::Real>(i)
+                    * target_geometry.dx_m;
+
+            nodal_ground_height_m.push_back(
+                source.ground_height_m(x, y));
+        }
+    }
+
+    return FireTerrainSurface(
+        target_geometry,
+        std::move(nodal_ground_height_m));
 }
 
 } // namespace ERFFire

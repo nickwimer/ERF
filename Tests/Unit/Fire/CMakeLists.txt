@@ -69,6 +69,7 @@ target_sources(erf_fire_unit_tests
 target_sources(erf_fire_unit_tests
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireTerrainSurface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestTerrainSource.cpp
 )
 target_sources(erf_fire_unit_tests
   PRIVATE
@@ -237,6 +238,22 @@ add_test(
 )
 set_tests_properties(
   FireTimeStepIntegration.TwoWayTerrainIndependentFireGridFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+add_test(
+  NAME FireTimeStepIntegration.IndependentTerrainSourceChangesFireOnly
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceResolution.inputs
+    -DFLAT_TERRAIN=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFlat.txt
+    -DFINE_TERRAIN=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFine.txt
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTerrainSourceResolution.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.IndependentTerrainSourceChangesFireOnly
   PROPERTIES
     LABELS unit
     TIMEOUT 900
@@ -544,6 +561,22 @@ set_tests_properties(
   PROPERTIES
     LABELS unit
     TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireRestartIntegration.TerrainSourcePolicy
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceResolution.inputs
+    -DTERRAIN_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFine.txt
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTerrainSourceRestartPolicy.cmake
+)
+set_tests_properties(
+  FireRestartIntegration.TerrainSourcePolicy
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 180
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 

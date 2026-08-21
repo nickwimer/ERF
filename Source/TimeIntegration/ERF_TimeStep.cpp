@@ -227,13 +227,28 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
 
         if (next_terrain_sampler
             && !m_fire_terrain_surface) {
-            m_fire_terrain_surface =
-                std::make_unique<ERFFire::FireTerrainSurface>(
-                    ERFFire::make_erf_level0_terrain_surface_on_geometry(
-                        fire_inputs,
-                        m_fire_spread_runtime
-                            ->config()
-                            .raster_geometry));
+            const ERFFire::FireCartesianRasterGeometry2D
+                fire_terrain_geometry =
+                    m_fire_spread_runtime
+                        ->config()
+                        .raster_geometry;
+
+            const ERFTerrainSource* shared_terrain_source =
+                prob->terrain_source();
+
+            if (shared_terrain_source != nullptr) {
+                m_fire_terrain_surface =
+                    std::make_unique<ERFFire::FireTerrainSurface>(
+                        ERFFire::make_erf_terrain_source_surface_on_geometry(
+                            *shared_terrain_source,
+                            fire_terrain_geometry));
+            } else {
+                m_fire_terrain_surface =
+                    std::make_unique<ERFFire::FireTerrainSurface>(
+                        ERFFire::make_erf_level0_terrain_surface_on_geometry(
+                            fire_inputs,
+                            fire_terrain_geometry));
+            }
         }
 
         if (m_fire_spread_runtime->current_time_s()

@@ -10,6 +10,8 @@
 
 #include <vector>
 
+class ERFTerrainSource;
+
 namespace ERFFire
 {
 
@@ -114,6 +116,19 @@ make_erf_level0_terrain_surface (
 [[nodiscard]] FireTerrainSurface
 make_erf_level0_terrain_surface_on_geometry (
     const ERFFireLevel0EnvironmentInputs& inputs,
+    FireCartesianRasterGeometry2D target_geometry);
+
+/**
+ * Sample a retained ERF terrain source directly onto a Fire terrain geometry.
+ *
+ * Unlike make_erf_level0_terrain_surface_on_geometry(), this path samples the
+ * source terrain before atmospheric-grid discretization. It therefore retains
+ * terrain structure resolvable by the Fire grid even when that structure is
+ * absent from level-0 z_phys_nd.
+ */
+[[nodiscard]] FireTerrainSurface
+make_erf_terrain_source_surface_on_geometry (
+    const ERFTerrainSource& source,
     FireCartesianRasterGeometry2D target_geometry);
 
 /**

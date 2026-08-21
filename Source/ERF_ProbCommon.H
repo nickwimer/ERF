@@ -10,6 +10,7 @@
 #include "ERF_EOS.H"
 #include "ERF_HSEUtils.H"
 #include "ERF_TileNoZ.H"
+#include "ERF_TerrainSource.H"
 
 struct ProbParmDefaults {
     amrex::Real rho_0 = one;
@@ -336,6 +337,28 @@ public:
     }
 
 
+    [[nodiscard]] const ERFTerrainSource*
+    terrain_source ()
+    {
+        if (!m_terrain_source) {
+            std::string fname;
+            amrex::ParmParse pp("erf");
+            if (pp.query("terrain_file_name", fname)) {
+                m_terrain_source =
+                    std::make_unique<ERFTerrainSource>(
+                        ERFTerrainSource::read_regular_text_file(
+                            fname));
+            }
+        }
+        return m_terrain_source.get();
+    }
+
+    [[nodiscard]] const ERFTerrainSource*
+    loaded_terrain_source () const noexcept
+    {
+        return m_terrain_source.get();
+    }
+
     /**
      * Function to perform custom initialization of terrain
      *
@@ -354,15 +377,24 @@ public:
         auto valid_fname      = pp.query("terrain_file_name",fname);
         auto valid_fname_USGS = pp.query("terrain_file_name_USGS",fname_usgs);
 
-        bool is_usgs;
-
         if (valid_fname) {
-            is_usgs = false;
-            read_custom_terrain(fname,is_usgs,geom,terrain_fab,time);
+            if (!m_terrain_source) {
+                m_terrain_source =
+                    std::make_unique<ERFTerrainSource>(
+                        ERFTerrainSource::read_regular_text_file(
+                            fname));
+            }
+            m_terrain_source->fill_nodal_surface(
+                geom,
+                terrain_fab);
 
         } else if (valid_fname_USGS) {
-            is_usgs = true;
-            read_custom_terrain(fname_usgs,is_usgs,geom,terrain_fab,time);
+            read_custom_terrain(
+                fname_usgs,
+                true,
+                geom,
+                terrain_fab,
+                time);
 
         } else {
             init_my_custom_terrain (geom, terrain_fab, time);
@@ -685,6 +717,8 @@ public:
     }
 
 protected:
+    std::unique_ptr<ERFTerrainSource> m_terrain_source;
+
     // Struct to store problem parameters
     ProbParmDefaults base_parms;
 
