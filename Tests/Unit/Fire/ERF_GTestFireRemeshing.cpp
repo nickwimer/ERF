@@ -338,6 +338,60 @@ TEST(FireRemeshing, SyntheticAnisotropyTracksHighResolutionReference)
     EXPECT_LT(static_cast<double>(relative_perimeter_error), 0.001);
 }
 
+TEST(FireRemeshing, NarrowBacktrackingSpikeCollapsesWithoutShortEdges)
+{
+    const FirePerimeter hairpin({
+        {0.0, 0.0},
+        {1.0, 0.0},
+        {2.0, 0.01},
+        {1.5, 0.02},
+        {2.0, 1.0},
+        {0.0, 1.0}
+    });
+
+    const FirePerimeterRemeshOptions options{
+        0.25,
+        2.0,
+        0.02
+    };
+
+    const amrex::Real incoming_edge_m =
+        ERFFire::norm(
+            hairpin.vertices_m()[2]
+            - hairpin.vertices_m()[1]);
+    const amrex::Real outgoing_edge_m =
+        ERFFire::norm(
+            hairpin.vertices_m()[3]
+            - hairpin.vertices_m()[2]);
+
+    ASSERT_GT(
+        static_cast<double>(incoming_edge_m),
+        static_cast<double>(options.min_edge_length_m));
+    ASSERT_GT(
+        static_cast<double>(outgoing_edge_m),
+        static_cast<double>(options.min_edge_length_m));
+
+    const auto result =
+        ERFFire::remesh_perimeter(hairpin, options);
+
+    EXPECT_EQ(result.stats.vertices_removed, 1U);
+    EXPECT_EQ(result.stats.vertices_added, 0U);
+    ASSERT_EQ(result.perimeter.size(), 5U);
+
+    bool retained_spike_tip = false;
+    for (const FireVec2& vertex : result.perimeter.vertices_m()) {
+        if (std::abs(vertex.x - amrex::Real(2.0)) < amrex::Real(1.0e-14)
+            && std::abs(vertex.y - amrex::Real(0.01)) < amrex::Real(1.0e-14)) {
+            retained_spike_tip = true;
+        }
+    }
+
+    EXPECT_FALSE(retained_spike_tip);
+    EXPECT_GT(
+        static_cast<double>(result.perimeter.area_m2()),
+        0.0);
+}
+
 TEST(FireRemeshing, SharpCornerIsNotCollapsedPastChordTolerance)
 {
     const FirePerimeter sharp_corner({

@@ -196,10 +196,9 @@ can_remove_vertex (
     const amrex::Real previous_edge_m = norm(b - a);
     const amrex::Real next_edge_m = norm(c - b);
 
-    if (previous_edge_m >= options.min_edge_length_m
-        && next_edge_m >= options.min_edge_length_m) {
-        return false;
-    }
+    const bool short_edge =
+        previous_edge_m < options.min_edge_length_m
+        || next_edge_m < options.min_edge_length_m;
 
     const amrex::Real replacement_edge_m = norm(c - a);
     if (replacement_edge_m == amrex::Real(0.0)
@@ -207,8 +206,28 @@ can_remove_vertex (
         return false;
     }
 
-    if (point_to_segment_distance_m(b, a, c)
-        > options.max_chord_error_m) {
+    const FireVec2 incoming = b - a;
+    const FireVec2 outgoing = c - b;
+
+    const bool backtracking =
+        dot(incoming, outgoing) < amrex::Real(0.0);
+
+    const amrex::Real spike_width_m =
+        std::min(
+            point_to_segment_distance_m(a, b, c),
+            point_to_segment_distance_m(c, a, b));
+
+    const bool narrow_backtracking_spike =
+        backtracking
+        && spike_width_m <= options.max_chord_error_m;
+
+    if (!short_edge && !narrow_backtracking_spike) {
+        return false;
+    }
+
+    if (!narrow_backtracking_spike
+        && point_to_segment_distance_m(b, a, c)
+            > options.max_chord_error_m) {
         return false;
     }
 
