@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -16,6 +17,117 @@ bool
 finite (const FireVec2& value) noexcept
 {
     return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
+int
+orientation_sign (
+    const FireVec2& a,
+    const FireVec2& b,
+    const FireVec2& c) noexcept
+{
+    const FireVec2 ab = b - a;
+    const FireVec2 ac = c - a;
+    const amrex::Real value =
+        detail::cross_2d(ab, ac);
+
+    const amrex::Real scale = std::max({
+        norm(ab),
+        norm(ac),
+        norm(c - b),
+        amrex::Real(1.0)
+    });
+    const amrex::Real tolerance =
+        amrex::Real(64.0)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * scale * scale;
+
+    if (value > tolerance) {
+        return 1;
+    }
+    if (value < -tolerance) {
+        return -1;
+    }
+    return 0;
+}
+
+bool
+point_on_segment (
+    const FireVec2& point,
+    const FireVec2& a,
+    const FireVec2& b) noexcept
+{
+    if (orientation_sign(a, b, point) != 0) {
+        return false;
+    }
+
+    const amrex::Real scale =
+        std::max(norm(b - a), amrex::Real(1.0));
+    const amrex::Real tolerance =
+        amrex::Real(64.0)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * scale;
+
+    return point.x >= std::min(a.x, b.x) - tolerance
+        && point.x <= std::max(a.x, b.x) + tolerance
+        && point.y >= std::min(a.y, b.y) - tolerance
+        && point.y <= std::max(a.y, b.y) + tolerance;
+}
+
+bool
+segments_intersect (
+    const FireVec2& a,
+    const FireVec2& b,
+    const FireVec2& c,
+    const FireVec2& d) noexcept
+{
+    const int ab_c = orientation_sign(a, b, c);
+    const int ab_d = orientation_sign(a, b, d);
+    const int cd_a = orientation_sign(c, d, a);
+    const int cd_b = orientation_sign(c, d, b);
+
+    if (ab_c != 0 && ab_d != 0
+        && cd_a != 0 && cd_b != 0) {
+        return ab_c != ab_d && cd_a != cd_b;
+    }
+
+    return (ab_c == 0 && point_on_segment(c, a, b))
+        || (ab_d == 0 && point_on_segment(d, a, b))
+        || (cd_a == 0 && point_on_segment(a, c, d))
+        || (cd_b == 0 && point_on_segment(b, c, d));
+}
+
+bool
+self_intersects (
+    const std::vector<FireVec2>& vertices) noexcept
+{
+    const std::size_t count = vertices.size();
+
+    for (std::size_t first = 0; first < count; ++first) {
+        const std::size_t first_next =
+            (first + 1) % count;
+
+        for (std::size_t second = first + 1;
+             second < count;
+             ++second) {
+            const std::size_t second_next =
+                (second + 1) % count;
+
+            if (first_next == second
+                || second_next == first) {
+                continue;
+            }
+
+            if (segments_intersect(
+                    vertices[first],
+                    vertices[first_next],
+                    vertices[second],
+                    vertices[second_next])) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 } // namespace
@@ -56,6 +168,11 @@ FirePerimeter::validate () const
     if (signed_area_m2() == amrex::Real(0.0)) {
         throw std::invalid_argument(
             "FirePerimeter requires non-zero signed area");
+    }
+
+    if (self_intersects(m_vertices_m)) {
+        throw std::invalid_argument(
+            "FirePerimeter cannot self-intersect");
     }
 }
 

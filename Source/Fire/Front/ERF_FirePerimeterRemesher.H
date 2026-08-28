@@ -1,6 +1,7 @@
 #ifndef ERF_FIRE_PERIMETER_REMESHER_H
 #define ERF_FIRE_PERIMETER_REMESHER_H
 
+#include <ERF_FireFront.H>
 #include <ERF_FirePerimeter.H>
 
 #include <cstddef>
@@ -34,6 +35,12 @@ struct FirePerimeterRemeshResult
     FirePerimeterRemeshStats stats;
 };
 
+struct FireFrontRemeshResult
+{
+    FireFront front;
+    FirePerimeterRemeshStats stats;
+};
+
 /**
  * Locally adapt the vertex representation without smoothing the perimeter.
  *
@@ -51,6 +58,15 @@ struct FirePerimeterRemeshResult
  */
 [[nodiscard]] FirePerimeterRemeshResult remesh_perimeter(
     const FirePerimeter& perimeter,
+    const FirePerimeterRemeshOptions& options);
+
+/**
+ * Remesh every boundary component independently while preserving FireFront
+ * component ordering and roles. Aggregate statistics are the sums of the
+ * existing per-perimeter remeshing statistics.
+ */
+[[nodiscard]] FireFrontRemeshResult remesh_front(
+    const FireFront& front,
     const FirePerimeterRemeshOptions& options);
 
 } // namespace ERFFire

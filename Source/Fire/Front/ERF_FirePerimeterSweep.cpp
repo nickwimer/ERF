@@ -47,4 +47,72 @@ interpolate_fire_perimeter_linear_sweep(
     return FirePerimeter(std::move(vertices));
 }
 
+FireFront
+interpolate_fire_front_linear_sweep(
+    const FireFront& start_front,
+    const FireFront& end_front,
+    amrex::Real alpha)
+{
+    const auto& start_components =
+        start_front.components();
+    const auto& end_components =
+        end_front.components();
+
+    if (start_components.size()
+        != end_components.size()) {
+        throw std::invalid_argument(
+            "Fire linear front sweep requires matching component counts");
+    }
+
+    for (std::size_t component_index = 0;
+         component_index < start_components.size();
+         ++component_index) {
+        if (start_components[component_index].role
+            != end_components[component_index].role) {
+            throw std::invalid_argument(
+                "Fire linear front sweep requires matching component roles");
+        }
+
+        if (start_components[component_index]
+                .perimeter.size()
+            != end_components[component_index]
+                .perimeter.size()) {
+            throw std::invalid_argument(
+                "Fire linear front sweep requires matching component "
+                "vertex counts");
+        }
+    }
+
+    if (!std::isfinite(alpha)
+        || alpha < amrex::Real(0)
+        || alpha > amrex::Real(1)) {
+        throw std::invalid_argument(
+            "Fire linear front sweep alpha must be finite in [0,1]");
+    }
+
+    if (alpha == amrex::Real(0)) {
+        return start_front;
+    }
+    if (alpha == amrex::Real(1)) {
+        return end_front;
+    }
+
+    std::vector<FireFrontComponent> components;
+    components.reserve(start_components.size());
+
+    for (std::size_t component_index = 0;
+         component_index < start_components.size();
+         ++component_index) {
+        components.push_back({
+            start_components[component_index].role,
+            interpolate_fire_perimeter_linear_sweep(
+                start_components[component_index].perimeter,
+                end_components[component_index].perimeter,
+                alpha)
+        });
+    }
+
+    return FireFront(std::move(components));
+}
+
 } // namespace ERFFire

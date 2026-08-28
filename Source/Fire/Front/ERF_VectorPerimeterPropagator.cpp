@@ -115,7 +115,8 @@ advance_perimeter_rk2 (
     }
 
     require_counter_clockwise(midpoint_vertices, "RK2 midpoint");
-    const FirePerimeter midpoint(std::move(midpoint_vertices));
+    const FirePerimeter midpoint(
+        std::move(midpoint_vertices));
 
     std::vector<FireVec2> final_vertices;
     final_vertices.reserve(initial_vertices.size());
@@ -187,7 +188,8 @@ advance_perimeter_rk2_batched (
     }
 
     require_counter_clockwise(midpoint_vertices, "RK2 midpoint");
-    const FirePerimeter midpoint(std::move(midpoint_vertices));
+    const FirePerimeter midpoint(
+        std::move(midpoint_vertices));
 
     const auto& midpoint_positions = midpoint.vertices_m();
     std::vector<FireVec2> midpoint_normals;

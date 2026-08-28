@@ -19,6 +19,9 @@
 namespace
 {
 
+using ERFFire::FireFront;
+using ERFFire::FireFrontComponent;
+using ERFFire::FireFrontRole;
 using ERFFire::FirePerimeter;
 using ERFFire::FirePerimeterRemeshOptions;
 using ERFFire::FireVec2;
@@ -159,6 +162,87 @@ transform_perimeter (
 
     return FirePerimeter(std::move(transformed));
 }
+
+TEST(
+    FireRemeshing,
+    FrontRemeshPreservesRolesAreaAndAggregatesStatistics)
+{
+    const FireFront front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                FirePerimeter({
+                    {0.0, 0.0},
+                    {4.0, 0.0},
+                    {4.0, 4.0},
+                    {0.0, 4.0}
+                })
+            },
+            {
+                FireFrontRole::Hole,
+                FirePerimeter({
+                    {1.0, 1.0},
+                    {3.0, 1.0},
+                    {3.0, 3.0},
+                    {1.0, 3.0}
+                })
+            }
+        });
+
+    const amrex::Real burned_area_before =
+        front.burned_area_m2();
+
+    const auto result =
+        ERFFire::remesh_front(
+            front,
+            FirePerimeterRemeshOptions{
+                0.25,
+                1.0,
+                0.0
+            });
+
+    ASSERT_EQ(
+        result.front.components().size(),
+        2U);
+    EXPECT_EQ(
+        result.front.components()[0].role,
+        FireFrontRole::Outer);
+    EXPECT_EQ(
+        result.front.components()[1].role,
+        FireFrontRole::Hole);
+
+    EXPECT_EQ(
+        result.front.components()[0]
+            .perimeter.size(),
+        16U);
+    EXPECT_EQ(
+        result.front.components()[1]
+            .perimeter.size(),
+        8U);
+
+    EXPECT_EQ(
+        result.stats.vertices_removed,
+        0U);
+    EXPECT_EQ(
+        result.stats.vertices_added,
+        16U);
+
+    EXPECT_DOUBLE_EQ(
+        result.front.burned_area_m2(),
+        burned_area_before);
+
+    EXPECT_LE(
+        maximum_edge_length_m(
+            result.front.components()[0]
+                .perimeter),
+        1.0);
+    EXPECT_LE(
+        maximum_edge_length_m(
+            result.front.components()[1]
+                .perimeter),
+        1.0);
+}
+
 TEST(FireRemeshing, StraightEdgeSubdivisionPreservesPolygonExactly)
 {
     const FirePerimeter rectangle({

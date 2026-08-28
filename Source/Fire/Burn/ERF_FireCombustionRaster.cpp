@@ -1,6 +1,7 @@
 #include "ERF_FireCombustionRaster.H"
 
 #include <ERF_FireCellCoverage.H>
+#include <ERF_FireFront.H>
 #include <ERF_FirePerimeterSweep.H>
 
 #include <AMReX_Arena.H>
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -1233,6 +1235,52 @@ FireCombustionRaster::initialize_from_burned_fraction(
 }
 
 FireCombustionRasterAdvance
+FireCombustionRaster::advance_from_topology_event_sweep(
+    const FirePerimeter& start_perimeter,
+    const std::vector<FireVec2>& event_vertices_m,
+    const FireFront& event_front,
+    const FireBurnedFractionRaster& burned_before,
+    const FireBurnedFractionRaster& burned_after,
+    amrex::Real dt_s)
+{
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        start_perimeter,
+        event_vertices_m,
+        &event_front,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        dt_s);
+}
+
+FireCombustionRasterAdvance
+FireCombustionRaster::advance_from_front_linear_sweep(
+    const FireFront& start_front,
+    const FireFront& end_front,
+    const FireBurnedFractionRaster& burned_before,
+    const FireBurnedFractionRaster& burned_after,
+    amrex::Real dt_s)
+{
+    const FirePerimeter& representative_start =
+        start_front.components().front().perimeter;
+    const FirePerimeter& representative_end =
+        end_front.components().front().perimeter;
+
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        representative_start,
+        representative_end.vertices_m(),
+        nullptr,
+        &start_front,
+        &end_front,
+        burned_before,
+        burned_after,
+        dt_s);
+}
+
+FireCombustionRasterAdvance
 FireCombustionRaster::advance_from_linear_sweep(
     const FirePerimeter& start_perimeter,
     const FirePerimeter& end_perimeter,
@@ -1240,6 +1288,48 @@ FireCombustionRaster::advance_from_linear_sweep(
     const FireBurnedFractionRaster& burned_after,
     amrex::Real dt_s)
 {
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        start_perimeter,
+        end_perimeter.vertices_m(),
+        nullptr,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        dt_s);
+}
+
+FireCombustionRasterAdvance
+detail::advance_fire_combustion_vertex_sweep(
+    FireCombustionRaster& raster,
+    const FirePerimeter& start_perimeter,
+    const std::vector<FireVec2>& end_vertices_m,
+    const FireFront* event_front,
+    const FireFront* front_sweep_start,
+    const FireFront* front_sweep_end,
+    const FireBurnedFractionRaster& burned_before,
+    const FireBurnedFractionRaster& burned_after,
+    amrex::Real dt_s)
+{
+    auto& geometry_ = raster.geometry_;
+    auto& parameters_ = raster.parameters_;
+    auto& options_ = raster.options_;
+    auto& surface_layout_ = raster.surface_layout_;
+    auto& states_mf_ = raster.states_mf_;
+    auto& totals_ = raster.totals_;
+    auto& initialized_ = raster.initialized_;
+
+    const auto copy_distributed_state =
+        [&raster](
+            const amrex::MultiFab& source,
+            amrex::MultiFab& destination)
+        {
+            raster.copy_distributed_state(
+                source,
+                destination);
+        };
+
     if (!initialized_) {
         throw std::logic_error(
             "fire combustion raster must be initialized before advance");
@@ -1255,7 +1345,7 @@ FireCombustionRaster::advance_from_linear_sweep(
     const amrex::MultiFab& burned_after_mf =
         burned_after.distributed_burned_fraction();
     const auto matches_burned_layout =
-        [this](const amrex::MultiFab& field) {
+        [&surface_layout_](const amrex::MultiFab& field) {
             return field.boxArray()
                     == surface_layout_.box_array()
                 && field.DistributionMap()
@@ -1269,8 +1359,36 @@ FireCombustionRaster::advance_from_linear_sweep(
         "fire combustion advance requires co-located distributed burned history");
 
     require(
-        start_perimeter.size() == end_perimeter.size(),
+        start_perimeter.size() == end_vertices_m.size(),
         "fire combustion raster sweep requires matching perimeter vertex counts");
+
+    for (const FireVec2& vertex : end_vertices_m) {
+        require(
+            std::isfinite(vertex.x)
+                && std::isfinite(vertex.y),
+            "fire combustion raster sweep vertices must be finite");
+    }
+
+    const bool front_sweep =
+        front_sweep_start != nullptr
+        || front_sweep_end != nullptr;
+
+    require(
+        (front_sweep_start != nullptr)
+            == (front_sweep_end != nullptr),
+        "fire combustion front sweep requires both endpoint fronts");
+
+    require(
+        !front_sweep || event_front == nullptr,
+        "fire combustion sweep cannot combine front and topology-event geometry");
+
+    if (front_sweep) {
+        (void)interpolate_fire_front_linear_sweep(
+            *front_sweep_start,
+            *front_sweep_end,
+            amrex::Real(0.0));
+    }
+
     require(
         std::isfinite(dt_s) && dt_s > amrex::Real(0),
         "fire combustion raster dt must be finite and positive");
@@ -1376,36 +1494,158 @@ FireCombustionRaster::advance_from_linear_sweep(
         for (int substep = 0;
              substep < temporal_substeps;
              ++substep) {
+            const bool front_sample =
+                front_sweep;
+            const bool event_sample =
+                !front_sample
+                && event_front != nullptr
+                && substep + 1 == temporal_substeps;
+
             const amrex::Real alpha =
                 static_cast<amrex::Real>(substep + 1)
                 / static_cast<amrex::Real>(
                     temporal_substeps);
 
-            const FirePerimeter sample_perimeter =
-                interpolate_fire_perimeter_linear_sweep(
-                    start_perimeter,
-                    end_perimeter,
-                    alpha);
+            std::optional<FirePerimeter>
+                sample_perimeter;
+            std::optional<FireFront>
+                interpolated_front;
+            const FireFront* sample_front = nullptr;
 
-            const auto& sample_vertices =
-                sample_perimeter.vertices_m();
-            amrex::Real sample_xlo_m =
-                sample_vertices.front().x;
-            amrex::Real sample_xhi_m =
-                sample_vertices.front().x;
-            amrex::Real sample_ylo_m =
-                sample_vertices.front().y;
-            amrex::Real sample_yhi_m =
-                sample_vertices.front().y;
-            for (const FireVec2& vertex : sample_vertices) {
+            amrex::Real sample_xlo_m{};
+            amrex::Real sample_xhi_m{};
+            amrex::Real sample_ylo_m{};
+            amrex::Real sample_yhi_m{};
+
+            if (front_sample) {
+                interpolated_front.emplace(
+                    interpolate_fire_front_linear_sweep(
+                        *front_sweep_start,
+                        *front_sweep_end,
+                        alpha));
+                sample_front =
+                    &*interpolated_front;
+
+                const auto& components =
+                    sample_front->components();
+                const auto& first_vertices =
+                    components.front()
+                        .perimeter.vertices_m();
+
                 sample_xlo_m =
-                    std::min(sample_xlo_m, vertex.x);
+                    first_vertices.front().x;
                 sample_xhi_m =
-                    std::max(sample_xhi_m, vertex.x);
+                    first_vertices.front().x;
                 sample_ylo_m =
-                    std::min(sample_ylo_m, vertex.y);
+                    first_vertices.front().y;
                 sample_yhi_m =
-                    std::max(sample_yhi_m, vertex.y);
+                    first_vertices.front().y;
+
+                for (const auto& component :
+                     components) {
+                    for (const FireVec2& vertex :
+                         component.perimeter.vertices_m()) {
+                        sample_xlo_m =
+                            std::min(sample_xlo_m, vertex.x);
+                        sample_xhi_m =
+                            std::max(sample_xhi_m, vertex.x);
+                        sample_ylo_m =
+                            std::min(sample_ylo_m, vertex.y);
+                        sample_yhi_m =
+                            std::max(sample_yhi_m, vertex.y);
+                    }
+                }
+            } else if (event_sample) {
+                sample_front =
+                    event_front;
+                const auto& components =
+                    event_front->components();
+                const auto& first_vertices =
+                    components.front()
+                        .perimeter.vertices_m();
+
+                sample_xlo_m =
+                    first_vertices.front().x;
+                sample_xhi_m =
+                    first_vertices.front().x;
+                sample_ylo_m =
+                    first_vertices.front().y;
+                sample_yhi_m =
+                    first_vertices.front().y;
+
+                for (const auto& component :
+                     components) {
+                    for (const FireVec2& vertex :
+                         component.perimeter.vertices_m()) {
+                        sample_xlo_m =
+                            std::min(
+                                sample_xlo_m,
+                                vertex.x);
+                        sample_xhi_m =
+                            std::max(
+                                sample_xhi_m,
+                                vertex.x);
+                        sample_ylo_m =
+                            std::min(
+                                sample_ylo_m,
+                                vertex.y);
+                        sample_yhi_m =
+                            std::max(
+                                sample_yhi_m,
+                                vertex.y);
+                    }
+                }
+            } else {
+                if (substep + 1
+                    == temporal_substeps) {
+                    sample_perimeter.emplace(
+                        end_vertices_m);
+                } else {
+                    const auto& start_vertices =
+                        start_perimeter.vertices_m();
+
+                    std::vector<FireVec2>
+                        sample_vertices;
+                    sample_vertices.reserve(
+                        start_vertices.size());
+
+                    for (std::size_t index = 0;
+                         index < start_vertices.size();
+                         ++index) {
+                        sample_vertices.push_back(
+                            start_vertices[index]
+                            + (end_vertices_m[index]
+                               - start_vertices[index])
+                                * alpha);
+                    }
+
+                    sample_perimeter.emplace(
+                        std::move(sample_vertices));
+                }
+
+                const auto& sample_vertices =
+                    sample_perimeter->vertices_m();
+
+                sample_xlo_m =
+                    sample_vertices.front().x;
+                sample_xhi_m =
+                    sample_vertices.front().x;
+                sample_ylo_m =
+                    sample_vertices.front().y;
+                sample_yhi_m =
+                    sample_vertices.front().y;
+
+                for (const FireVec2& vertex :
+                     sample_vertices) {
+                    sample_xlo_m =
+                        std::min(sample_xlo_m, vertex.x);
+                    sample_xhi_m =
+                        std::max(sample_xhi_m, vertex.x);
+                    sample_ylo_m =
+                        std::min(sample_ylo_m, vertex.y);
+                    sample_yhi_m =
+                        std::max(sample_yhi_m, vertex.y);
+                }
             }
 
             for (amrex::MFIter mfi(ignition_schedule);
@@ -1447,8 +1687,12 @@ FireCombustionRaster::advance_from_linear_sweep(
                         }
 
                         const amrex::Real coverage =
-                            fire_perimeter_cell_coverage_fraction(
-                                sample_perimeter,
+                            sample_front != nullptr
+                            ? fire_front_cell_coverage_fraction(
+                                *sample_front,
+                                cell)
+                            : fire_perimeter_cell_coverage_fraction(
+                                *sample_perimeter,
                                 cell);
                         const amrex::Real next_burned_fraction =
                             std::max(

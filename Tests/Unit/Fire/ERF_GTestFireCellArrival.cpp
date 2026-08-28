@@ -1,4 +1,5 @@
 #include <ERF_FireCellArrival.H>
+#include <ERF_FireFrontTopology.H>
 
 #include <gtest/gtest.h>
 
@@ -12,6 +13,7 @@ namespace
 {
 
 using ERFFire::FireCartesianCell2D;
+using ERFFire::FireFront;
 using ERFFire::FirePerimeter;
 using ERFFire::FireVec2;
 
@@ -28,6 +30,62 @@ make_rectangle (
         {xhi_m, yhi_m},
         {xlo_m, yhi_m}
     });
+}
+
+FirePerimeter
+make_topology_event_start()
+{
+    return FirePerimeter(
+        std::vector<FireVec2>{
+            {0.0, 0.0},
+            {10.0, 0.0},
+            {10.0, 2.0},
+            {3.0, 2.0},
+            {3.0, 8.0},
+            {7.0, 8.0},
+            {7.0, 2.2},
+            {8.0, 2.2},
+            {9.0, 2.2},
+            {9.0, 8.0},
+            {10.0, 8.0},
+            {10.0, 10.0},
+            {0.0, 10.0}
+        });
+}
+
+std::vector<FireVec2>
+make_topology_event_vertices(
+    const FirePerimeter& start)
+{
+    std::vector<FireVec2> vertices =
+        start.vertices_m();
+
+    // Move the complete left outer edge outward so the arrival regression
+    // has a broad, linearly growing cell intersection. This avoids making
+    // the bisection-tolerance test depend on near-degenerate triangular-area
+    // resolution at the pinch itself.
+    vertices[0].x = amrex::Real(-1.0);
+    vertices[12].x = amrex::Real(-1.0);
+
+    vertices[7] = {
+        amrex::Real(8.0),
+        amrex::Real(2.0)
+    };
+    return vertices;
+}
+
+FireFront
+make_topology_event_front(
+    const std::vector<FireVec2>& event_vertices)
+{
+    return ERFFire::split_perimeter_at_pinch(
+        event_vertices,
+        ERFFire::FirePerimeterPinch{
+            2U,
+            amrex::Real(2.0 / 7.0),
+            7U,
+            amrex::Real(0.0)
+        });
 }
 
 TEST(FireCellArrival, AlreadyCoveredCellArrivesAtSweepStartExactly)
@@ -228,6 +286,80 @@ TEST(FireCellArrival, TighterToleranceTightensAnalyticUpperBound)
     EXPECT_LE(
         static_cast<double>(fine_error),
         static_cast<double>(coarse_error));
+}
+
+TEST(
+    FireCellArrival,
+    TopologyEventSweepFindsArrivalBeforePinch)
+{
+    const FirePerimeter start =
+        make_topology_event_start();
+    const std::vector<FireVec2> event_vertices =
+        make_topology_event_vertices(start);
+    const FireFront event_front =
+        make_topology_event_front(event_vertices);
+
+    const FireCartesianCell2D cell{
+        -0.75,
+        -0.5,
+        9.0,
+        9.5
+    };
+
+    const auto result =
+        ERFFire::
+            fire_cell_first_arrival_time_topology_event_sweep(
+                start,
+                event_vertices,
+                event_front,
+                cell,
+                amrex::Real(10.0),
+                amrex::Real(12.0),
+                amrex::Real(1.0e-9));
+
+    ASSERT_TRUE(result.arrived);
+
+    EXPECT_GE(
+        static_cast<double>(
+            result.arrival_time_s),
+        11.0);
+    EXPECT_LT(
+        static_cast<double>(
+            result.arrival_time_s
+            - amrex::Real(11.0)),
+        1.0e-9);
+}
+
+TEST(
+    FireCellArrival,
+    TopologyEventSweepDoesNotIgniteUnburnedPocket)
+{
+    const FirePerimeter start =
+        make_topology_event_start();
+    const std::vector<FireVec2> event_vertices =
+        make_topology_event_vertices(start);
+    const FireFront event_front =
+        make_topology_event_front(event_vertices);
+
+    const FireCartesianCell2D pocket_cell{
+        4.0,
+        4.5,
+        4.0,
+        4.5
+    };
+
+    const auto result =
+        ERFFire::
+            fire_cell_first_arrival_time_topology_event_sweep(
+                start,
+                event_vertices,
+                event_front,
+                pocket_cell,
+                amrex::Real(10.0),
+                amrex::Real(12.0),
+                amrex::Real(1.0e-9));
+
+    EXPECT_FALSE(result.arrived);
 }
 
 TEST(FireCellArrival, RejectsInvalidSweepInputs)

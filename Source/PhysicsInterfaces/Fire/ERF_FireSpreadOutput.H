@@ -102,6 +102,11 @@ struct ERFFireCheckpointV2Metadata
     ERFFireCheckpointState checkpoint{};
 };
 
+struct ERFFireCheckpointV3Metadata
+{
+    ERFFireCheckpointState checkpoint{};
+};
+
 [[nodiscard]] int
 read_erf_fire_checkpoint_version(std::istream& stream);
 
@@ -112,6 +117,14 @@ void write_erf_fire_checkpoint_v2_metadata(
 
 [[nodiscard]] ERFFireCheckpointV2Metadata
 read_erf_fire_checkpoint_v2_metadata(std::istream& stream);
+
+void write_erf_fire_checkpoint_v3_metadata(
+    const ERFFireSpreadRuntime& runtime,
+    const ERFFireRuntimeOptions& options,
+    std::ostream& stream);
+
+[[nodiscard]] ERFFireCheckpointV3Metadata
+read_erf_fire_checkpoint_v3_metadata(std::istream& stream);
 
 /**
  * Build the distributed version-2 checkpoint payload.

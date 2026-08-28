@@ -33,6 +33,9 @@ function(erf_add_fire_sources target)
     ${FIRE_IFACE_DIR}/ERF_FireLevel0SourceCoupling.cpp
     ${FIRE_SRC_DIR}/Environment/ERF_FireTerrainSurface.cpp
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeter.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FireFrontTopology.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FireFrontCollision.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FireFrontPropagator.cpp
     ${FIRE_SRC_DIR}/Front/ERF_VectorPerimeterPropagator.cpp
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterRemesher.cpp
     ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterSweep.cpp

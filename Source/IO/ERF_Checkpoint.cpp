@@ -867,7 +867,7 @@ ERF::WriteCheckpointFile () const
             }
 
             try {
-                ERFFire::write_erf_fire_checkpoint_v2_metadata(
+                ERFFire::write_erf_fire_checkpoint_v3_metadata(
                     *fire_runtime_for_checkpoint,
                     m_fire_runtime_options,
                     fire_state);
@@ -1714,7 +1714,8 @@ ERF::ReadCheckpointFile ()
                     "IO rank failed to identify ERF-Fire checkpoint version");
             }
             if (checkpoint_version != 1
-                && checkpoint_version != 2) {
+                && checkpoint_version != 2
+                && checkpoint_version != 3) {
                 throw std::runtime_error(
                     "unsupported ERF-Fire checkpoint format version");
             }
@@ -1724,6 +1725,7 @@ ERF::ReadCheckpointFile ()
             restore_state.current_time_s =
                 static_cast<Real>(t_new[0]);
             ERFFire::ERFFireCheckpointV2Metadata v2_metadata;
+            ERFFire::ERFFireCheckpointV3Metadata v3_metadata;
 
             const ERFTerrainSource* current_terrain_source =
                 prob->terrain_source();
@@ -1752,11 +1754,17 @@ ERF::ReadCheckpointFile ()
                             ERFFire::read_erf_fire_checkpoint_state(
                                 fire_state_stream);
                         checkpoint = &v1_checkpoint;
-                    } else {
+                    } else if (checkpoint_version == 2) {
                         v2_metadata =
                             ERFFire::read_erf_fire_checkpoint_v2_metadata(
                                 fire_state_stream);
                         checkpoint = &v2_metadata.checkpoint;
+                    } else {
+                        v3_metadata =
+                            ERFFire::read_erf_fire_checkpoint_v3_metadata(
+                                fire_state_stream);
+                        checkpoint =
+                            &v3_metadata.checkpoint;
                     }
 
                     validate_fire_checkpoint_policy(
@@ -1815,7 +1823,7 @@ ERF::ReadCheckpointFile ()
                 if (!amrex::FileExists(
                         fire_raster_name + "_H")) {
                     throw std::runtime_error(
-                        "ERF-Fire version-2 checkpoint is missing FireStateRaster");
+                        "ERF-Fire distributed checkpoint is missing FireStateRaster");
                 }
 
                 amrex::MultiFab checkpoint_raster;

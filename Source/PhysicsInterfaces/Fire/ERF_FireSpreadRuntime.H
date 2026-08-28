@@ -4,6 +4,7 @@
 #include <ERF_FireBurnedFractionRaster.H>
 #include <ERF_FireCombustionRaster.H>
 #include <ERF_FireFirstArrivalRaster.H>
+#include <ERF_FireFront.H>
 #include <ERF_FireFlatEnvironmentSampler.H>
 #include <ERF_FireTerrainSurface.H>
 #include <ERF_FirePerimeterRemesher.H>
@@ -12,10 +13,17 @@
 #include <AMReX_REAL.H>
 
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 namespace ERFFire
 {
+struct ERFFireFrontComponentState
+{
+    FireFrontRole role{FireFrontRole::Outer};
+    std::vector<FireVec2> vertices_m;
+};
+
 
 /**
  * Map-plane fire-spread configuration.
@@ -44,6 +52,7 @@ struct ERFFireSpreadRuntimeState
     FireFirstArrivalRasterState first_arrival;
     FireCombustionRasterState combustion;
     amrex::Real current_time_s{};
+    std::vector<ERFFireFrontComponentState> front_components;
 };
 
 struct ERFFireStepDiagnostics
@@ -101,9 +110,25 @@ public:
         amrex::Real initial_time_s,
         ERFFireSpreadConfig config);
 
-    [[nodiscard]] const FirePerimeter& perimeter() const noexcept
+    ERFFireSpreadRuntime(
+        FireFront initial_front,
+        amrex::Real initial_time_s,
+        ERFFireSpreadConfig config);
+
+    [[nodiscard]] const FireFront&
+    front() const;
+
+    [[nodiscard]] const FirePerimeter& perimeter() const
     {
-        return perimeter_;
+        const auto& components =
+            front_.components();
+        if (components.size() != 1
+            || components.front().role
+                != FireFrontRole::Outer) {
+            throw std::logic_error(
+                "Fire runtime perimeter view requires one Outer component");
+        }
+        return components.front().perimeter;
     }
 
     [[nodiscard]] const FireBurnedFractionRaster&
@@ -276,7 +301,7 @@ private:
 
     ERFFireSpreadRuntime(
         ERFFireSpreadConfig config,
-        FirePerimeter perimeter,
+        FireFront front,
         FireBurnedFractionRaster burned_fraction,
         FireFirstArrivalRaster first_arrival,
         FireCombustionRaster combustion,
@@ -305,7 +330,7 @@ private:
         amrex::Real dt_s);
 
     ERFFireSpreadConfig config_;
-    FirePerimeter perimeter_;
+    FireFront front_;
     FireBurnedFractionRaster burned_fraction_;
     FireFirstArrivalRaster first_arrival_;
     FireCombustionRaster combustion_;

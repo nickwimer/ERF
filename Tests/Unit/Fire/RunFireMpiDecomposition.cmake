@@ -52,6 +52,7 @@ function(run_parallel ranks working_dir description)
       "${RESPONSE_EXE}"
       ${mpiexec_postflags}
       "${RESPONSE_INPUT}"
+      ${ARGN}
     WORKING_DIRECTORY "${working_dir}"
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE run_output

@@ -1,6 +1,7 @@
 #ifndef ERF_FIRE_FIRST_ARRIVAL_RASTER_H
 #define ERF_FIRE_FIRST_ARRIVAL_RASTER_H
 
+#include <ERF_FireTypes.H>
 #include <ERF_FireRasterGeometry.H>
 #include <ERF_FireSurfaceLayout.H>
 
@@ -17,6 +18,7 @@ namespace ERFFire
 {
 
 class FirePerimeter;
+class FireFront;
 
 /**
  * Aggregate result of one persistent first-arrival raster update.
@@ -199,6 +201,29 @@ public:
     [[nodiscard]] FireFirstArrivalRasterUpdate initialize_from_perimeter(
         const FirePerimeter& perimeter,
         amrex::Real time_s);
+
+    [[nodiscard]] FireFirstArrivalRasterUpdate
+    initialize_from_front(
+        const FireFront& front,
+        amrex::Real time_s);
+
+    [[nodiscard]] FireFirstArrivalRasterUpdate
+    update_from_topology_event_sweep(
+        const FirePerimeter& start_perimeter,
+        const std::vector<FireVec2>& event_vertices_m,
+        const FireFront& event_front,
+        amrex::Real start_time_s,
+        amrex::Real event_time_s,
+        amrex::Real time_tolerance_s);
+
+    [[nodiscard]] FireFirstArrivalRasterUpdate
+    update_from_front_linear_sweep(
+        const FireFront& start_front,
+        const FireFront& end_front,
+        amrex::Real start_time_s,
+        amrex::Real end_time_s,
+        amrex::Real time_tolerance_s,
+        std::size_t temporal_substeps);
 
     /**
      * Update first-arrival history from one pre-remesh physical sweep.

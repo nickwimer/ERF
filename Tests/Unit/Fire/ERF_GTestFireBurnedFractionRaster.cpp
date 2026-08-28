@@ -1,4 +1,7 @@
 #include <ERF_FireBurnedFractionRaster.H>
+#include <ERF_FireCellCoverage.H>
+#include <ERF_FireFront.H>
+#include <ERF_FireFrontTopology.H>
 #include <ERF_FirePerimeter.H>
 #include <ERF_FireTypes.H>
 
@@ -16,6 +19,9 @@ namespace
 
 using ERFFire::FireBurnedFractionRaster;
 using ERFFire::FireCartesianRasterGeometry2D;
+using ERFFire::FireFront;
+using ERFFire::FireFrontComponent;
+using ERFFire::FireFrontRole;
 using ERFFire::FirePerimeter;
 using ERFFire::FireVec2;
 
@@ -507,6 +513,283 @@ TEST(FireBurnedFractionRaster, RejectsInvalidGeometryAndIndices)
     EXPECT_THROW(
         (void)raster.burned_fraction(0, 3),
         std::out_of_range);
+}
+
+TEST(
+    FireBurnedFractionRaster,
+    FrontWithShrinkingHolePreservesMonotoneBurnHistory)
+{
+    FireBurnedFractionRaster raster({
+        4,
+        4,
+        0.0,
+        0.0,
+        1.0,
+        1.0
+    });
+
+    const FireFront initial_front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                make_rectangle(
+                    0.0, 4.0,
+                    0.0, 4.0)
+            },
+            {
+                FireFrontRole::Hole,
+                make_rectangle(
+                    1.0, 3.0,
+                    1.0, 3.0)
+            }
+        });
+
+    const auto initial_update =
+        raster.update_from_front(initial_front);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            initial_update.burned_area_m2),
+        12.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            initial_update.newly_burned_area_m2),
+        12.0);
+
+    for (std::size_t j = 0; j < 4; ++j) {
+        for (std::size_t i = 0; i < 4; ++i) {
+            const bool inside_hole =
+                i >= 1 && i <= 2
+                && j >= 1 && j <= 2;
+            EXPECT_DOUBLE_EQ(
+                static_cast<double>(
+                    raster.burned_fraction(i, j)),
+                inside_hole ? 0.0 : 1.0);
+        }
+    }
+
+    const FireFront smaller_hole(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                make_rectangle(
+                    0.0, 4.0,
+                    0.0, 4.0)
+            },
+            {
+                FireFrontRole::Hole,
+                make_rectangle(
+                    1.5, 2.5,
+                    1.5, 2.5)
+            }
+        });
+
+    const auto second_update =
+        raster.update_from_front(smaller_hole);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            second_update.burned_area_m2),
+        15.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            second_update.newly_burned_area_m2),
+        3.0);
+
+    for (std::size_t j = 1; j <= 2; ++j) {
+        for (std::size_t i = 1; i <= 2; ++i) {
+            EXPECT_DOUBLE_EQ(
+                static_cast<double>(
+                    raster.burned_fraction(i, j)),
+                0.75);
+        }
+    }
+}
+
+TEST(
+    FireBurnedFractionRaster,
+    FrontLinearSweepRetainsTransientOuterMinusHoleCoverage)
+{
+    FireBurnedFractionRaster raster({
+        4,
+        1,
+        0.0,
+        0.0,
+        1.0,
+        1.0
+    });
+
+    const FireFront start(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                make_rectangle(
+                    -2.0,
+                    -1.0,
+                    0.0,
+                    1.0)
+            },
+            {
+                FireFrontRole::Hole,
+                make_rectangle(
+                    -1.75,
+                    -1.25,
+                    0.0,
+                    1.0)
+            }
+        });
+
+    const FireFront end(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                make_rectangle(
+                    2.0,
+                    3.0,
+                    0.0,
+                    1.0)
+            },
+            {
+                FireFrontRole::Hole,
+                make_rectangle(
+                    2.25,
+                    2.75,
+                    0.0,
+                    1.0)
+            }
+        });
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            ERFFire::fire_front_cell_coverage_fraction(
+                start,
+                raster.cell_bounds(0, 0))),
+        0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            ERFFire::fire_front_cell_coverage_fraction(
+                end,
+                raster.cell_bounds(0, 0))),
+        0.0);
+
+    const auto update =
+        raster.update_from_front_linear_sweep(
+            start,
+            end,
+            2U);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            raster.burned_fraction(0, 0)),
+        0.5,
+        1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(
+            raster.burned_fraction(2, 0)),
+        0.5,
+        1.0e-14);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            update.burned_area_m2),
+        1.0,
+        1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(
+            update.newly_burned_area_m2),
+        1.0,
+        1.0e-14);
+}
+
+TEST(
+    FireBurnedFractionRaster,
+    TopologyEventSweepCommitsEventAreaWithoutBurningPocket)
+{
+    FireBurnedFractionRaster raster({
+        20,
+        20,
+        0.0,
+        0.0,
+        0.5,
+        0.5
+    });
+
+    const FirePerimeter start(
+        std::vector<FireVec2>{
+            {0.0, 0.0},
+            {10.0, 0.0},
+            {10.0, 2.0},
+            {3.0, 2.0},
+            {3.0, 8.0},
+            {7.0, 8.0},
+            {7.0, 2.2},
+            {8.0, 2.2},
+            {9.0, 2.2},
+            {9.0, 8.0},
+            {10.0, 8.0},
+            {10.0, 10.0},
+            {0.0, 10.0}
+        });
+
+    const auto initial =
+        raster.update_from_perimeter(start);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            initial.burned_area_m2),
+        69.6,
+        1.0e-11);
+    EXPECT_NEAR(
+        static_cast<double>(
+            initial.newly_burned_area_m2),
+        69.6,
+        1.0e-11);
+
+    std::vector<FireVec2> event_vertices =
+        start.vertices_m();
+    event_vertices[7] = {
+        amrex::Real(8.0),
+        amrex::Real(2.0)
+    };
+
+    const FireFront event_front =
+        ERFFire::split_perimeter_at_pinch(
+            event_vertices,
+            ERFFire::FirePerimeterPinch{
+                2U,
+                amrex::Real(2.0 / 7.0),
+                7U,
+                amrex::Real(0.0)
+            });
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            event_front.burned_area_m2()),
+        69.8,
+        1.0e-12);
+
+    const auto update =
+        raster.update_from_topology_event_sweep(
+            start,
+            event_vertices,
+            event_front,
+            4U);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            update.burned_area_m2),
+        69.8,
+        1.0e-11);
+    EXPECT_NEAR(
+        static_cast<double>(
+            update.newly_burned_area_m2),
+        0.2,
+        1.0e-11);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            raster.burned_fraction(8, 8)),
+        0.0);
 }
 
 } // namespace

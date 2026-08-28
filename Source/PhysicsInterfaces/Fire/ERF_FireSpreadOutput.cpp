@@ -187,8 +187,12 @@ write_erf_fire_spread_snapshot(
 
     const amrex::Real current_time_s =
         runtime.current_time_s();
-    const auto& vertices =
-        runtime.perimeter().vertices_m();
+    const auto& components =
+        runtime.front().components();
+    std::size_t vertex_count = 0;
+    for (const FireFrontComponent& component : components) {
+        vertex_count += component.perimeter.size();
+    }
 
     const std::filesystem::path directory(output_dir);
     const std::string perimeter_name =
@@ -209,15 +213,38 @@ write_erf_fire_spread_snapshot(
                 auto perimeter_stream =
                     open_output(directory / perimeter_name);
                 perimeter_stream
-                    << "time_s,vertex_index,x_m,y_m\n";
-                for (std::size_t index = 0;
-                     index < vertices.size();
-                     ++index) {
-                    perimeter_stream
-                        << current_time_s << ","
-                        << index << ","
-                        << vertices[index].x << ","
-                        << vertices[index].y << "\n";
+                    << "time_s,component_index,role,"
+                    << "vertex_index,x_m,y_m\n";
+
+                for (std::size_t component_index = 0;
+                     component_index < components.size();
+                     ++component_index) {
+                    const FireFrontComponent& component =
+                        components[component_index];
+
+                    const char* role_token = nullptr;
+                    if (component.role == FireFrontRole::Outer) {
+                        role_token = "outer";
+                    } else if (component.role == FireFrontRole::Hole) {
+                        role_token = "hole";
+                    } else {
+                        throw std::logic_error(
+                            "ERF-Fire visualization front has invalid component role");
+                    }
+
+                    const auto& component_vertices =
+                        component.perimeter.vertices_m();
+                    for (std::size_t index = 0;
+                         index < component_vertices.size();
+                         ++index) {
+                        perimeter_stream
+                            << current_time_s << ","
+                            << component_index << ","
+                            << role_token << ","
+                            << index << ","
+                            << component_vertices[index].x << ","
+                            << component_vertices[index].y << "\n";
+                    }
                 }
                 perimeter_stream.close();
                 if (perimeter_stream.fail()) {
@@ -541,7 +568,7 @@ write_erf_fire_spread_snapshot(
             summary
                 << step_index << ","
                 << current_time_s << ","
-                << vertices.size() << ","
+                << vertex_count << ","
                 << burned_area_m2 << ","
                 << arrived_cell_count << ","
                 << combustion_totals.remaining_dry_fuel_kg << ","
@@ -679,9 +706,10 @@ make_erf_fire_checkpoint_v2_raster(
 }
 
 void
-write_erf_fire_checkpoint_v2_metadata(
+write_erf_fire_checkpoint_distributed_metadata(
     const ERFFireSpreadRuntime& runtime,
     const ERFFireRuntimeOptions& options,
+    int version,
     std::ostream& stream)
 {
     if (!stream.good()) {
@@ -692,14 +720,16 @@ write_erf_fire_checkpoint_v2_metadata(
         throw std::invalid_argument(
             "cannot checkpoint disabled ERF-Fire runtime");
     }
+    if (version != 2 && version != 3) {
+        throw std::logic_error(
+            "distributed ERF-Fire checkpoint writer requires version 2 or 3");
+    }
 
     const auto& config = runtime.config();
     const auto& fuel = config.fuel;
     const auto& combustion_parameters =
         config.combustion_parameters;
     const auto& geometry = config.raster_geometry;
-    const auto& vertices =
-        runtime.perimeter().vertices_m();
     const auto& arrival =
         runtime.first_arrival_raster();
     const auto& combustion =
@@ -709,7 +739,7 @@ write_erf_fire_checkpoint_v2_metadata(
         << std::setprecision(
             std::numeric_limits<amrex::Real>::max_digits10);
 
-    stream << "ERF_FIRE_RUNTIME_STATE 2\n";
+    stream << "ERF_FIRE_RUNTIME_STATE " << version << "\n";
     stream
         << "coupling_mode "
         << coupling_mode_token(options.coupling_mode)
@@ -783,12 +813,54 @@ write_erf_fire_checkpoint_v2_metadata(
         << runtime.current_time_s()
         << "\n";
 
-    stream
-        << "perimeter "
-        << vertices.size()
-        << "\n";
-    for (const FireVec2& vertex : vertices) {
-        stream << vertex.x << " " << vertex.y << "\n";
+    if (version == 2) {
+        const auto& vertices =
+            runtime.perimeter().vertices_m();
+
+        stream
+            << "perimeter "
+            << vertices.size()
+            << "\n";
+        for (const FireVec2& vertex : vertices) {
+            stream
+                << vertex.x << " "
+                << vertex.y << "\n";
+        }
+    } else {
+        const auto& components =
+            runtime.front().components();
+
+        stream
+            << "front_components "
+            << components.size()
+            << "\n";
+
+        for (const FireFrontComponent& component :
+             components) {
+            const char* role_token = nullptr;
+            if (component.role == FireFrontRole::Outer) {
+                role_token = "outer";
+            } else if (component.role == FireFrontRole::Hole) {
+                role_token = "hole";
+            } else {
+                throw std::logic_error(
+                    "ERF-Fire checkpoint front has invalid component role");
+            }
+
+            const auto& vertices =
+                component.perimeter.vertices_m();
+            stream
+                << "component "
+                << role_token << " "
+                << vertices.size()
+                << "\n";
+
+            for (const FireVec2& vertex : vertices) {
+                stream
+                    << vertex.x << " "
+                    << vertex.y << "\n";
+            }
+        }
     }
 
     stream
@@ -817,20 +889,54 @@ write_erf_fire_checkpoint_v2_metadata(
     }
 }
 
+void
+write_erf_fire_checkpoint_v2_metadata(
+    const ERFFireSpreadRuntime& runtime,
+    const ERFFireRuntimeOptions& options,
+    std::ostream& stream)
+{
+    write_erf_fire_checkpoint_distributed_metadata(
+        runtime,
+        options,
+        2,
+        stream);
+}
+
+void
+write_erf_fire_checkpoint_v3_metadata(
+    const ERFFireSpreadRuntime& runtime,
+    const ERFFireRuntimeOptions& options,
+    std::ostream& stream)
+{
+    write_erf_fire_checkpoint_distributed_metadata(
+        runtime,
+        options,
+        3,
+        stream);
+}
+
 ERFFireCheckpointV2Metadata
-read_erf_fire_checkpoint_v2_metadata(std::istream& stream)
+read_erf_fire_checkpoint_distributed_metadata(
+    std::istream& stream,
+    int expected_version)
 {
     ERFFireCheckpointV2Metadata metadata;
     auto& checkpoint = metadata.checkpoint;
+
+    if (expected_version != 2
+        && expected_version != 3) {
+        throw std::logic_error(
+            "distributed ERF-Fire checkpoint reader requires version 2 or 3");
+    }
 
     expect_token(stream, "ERF_FIRE_RUNTIME_STATE");
     int version = 0;
     require_stream_read(
         static_cast<bool>(stream >> version),
         "format version");
-    if (version != 2) {
+    if (version != expected_version) {
         throw std::runtime_error(
-            "ERF-Fire version-2 metadata reader received another format");
+            "ERF-Fire distributed metadata reader received another format");
     }
 
     expect_token(stream, "coupling_mode");
@@ -945,19 +1051,82 @@ read_erf_fire_checkpoint_v2_metadata(std::istream& stream)
             stream >> state.current_time_s),
         "current_time_s");
 
-    expect_token(stream, "perimeter");
-    const std::size_t perimeter_count =
-        read_size(stream, "perimeter");
-    if (perimeter_count < 3) {
-        throw std::runtime_error(
-            "ERF-Fire checkpoint perimeter has fewer than three vertices");
-    }
-    state.perimeter_vertices_m.resize(perimeter_count);
-    for (FireVec2& vertex : state.perimeter_vertices_m) {
-        require_stream_read(
-            static_cast<bool>(
-                stream >> vertex.x >> vertex.y),
-            "perimeter vertex");
+    if (version == 2) {
+        expect_token(stream, "perimeter");
+        const std::size_t perimeter_count =
+            read_size(stream, "perimeter");
+        if (perimeter_count < 3) {
+            throw std::runtime_error(
+                "ERF-Fire checkpoint perimeter has fewer than three vertices");
+        }
+
+        state.perimeter_vertices_m.resize(
+            perimeter_count);
+        for (FireVec2& vertex :
+             state.perimeter_vertices_m) {
+            require_stream_read(
+                static_cast<bool>(
+                    stream
+                    >> vertex.x
+                    >> vertex.y),
+                "perimeter vertex");
+        }
+    } else {
+        expect_token(stream, "front_components");
+        const std::size_t component_count =
+            read_size(
+                stream,
+                "front_components");
+        if (component_count == 0) {
+            throw std::runtime_error(
+                "ERF-Fire checkpoint front has no components");
+        }
+
+        state.front_components.resize(
+            component_count);
+
+        for (ERFFireFrontComponentState& component :
+             state.front_components) {
+            expect_token(stream, "component");
+
+            std::string role;
+            require_stream_read(
+                static_cast<bool>(
+                    stream >> role),
+                "front component role");
+
+            if (role == "outer") {
+                component.role =
+                    FireFrontRole::Outer;
+            } else if (role == "hole") {
+                component.role =
+                    FireFrontRole::Hole;
+            } else {
+                throw std::runtime_error(
+                    "ERF-Fire checkpoint front has invalid component role");
+            }
+
+            const std::size_t vertex_count =
+                read_size(
+                    stream,
+                    "front component vertex count");
+            if (vertex_count < 3) {
+                throw std::runtime_error(
+                    "ERF-Fire checkpoint front component has fewer than three vertices");
+            }
+
+            component.vertices_m.resize(
+                vertex_count);
+            for (FireVec2& vertex :
+                 component.vertices_m) {
+                require_stream_read(
+                    static_cast<bool>(
+                        stream
+                        >> vertex.x
+                        >> vertex.y),
+                    "front component vertex");
+            }
+        }
     }
 
     expect_token(stream, "first_arrival_metadata");
@@ -1002,6 +1171,30 @@ read_erf_fire_checkpoint_v2_metadata(std::istream& stream)
             "ERF-Fire checkpoint contains trailing data");
     }
 
+    return metadata;
+}
+
+ERFFireCheckpointV2Metadata
+read_erf_fire_checkpoint_v2_metadata(
+    std::istream& stream)
+{
+    return read_erf_fire_checkpoint_distributed_metadata(
+        stream,
+        2);
+}
+
+ERFFireCheckpointV3Metadata
+read_erf_fire_checkpoint_v3_metadata(
+    std::istream& stream)
+{
+    ERFFireCheckpointV2Metadata parsed =
+        read_erf_fire_checkpoint_distributed_metadata(
+            stream,
+            3);
+
+    ERFFireCheckpointV3Metadata metadata;
+    metadata.checkpoint =
+        std::move(parsed.checkpoint);
     return metadata;
 }
 

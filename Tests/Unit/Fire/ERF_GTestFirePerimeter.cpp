@@ -95,4 +95,17 @@ TEST(FirePerimeter, RejectsInvalidLoops)
         std::invalid_argument);
 }
 
+TEST(FirePerimeter, RejectsSelfIntersectingLoop)
+{
+    EXPECT_THROW(
+        (FirePerimeter(std::vector<FireVec2>{
+            {0.0, 0.0},
+            {4.0, 4.0},
+            {0.0, 4.0},
+            {3.0, 0.0},
+            {0.0, 2.0}
+        })),
+        std::invalid_argument);
+}
+
 } // namespace

@@ -327,4 +327,39 @@ remesh_perimeter (
     };
 }
 
+FireFrontRemeshResult
+remesh_front (
+    const FireFront& front,
+    const FirePerimeterRemeshOptions& options)
+{
+    std::vector<FireFrontComponent> components;
+    components.reserve(
+        front.components().size());
+
+    FirePerimeterRemeshStats stats;
+
+    for (const FireFrontComponent& component :
+         front.components()) {
+        FirePerimeterRemeshResult remeshed =
+            remesh_perimeter(
+                component.perimeter,
+                options);
+
+        stats.vertices_removed +=
+            remeshed.stats.vertices_removed;
+        stats.vertices_added +=
+            remeshed.stats.vertices_added;
+
+        components.push_back({
+            component.role,
+            std::move(remeshed.perimeter)
+        });
+    }
+
+    return {
+        FireFront(std::move(components)),
+        stats
+    };
+}
+
 } // namespace ERFFire

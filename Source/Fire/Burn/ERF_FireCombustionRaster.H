@@ -51,6 +51,26 @@ struct FireCombustionRasterState
     bool initialized{false};
 };
 
+class FireFront;
+class FireCombustionRaster;
+
+namespace detail
+{
+
+[[nodiscard]] FireCombustionRasterAdvance
+advance_fire_combustion_vertex_sweep(
+    FireCombustionRaster& raster,
+    const FirePerimeter& start_perimeter,
+    const std::vector<FireVec2>& end_vertices_m,
+    const FireFront* event_front,
+    const FireFront* front_sweep_start,
+    const FireFront* front_sweep_end,
+    const FireBurnedFractionRaster& burned_before,
+    const FireBurnedFractionRaster& burned_after,
+    amrex::Real dt_s);
+
+} // namespace detail
+
 /**
  * Cell-resolved combustion state on the same Cartesian geometry as burn
  * history.
@@ -225,7 +245,36 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_front_linear_sweep(
+        const FireFront& start_front,
+        const FireFront& end_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        amrex::Real dt_s);
+
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_topology_event_sweep(
+        const FirePerimeter& start_perimeter,
+        const std::vector<FireVec2>& event_vertices_m,
+        const FireFront& event_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        amrex::Real dt_s);
+
 private:
+    friend FireCombustionRasterAdvance
+    detail::advance_fire_combustion_vertex_sweep(
+        FireCombustionRaster& raster,
+        const FirePerimeter& start_perimeter,
+        const std::vector<FireVec2>& end_vertices_m,
+        const FireFront* event_front,
+        const FireFront* front_sweep_start,
+        const FireFront* front_sweep_end,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        amrex::Real dt_s);
+
     [[nodiscard]] std::size_t flat_index(
         std::size_t i,
         std::size_t j) const;

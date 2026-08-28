@@ -2,6 +2,7 @@
 
 #include <ERF_FireSpreadOutput.H>
 #include <ERF_FireWindAdjustment.H>
+#include <ERF_FireFrontPropagator.H>
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelModel.H>
 #include <ERF_VectorPerimeterPropagator.H>
@@ -183,6 +184,226 @@ with_terrain_gradient(
         };
 }
 
+FireFront
+restore_front_from_state(
+    ERFFireSpreadRuntimeState& state)
+{
+    if (!state.front_components.empty()) {
+        std::vector<FireFrontComponent> components;
+        components.reserve(
+            state.front_components.size());
+
+        for (auto& component :
+             state.front_components) {
+            components.push_back({
+                component.role,
+                FirePerimeter(
+                    std::move(
+                        component.vertices_m))
+            });
+        }
+
+        return FireFront(
+            std::move(components));
+    }
+
+    return FireFront(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                FirePerimeter(
+                    std::move(
+                        state.perimeter_vertices_m))
+            }
+        });
+}
+
+void
+collective_broadcast_front_state(
+    ERFFireSpreadRuntimeState& state)
+{
+    const int io_rank =
+        amrex::ParallelDescriptor::IOProcessorNumber();
+
+    unsigned long long component_count =
+        amrex::ParallelDescriptor::IOProcessor()
+            ? static_cast<unsigned long long>(
+                state.front_components.size())
+            : 0ULL;
+    amrex::ParallelDescriptor::Bcast(
+        &component_count,
+        1,
+        io_rank);
+
+    if (component_count
+        > static_cast<unsigned long long>(
+            std::numeric_limits<std::size_t>::max())) {
+        throw std::overflow_error(
+            "collective Fire restore component count is not representable");
+    }
+
+    if (component_count != 0ULL) {
+        const std::size_t count =
+            static_cast<std::size_t>(
+                component_count);
+
+        state.perimeter_vertices_m.clear();
+
+        if (!amrex::ParallelDescriptor::IOProcessor()) {
+            state.front_components.resize(count);
+        }
+
+        for (std::size_t component_index = 0;
+             component_index < count;
+             ++component_index) {
+            int role =
+                amrex::ParallelDescriptor::IOProcessor()
+                    ? static_cast<int>(
+                        state.front_components[
+                            component_index].role)
+                    : 0;
+            amrex::ParallelDescriptor::Bcast(
+                &role,
+                1,
+                io_rank);
+
+            if (role
+                    != static_cast<int>(
+                        FireFrontRole::Outer)
+                && role
+                    != static_cast<int>(
+                        FireFrontRole::Hole)) {
+                throw std::invalid_argument(
+                    "collective Fire restore front role is invalid");
+            }
+
+            unsigned long long vertex_count =
+                amrex::ParallelDescriptor::IOProcessor()
+                    ? static_cast<unsigned long long>(
+                        state.front_components[
+                            component_index]
+                            .vertices_m.size())
+                    : 0ULL;
+            amrex::ParallelDescriptor::Bcast(
+                &vertex_count,
+                1,
+                io_rank);
+
+            if (vertex_count
+                > static_cast<unsigned long long>(
+                    std::numeric_limits<std::size_t>::max()
+                    / 2)) {
+                throw std::overflow_error(
+                    "collective Fire restore component size is not representable");
+            }
+
+            const std::size_t count_vertices =
+                static_cast<std::size_t>(
+                    vertex_count);
+            std::vector<amrex::Real> packed(
+                2 * count_vertices);
+
+            if (amrex::ParallelDescriptor::IOProcessor()) {
+                const auto& vertices =
+                    state.front_components[
+                        component_index]
+                        .vertices_m;
+                for (std::size_t index = 0;
+                     index < count_vertices;
+                     ++index) {
+                    packed[2 * index] =
+                        vertices[index].x;
+                    packed[2 * index + 1] =
+                        vertices[index].y;
+                }
+            }
+
+            if (!packed.empty()) {
+                amrex::ParallelDescriptor::Bcast(
+                    packed.data(),
+                    packed.size(),
+                    io_rank);
+            }
+
+            if (!amrex::ParallelDescriptor::IOProcessor()) {
+                auto& destination =
+                    state.front_components[
+                        component_index];
+                destination.role =
+                    static_cast<FireFrontRole>(role);
+                destination.vertices_m.resize(
+                    count_vertices);
+
+                for (std::size_t index = 0;
+                     index < count_vertices;
+                     ++index) {
+                    destination.vertices_m[index] = {
+                        packed[2 * index],
+                        packed[2 * index + 1]
+                    };
+                }
+            }
+        }
+
+        return;
+    }
+
+    state.front_components.clear();
+
+    unsigned long long vertex_count =
+        amrex::ParallelDescriptor::IOProcessor()
+            ? static_cast<unsigned long long>(
+                state.perimeter_vertices_m.size())
+            : 0ULL;
+    amrex::ParallelDescriptor::Bcast(
+        &vertex_count,
+        1,
+        io_rank);
+
+    if (vertex_count
+        > static_cast<unsigned long long>(
+            std::numeric_limits<std::size_t>::max()
+            / 2)) {
+        throw std::overflow_error(
+            "collective Fire restore perimeter size is not representable");
+    }
+
+    const std::size_t count =
+        static_cast<std::size_t>(vertex_count);
+    std::vector<amrex::Real> packed(
+        2 * count);
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        for (std::size_t index = 0;
+             index < count;
+             ++index) {
+            packed[2 * index] =
+                state.perimeter_vertices_m[index].x;
+            packed[2 * index + 1] =
+                state.perimeter_vertices_m[index].y;
+        }
+    }
+
+    if (!packed.empty()) {
+        amrex::ParallelDescriptor::Bcast(
+            packed.data(),
+            packed.size(),
+            io_rank);
+    }
+
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        state.perimeter_vertices_m.resize(count);
+        for (std::size_t index = 0;
+             index < count;
+             ++index) {
+            state.perimeter_vertices_m[index] = {
+                packed[2 * index],
+                packed[2 * index + 1]
+            };
+        }
+    }
+}
+
 } // namespace
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
@@ -190,7 +411,13 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     amrex::Real initial_time_s,
     ERFFireSpreadConfig config)
     : config_(std::move(config)),
-      perimeter_(std::move(initial_perimeter)),
+      front_(
+          std::vector<FireFrontComponent>{
+              {
+                  FireFrontRole::Outer,
+                  std::move(initial_perimeter)
+              }
+          }),
       burned_fraction_(config_.raster_geometry),
       first_arrival_(config_.raster_geometry),
       combustion_(
@@ -204,21 +431,60 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         current_time_s_);
 
     auto initial_remesh =
-        remesh_perimeter(perimeter_, config_.remesh_options);
-    perimeter_ = std::move(initial_remesh.perimeter);
+        remesh_front(front_, config_.remesh_options);
+    front_ = std::move(initial_remesh.front);
 
     (void)first_arrival_.initialize_from_perimeter(
-        perimeter_, current_time_s_);
-    (void)burned_fraction_.update_from_perimeter(perimeter_);
+        perimeter(), current_time_s_);
+    (void)burned_fraction_.update_from_perimeter(perimeter());
     (void)combustion_.initialize_from_burned_fraction(
         burned_fraction_);
+}
+
+ERFFireSpreadRuntime::ERFFireSpreadRuntime(
+    FireFront initial_front,
+    amrex::Real initial_time_s,
+    ERFFireSpreadConfig config)
+    : config_(std::move(config)),
+      front_(std::move(initial_front)),
+      burned_fraction_(config_.raster_geometry),
+      first_arrival_(config_.raster_geometry),
+      combustion_(
+          config_.raster_geometry,
+          config_.combustion_parameters,
+          config_.combustion_options),
+      current_time_s_(initial_time_s)
+{
+    validate_runtime_scalars(
+        config_,
+        current_time_s_);
+
+    auto initial_remesh =
+        remesh_front(
+            front_,
+            config_.remesh_options);
+    front_ = std::move(initial_remesh.front);
+
+    (void)first_arrival_.initialize_from_front(
+        front_,
+        current_time_s_);
+    (void)burned_fraction_.update_from_front(
+        front_);
+    (void)combustion_.initialize_from_burned_fraction(
+        burned_fraction_);
+}
+
+const FireFront&
+ERFFireSpreadRuntime::front() const
+{
+    return front_;
 }
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     ERFFireSpreadRuntimeState state,
     RestoreStateTag)
     : config_(std::move(state.config)),
-      perimeter_(std::move(state.perimeter_vertices_m)),
+      front_(restore_front_from_state(state)),
       burned_fraction_(
           config_.raster_geometry,
           std::move(state.burned_fraction)),
@@ -237,8 +503,8 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         current_time_s_);
 
     // Validate remeshing controls without changing restored topology.
-    (void)remesh_perimeter(
-        perimeter_,
+    (void)remesh_front(
+        front_,
         config_.remesh_options);
 
     require(
@@ -271,36 +537,40 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         + static_cast<amrex::Real>(geometry.ny)
             * geometry.dy_m;
 
-    for (const FireVec2& vertex : perimeter_.vertices_m()) {
-        require(
-            std::isfinite(vertex.x)
-                && std::isfinite(vertex.y)
-                && vertex.x >= geometry.xlo_m
-                && vertex.x <= xhi
-                && vertex.y >= geometry.ylo_m
-                && vertex.y <= yhi,
-            "restored fire perimeter lies outside its raster geometry");
+    for (const FireFrontComponent& component :
+         front_.components()) {
+        for (const FireVec2& vertex :
+             component.perimeter.vertices_m()) {
+            require(
+                std::isfinite(vertex.x)
+                    && std::isfinite(vertex.y)
+                    && vertex.x >= geometry.xlo_m
+                    && vertex.x <= xhi
+                    && vertex.y >= geometry.ylo_m
+                    && vertex.y <= yhi,
+                "restored fire front lies outside its raster geometry");
+        }
     }
 
 }
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     ERFFireSpreadConfig config,
-    FirePerimeter perimeter,
+    FireFront front,
     FireBurnedFractionRaster burned_fraction,
     FireFirstArrivalRaster first_arrival,
     FireCombustionRaster combustion,
     amrex::Real current_time_s,
     CollectiveRestoreStateTag)
     : config_(std::move(config)),
-      perimeter_(std::move(perimeter)),
+      front_(std::move(front)),
       burned_fraction_(std::move(burned_fraction)),
       first_arrival_(std::move(first_arrival)),
       combustion_(std::move(combustion)),
       current_time_s_(current_time_s)
 {
     validate_runtime_scalars(config_, current_time_s_);
-    (void)remesh_perimeter(perimeter_, config_.remesh_options);
+    (void)remesh_front(front_, config_.remesh_options);
 
     require(
         first_arrival_.has_initial_condition(),
@@ -325,34 +595,90 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     const amrex::Real yhi =
         geometry.ylo_m
         + static_cast<amrex::Real>(geometry.ny) * geometry.dy_m;
-    for (const FireVec2& vertex : perimeter_.vertices_m()) {
-        require(
-            std::isfinite(vertex.x)
-                && std::isfinite(vertex.y)
-                && vertex.x >= geometry.xlo_m
-                && vertex.x <= xhi
-                && vertex.y >= geometry.ylo_m
-                && vertex.y <= yhi,
-            "restored fire perimeter lies outside its raster geometry");
+    for (const FireFrontComponent& component :
+         front_.components()) {
+        for (const FireVec2& vertex :
+             component.perimeter.vertices_m()) {
+            require(
+                std::isfinite(vertex.x)
+                    && std::isfinite(vertex.y)
+                    && vertex.x >= geometry.xlo_m
+                    && vertex.x <= xhi
+                    && vertex.y >= geometry.ylo_m
+                    && vertex.y <= yhi,
+                "restored fire front lies outside its raster geometry");
+        }
     }
 }
 
 ERFFireSpreadRuntimeState
 ERFFireSpreadRuntime::snapshot_state() const
 {
-    return {
-        config_,
-        perimeter_.vertices_m(),
-        burned_fraction_.snapshot_state(),
-        first_arrival_.snapshot_state(),
-        combustion_.snapshot_state(),
-        current_time_s_};
+    ERFFireSpreadRuntimeState state;
+    state.config = config_;
+
+    const auto& components =
+        front_.components();
+
+    if (components.size() == 1
+        && components.front().role
+            == FireFrontRole::Outer) {
+        state.perimeter_vertices_m =
+            components.front()
+                .perimeter.vertices_m();
+    }
+
+    state.front_components.reserve(
+        components.size());
+
+    for (const FireFrontComponent& component :
+         components) {
+        state.front_components.push_back({
+            component.role,
+            component.perimeter.vertices_m()
+        });
+    }
+
+    state.burned_fraction =
+        burned_fraction_.snapshot_state();
+    state.first_arrival =
+        first_arrival_.snapshot_state();
+    state.combustion =
+        combustion_.snapshot_state();
+    state.current_time_s =
+        current_time_s_;
+
+    return state;
 }
 
 ERFFireSpreadRuntimeState
 ERFFireSpreadRuntime::
 collective_snapshot_state_to_io_rank() const
 {
+    ERFFireSpreadRuntimeState state;
+    state.config = config_;
+
+    const auto& components =
+        front_.components();
+
+    if (components.size() == 1
+        && components.front().role
+            == FireFrontRole::Outer) {
+        state.perimeter_vertices_m =
+            components.front()
+                .perimeter.vertices_m();
+    }
+
+    state.front_components.reserve(
+        components.size());
+    for (const FireFrontComponent& component :
+         components) {
+        state.front_components.push_back({
+            component.role,
+            component.perimeter.vertices_m()
+        });
+    }
+
     FireBurnedFractionRasterState burned =
         burned_fraction_
             .collective_snapshot_state_to_io_rank();
@@ -363,13 +689,16 @@ collective_snapshot_state_to_io_rank() const
         combustion_
             .collective_snapshot_state_to_io_rank();
 
-    return {
-        config_,
-        perimeter_.vertices_m(),
-        std::move(burned),
-        std::move(arrival),
-        std::move(combustion),
-        current_time_s_};
+    state.burned_fraction =
+        std::move(burned);
+    state.first_arrival =
+        std::move(arrival);
+    state.combustion =
+        std::move(combustion);
+    state.current_time_s =
+        current_time_s_;
+
+    return state;
 }
 
 ERFFireSpreadRuntime
@@ -402,42 +731,216 @@ ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
     const int io_rank =
         amrex::ParallelDescriptor::IOProcessorNumber();
 
-    unsigned long long vertex_count =
+    unsigned long long component_count =
         amrex::ParallelDescriptor::IOProcessor()
             ? static_cast<unsigned long long>(
-                state.perimeter_vertices_m.size())
+                state.front_components.size())
             : 0ULL;
-    amrex::ParallelDescriptor::Bcast(&vertex_count, 1, io_rank);
+    amrex::ParallelDescriptor::Bcast(
+        &component_count,
+        1,
+        io_rank);
 
-    if (vertex_count
+    if (component_count
         > static_cast<unsigned long long>(
-            std::numeric_limits<std::size_t>::max() / 2)) {
+            std::numeric_limits<std::size_t>::max())) {
         throw std::overflow_error(
-            "collective Fire restore perimeter size is not representable");
+            "collective Fire restore component count is not representable");
     }
-    const std::size_t count =
-        static_cast<std::size_t>(vertex_count);
-    std::vector<amrex::Real> packed_vertices(2 * count);
-    if (amrex::ParallelDescriptor::IOProcessor()) {
-        for (std::size_t index = 0; index < count; ++index) {
-            packed_vertices[2 * index] =
-                state.perimeter_vertices_m[index].x;
-            packed_vertices[2 * index + 1] =
-                state.perimeter_vertices_m[index].y;
+
+    if (component_count != 0ULL) {
+        const std::size_t count =
+            static_cast<std::size_t>(
+                component_count);
+
+        std::vector<int> roles(count);
+        std::vector<unsigned long long>
+            vertex_counts(count);
+
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            for (std::size_t component = 0;
+                 component < count;
+                 ++component) {
+                roles[component] =
+                    static_cast<int>(
+                        state.front_components[
+                            component].role);
+                vertex_counts[component] =
+                    static_cast<unsigned long long>(
+                        state.front_components[
+                            component]
+                            .vertices_m.size());
+            }
         }
-    }
-    if (!packed_vertices.empty()) {
+
         amrex::ParallelDescriptor::Bcast(
-            packed_vertices.data(),
-            packed_vertices.size(),
+            roles.data(),
+            roles.size(),
             io_rank);
-    }
-    if (!amrex::ParallelDescriptor::IOProcessor()) {
-        state.perimeter_vertices_m.resize(count);
-        for (std::size_t index = 0; index < count; ++index) {
-            state.perimeter_vertices_m[index] = {
-                packed_vertices[2 * index],
-                packed_vertices[2 * index + 1]};
+        amrex::ParallelDescriptor::Bcast(
+            vertex_counts.data(),
+            vertex_counts.size(),
+            io_rank);
+
+        std::size_t total_vertices = 0;
+        for (std::size_t component = 0;
+             component < count;
+             ++component) {
+            if (roles[component]
+                    != static_cast<int>(
+                        FireFrontRole::Outer)
+                && roles[component]
+                    != static_cast<int>(
+                        FireFrontRole::Hole)) {
+                throw std::invalid_argument(
+                    "collective Fire restore front role is invalid");
+            }
+
+            if (vertex_counts[component]
+                > static_cast<unsigned long long>(
+                    std::numeric_limits<std::size_t>::max()
+                    - total_vertices)) {
+                throw std::overflow_error(
+                    "collective Fire restore front vertex count is not representable");
+            }
+
+            total_vertices +=
+                static_cast<std::size_t>(
+                    vertex_counts[component]);
+        }
+
+        if (total_vertices
+            > std::numeric_limits<std::size_t>::max()
+                / 2) {
+            throw std::overflow_error(
+                "collective Fire restore packed front size is not representable");
+        }
+
+        std::vector<amrex::Real>
+            packed_vertices(
+                2 * total_vertices);
+
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            std::size_t offset = 0;
+            for (std::size_t component = 0;
+                 component < count;
+                 ++component) {
+                const auto& vertices =
+                    state.front_components[
+                        component].vertices_m;
+
+                for (const FireVec2& vertex :
+                     vertices) {
+                    packed_vertices[
+                        2 * offset] =
+                            vertex.x;
+                    packed_vertices[
+                        2 * offset + 1] =
+                            vertex.y;
+                    ++offset;
+                }
+            }
+        }
+
+        if (!packed_vertices.empty()) {
+            amrex::ParallelDescriptor::Bcast(
+                packed_vertices.data(),
+                packed_vertices.size(),
+                io_rank);
+        }
+
+        if (!amrex::ParallelDescriptor::IOProcessor()) {
+            state.front_components.resize(
+                count);
+
+            std::size_t offset = 0;
+            for (std::size_t component = 0;
+                 component < count;
+                 ++component) {
+                auto& destination =
+                    state.front_components[
+                        component];
+
+                destination.role =
+                    static_cast<FireFrontRole>(
+                        roles[component]);
+
+                const std::size_t vertex_count =
+                    static_cast<std::size_t>(
+                        vertex_counts[component]);
+                destination.vertices_m.resize(
+                    vertex_count);
+
+                for (std::size_t index = 0;
+                     index < vertex_count;
+                     ++index) {
+                    destination.vertices_m[index] = {
+                        packed_vertices[
+                            2 * offset],
+                        packed_vertices[
+                            2 * offset + 1]
+                    };
+                    ++offset;
+                }
+            }
+        }
+    } else {
+        unsigned long long vertex_count =
+            amrex::ParallelDescriptor::IOProcessor()
+                ? static_cast<unsigned long long>(
+                    state.perimeter_vertices_m.size())
+                : 0ULL;
+        amrex::ParallelDescriptor::Bcast(
+            &vertex_count,
+            1,
+            io_rank);
+
+        if (vertex_count
+            > static_cast<unsigned long long>(
+                std::numeric_limits<std::size_t>::max()
+                / 2)) {
+            throw std::overflow_error(
+                "collective Fire restore perimeter size is not representable");
+        }
+
+        const std::size_t count =
+            static_cast<std::size_t>(
+                vertex_count);
+        std::vector<amrex::Real>
+            packed_vertices(2 * count);
+
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            for (std::size_t index = 0;
+                 index < count;
+                 ++index) {
+                packed_vertices[2 * index] =
+                    state.perimeter_vertices_m[
+                        index].x;
+                packed_vertices[2 * index + 1] =
+                    state.perimeter_vertices_m[
+                        index].y;
+            }
+        }
+
+        if (!packed_vertices.empty()) {
+            amrex::ParallelDescriptor::Bcast(
+                packed_vertices.data(),
+                packed_vertices.size(),
+                io_rank);
+        }
+
+        if (!amrex::ParallelDescriptor::IOProcessor()) {
+            state.perimeter_vertices_m.resize(
+                count);
+            for (std::size_t index = 0;
+                 index < count;
+                 ++index) {
+                state.perimeter_vertices_m[index] = {
+                    packed_vertices[2 * index],
+                    packed_vertices[
+                        2 * index + 1]
+                };
+            }
         }
     }
 
@@ -464,8 +967,8 @@ ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
             "restored fire combustion history is not synchronized with burned fraction");
     }
 
-    FirePerimeter perimeter(
-        std::move(state.perimeter_vertices_m));
+    FireFront front =
+        restore_front_from_state(state);
     FireBurnedFractionRaster burned =
         FireBurnedFractionRaster::collective_restore_from_io_rank_state(
             state.config.raster_geometry,
@@ -483,7 +986,7 @@ ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
 
     return ERFFireSpreadRuntime(
         std::move(state.config),
-        std::move(perimeter),
+        std::move(front),
         std::move(burned),
         std::move(arrival),
         std::move(combustion),
@@ -496,58 +999,17 @@ ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
     ERFFireSpreadRuntimeState state,
     const amrex::MultiFab& checkpoint_raster)
 {
-    const int io_rank =
-        amrex::ParallelDescriptor::IOProcessorNumber();
-
-    unsigned long long vertex_count =
-        amrex::ParallelDescriptor::IOProcessor()
-            ? static_cast<unsigned long long>(
-                state.perimeter_vertices_m.size())
-            : 0ULL;
-    amrex::ParallelDescriptor::Bcast(
-        &vertex_count, 1, io_rank);
-
-    if (vertex_count
-        > static_cast<unsigned long long>(
-            std::numeric_limits<std::size_t>::max() / 2)) {
-        throw std::overflow_error(
-            "collective Fire restore perimeter size is not representable");
-    }
-    const std::size_t count =
-        static_cast<std::size_t>(vertex_count);
-    std::vector<amrex::Real> packed_vertices(2 * count);
-    if (amrex::ParallelDescriptor::IOProcessor()) {
-        for (std::size_t index = 0; index < count; ++index) {
-            packed_vertices[2 * index] =
-                state.perimeter_vertices_m[index].x;
-            packed_vertices[2 * index + 1] =
-                state.perimeter_vertices_m[index].y;
-        }
-    }
-    if (!packed_vertices.empty()) {
-        amrex::ParallelDescriptor::Bcast(
-            packed_vertices.data(),
-            packed_vertices.size(),
-            io_rank);
-    }
-    if (!amrex::ParallelDescriptor::IOProcessor()) {
-        state.perimeter_vertices_m.resize(count);
-        for (std::size_t index = 0; index < count; ++index) {
-            state.perimeter_vertices_m[index] = {
-                packed_vertices[2 * index],
-                packed_vertices[2 * index + 1]};
-        }
-    }
+    collective_broadcast_front_state(state);
 
     if (checkpoint_raster.nComp()
             != ERFFireCheckpointRasterComponents::component_count
         || checkpoint_raster.nGrow() != 0) {
         throw std::invalid_argument(
-            "ERF-Fire version-2 checkpoint raster has incompatible components or ghosts");
+            "ERF-Fire distributed checkpoint raster has incompatible components or ghosts");
     }
 
-    FirePerimeter perimeter(
-        std::move(state.perimeter_vertices_m));
+    FireFront front =
+        restore_front_from_state(state);
     FireBurnedFractionRaster burned =
         FireBurnedFractionRaster::
             collective_restore_from_checkpoint_raster(
@@ -642,7 +1104,7 @@ ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
 
     return ERFFireSpreadRuntime(
         std::move(state.config),
-        std::move(perimeter),
+        std::move(front),
         std::move(burned),
         std::move(arrival),
         std::move(combustion),
@@ -822,7 +1284,7 @@ ERFFireSpreadRuntime::advance_wind_impl(
 
     FirePerimeter advanced =
         advance_perimeter_rk2(
-            perimeter_, start_time_s, dt_s, normal_speed);
+            perimeter(), start_time_s, dt_s, normal_speed);
 
     // RK2 samples current and midpoint locations. Explicitly reject a final
     // perimeter outside the supported physical environment before committing
@@ -832,7 +1294,7 @@ ERFFireSpreadRuntime::advance_wind_impl(
     FireFirstArrivalRaster next_arrival = first_arrival_;
     const FireFirstArrivalRasterUpdate arrival_update =
         next_arrival.update_from_sweep(
-            perimeter_,
+            perimeter(),
             advanced,
             start_time_s,
             end_time_s,
@@ -841,14 +1303,14 @@ ERFFireSpreadRuntime::advance_wind_impl(
     FireBurnedFractionRaster next_burned = burned_fraction_;
     const FireRasterBurnedAreaUpdate burned_update =
         next_burned.update_from_linear_sweep(
-            perimeter_,
+            perimeter(),
             advanced,
             config_.combustion_options.temporal_substeps);
 
     FireCombustionRaster next_combustion = combustion_;
     const FireCombustionRasterAdvance combustion_update =
         next_combustion.advance_from_linear_sweep(
-            perimeter_,
+            perimeter(),
             advanced,
             burned_fraction_,
             next_burned,
@@ -877,7 +1339,14 @@ ERFFireSpreadRuntime::advance_wind_impl(
         combustion_update.water_released_increment_kg,
         combustion_update.totals.water_released_kg};
 
-    perimeter_ = std::move(remeshed.perimeter);
+    front_ =
+        FireFront(
+            std::vector<FireFrontComponent>{
+                {
+                    FireFrontRole::Outer,
+                    std::move(remeshed.perimeter)
+                }
+            });
     first_arrival_ = std::move(next_arrival);
     burned_fraction_ = std::move(next_burned);
     combustion_ = std::move(next_combustion);
@@ -1081,12 +1550,431 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
         return speeds;
     };
 
-    FirePerimeter advanced =
-        advance_perimeter_rk2_batched(
-            perimeter_,
+    const bool single_outer =
+        front_.components().size() == 1
+        && front_.components().front().role
+            == FireFrontRole::Outer;
+
+    if (!single_outer) {
+        FireFront advanced_front =
+            advance_front_rk2_batched(
+                front_,
+                start_time_s,
+                dt_s,
+                normal_speeds);
+
+        const auto& geometry =
+            config_.raster_geometry;
+        const amrex::Real xhi_m =
+            geometry.xlo_m
+            + static_cast<amrex::Real>(
+                geometry.nx)
+                * geometry.dx_m;
+        const amrex::Real yhi_m =
+            geometry.ylo_m
+            + static_cast<amrex::Real>(
+                geometry.ny)
+                * geometry.dy_m;
+
+        for (const FireFrontComponent& component :
+             advanced_front.components()) {
+            for (const FireVec2& vertex :
+                 component.perimeter.vertices_m()) {
+                if (!std::isfinite(vertex.x)
+                    || !std::isfinite(vertex.y)
+                    || vertex.x < geometry.xlo_m
+                    || vertex.x > xhi_m
+                    || vertex.y < geometry.ylo_m
+                    || vertex.y > yhi_m) {
+                    throw std::out_of_range(
+                        "fire spread propagated front leaves the physical environment domain");
+                }
+            }
+        }
+
+        FireFirstArrivalRaster next_arrival =
+            first_arrival_;
+        const FireFirstArrivalRasterUpdate
+            arrival_update =
+                next_arrival
+                    .update_from_front_linear_sweep(
+                        front_,
+                        advanced_front,
+                        start_time_s,
+                        end_time_s,
+                        config_
+                            .arrival_time_tolerance_s,
+                        config_
+                            .combustion_options
+                            .temporal_substeps);
+
+        FireBurnedFractionRaster next_burned =
+            burned_fraction_;
+        const FireRasterBurnedAreaUpdate
+            burned_update =
+                next_burned
+                    .update_from_front_linear_sweep(
+                        front_,
+                        advanced_front,
+                        config_
+                            .combustion_options
+                            .temporal_substeps);
+
+        FireCombustionRaster next_combustion =
+            combustion_;
+        const FireCombustionRasterAdvance
+            combustion_update =
+                next_combustion
+                    .advance_from_front_linear_sweep(
+                        front_,
+                        advanced_front,
+                        burned_fraction_,
+                        next_burned,
+                        dt_s);
+
+        const auto vertex_count =
+            [](const FireFront& front) {
+                std::size_t count = 0;
+                for (const FireFrontComponent& component :
+                     front.components()) {
+                    count +=
+                        component.perimeter.size();
+                }
+                return count;
+            };
+
+        const std::size_t
+            pre_remesh_vertex_count =
+                vertex_count(advanced_front);
+
+        FireFrontRemeshResult remeshed =
+            remesh_front(
+                advanced_front,
+                config_.remesh_options);
+
+        const std::size_t
+            post_remesh_vertex_count =
+                vertex_count(remeshed.front);
+
+        ERFFireStepDiagnostics diagnostics{
+            start_time_s,
+            end_time_s,
+            pre_remesh_vertex_count,
+            post_remesh_vertex_count,
+            remeshed.stats.vertices_removed,
+            remeshed.stats.vertices_added,
+            arrival_update
+                .newly_arrived_cell_count,
+            arrival_update.arrived_cell_count,
+            burned_update.newly_burned_area_m2,
+            burned_update.burned_area_m2,
+            combustion_update
+                .newly_consumed_dry_fuel_kg,
+            combustion_update
+                .totals.remaining_dry_fuel_kg,
+            combustion_update
+                .totals.consumed_dry_fuel_kg,
+            combustion_update
+                .sensible_energy_increment_j,
+            combustion_update
+                .totals.sensible_energy_j,
+            combustion_update
+                .water_released_increment_kg,
+            combustion_update
+                .totals.water_released_kg};
+
+        front_ = std::move(remeshed.front);
+        first_arrival_ =
+            std::move(next_arrival);
+        burned_fraction_ =
+            std::move(next_burned);
+        combustion_ =
+            std::move(next_combustion);
+        current_time_s_ =
+            end_time_s;
+
+        return diagnostics;
+    }
+
+    const FirePerimeter& start_perimeter =
+        perimeter();
+
+    FireFrontAdvanceResult topology_advance =
+        advance_perimeter_rk2_batched_until_topology_event(
+            start_perimeter,
             start_time_s,
             dt_s,
             normal_speeds);
+
+    if (topology_advance.topology_event.has_value()) {
+        const amrex::Real event_dt_s =
+            topology_advance.advanced_dt_s;
+
+        require(
+            std::isfinite(event_dt_s)
+                && event_dt_s > amrex::Real(0.0)
+                && event_dt_s <= dt_s,
+            "fire topology event consumed an invalid timestep");
+
+        const amrex::Real event_time_s =
+            start_time_s + event_dt_s;
+
+        require(
+            std::isfinite(event_time_s)
+                && event_time_s > start_time_s
+                && event_time_s <= end_time_s,
+            "fire topology event time is invalid");
+
+        const FireFront event_front =
+            topology_advance.front;
+
+        FireFirstArrivalRaster next_arrival =
+            first_arrival_;
+        const FireFirstArrivalRasterUpdate
+            event_arrival_update =
+                next_arrival
+                    .update_from_topology_event_sweep(
+                        start_perimeter,
+                        topology_advance
+                            .terminal_vertices_m,
+                        event_front,
+                        start_time_s,
+                        event_time_s,
+                        std::min(
+                            config_
+                                .arrival_time_tolerance_s,
+                            event_dt_s));
+
+        FireBurnedFractionRaster next_burned =
+            burned_fraction_;
+        const FireRasterBurnedAreaUpdate
+            event_burned_update =
+                next_burned
+                    .update_from_topology_event_sweep(
+                        start_perimeter,
+                        topology_advance
+                            .terminal_vertices_m,
+                        event_front,
+                        config_
+                            .combustion_options
+                            .temporal_substeps);
+
+        FireCombustionRaster next_combustion =
+            combustion_;
+        const FireCombustionRasterAdvance
+            event_combustion_update =
+                next_combustion
+                    .advance_from_topology_event_sweep(
+                        start_perimeter,
+                        topology_advance
+                            .terminal_vertices_m,
+                        event_front,
+                        burned_fraction_,
+                        next_burned,
+                        event_dt_s);
+
+        std::size_t newly_arrived_cell_count =
+            event_arrival_update
+                .newly_arrived_cell_count;
+        std::size_t arrived_cell_count =
+            event_arrival_update
+                .arrived_cell_count;
+
+        amrex::Real newly_burned_area_m2 =
+            event_burned_update
+                .newly_burned_area_m2;
+
+        amrex::Real
+            newly_consumed_dry_fuel_kg =
+                event_combustion_update
+                    .newly_consumed_dry_fuel_kg;
+        amrex::Real sensible_energy_increment_j =
+            event_combustion_update
+                .sensible_energy_increment_j;
+        amrex::Real
+            water_released_increment_kg =
+                event_combustion_update
+                    .water_released_increment_kg;
+
+        FireFront final_front =
+            event_front;
+
+        const amrex::Real remaining_dt_s =
+            end_time_s - event_time_s;
+
+        require(
+            std::isfinite(remaining_dt_s)
+                && remaining_dt_s
+                    >= amrex::Real(0.0),
+            "fire topology-event remainder is invalid");
+
+        if (remaining_dt_s > amrex::Real(0.0)) {
+            final_front =
+                advance_front_rk2_batched(
+                    event_front,
+                    event_time_s,
+                    remaining_dt_s,
+                    normal_speeds);
+
+            const FireFirstArrivalRasterUpdate
+                remainder_arrival_update =
+                    next_arrival
+                        .update_from_front_linear_sweep(
+                            event_front,
+                            final_front,
+                            event_time_s,
+                            end_time_s,
+                            std::min(
+                                config_
+                                    .arrival_time_tolerance_s,
+                                remaining_dt_s),
+                            config_
+                                .combustion_options
+                                .temporal_substeps);
+
+            newly_arrived_cell_count +=
+                remainder_arrival_update
+                    .newly_arrived_cell_count;
+            arrived_cell_count =
+                remainder_arrival_update
+                    .arrived_cell_count;
+
+            const FireBurnedFractionRaster
+                burned_at_event =
+                    next_burned;
+
+            const FireRasterBurnedAreaUpdate
+                remainder_burned_update =
+                    next_burned
+                        .update_from_front_linear_sweep(
+                            event_front,
+                            final_front,
+                            config_
+                                .combustion_options
+                                .temporal_substeps);
+
+            newly_burned_area_m2 +=
+                remainder_burned_update
+                    .newly_burned_area_m2;
+
+            const FireCombustionRasterAdvance
+                remainder_combustion_update =
+                    next_combustion
+                        .advance_from_front_linear_sweep(
+                            event_front,
+                            final_front,
+                            burned_at_event,
+                            next_burned,
+                            remaining_dt_s);
+
+            newly_consumed_dry_fuel_kg +=
+                remainder_combustion_update
+                    .newly_consumed_dry_fuel_kg;
+            sensible_energy_increment_j +=
+                remainder_combustion_update
+                    .sensible_energy_increment_j;
+            water_released_increment_kg +=
+                remainder_combustion_update
+                    .water_released_increment_kg;
+        }
+
+        const auto& geometry =
+            config_.raster_geometry;
+        const amrex::Real xhi_m =
+            geometry.xlo_m
+            + static_cast<amrex::Real>(
+                geometry.nx)
+                * geometry.dx_m;
+        const amrex::Real yhi_m =
+            geometry.ylo_m
+            + static_cast<amrex::Real>(
+                geometry.ny)
+                * geometry.dy_m;
+
+        for (const FireFrontComponent& component :
+             final_front.components()) {
+            for (const FireVec2& vertex :
+                 component.perimeter.vertices_m()) {
+                if (!std::isfinite(vertex.x)
+                    || !std::isfinite(vertex.y)
+                    || vertex.x < geometry.xlo_m
+                    || vertex.x > xhi_m
+                    || vertex.y < geometry.ylo_m
+                    || vertex.y > yhi_m) {
+                    throw std::out_of_range(
+                        "fire spread propagated front leaves the physical environment domain");
+                }
+            }
+        }
+
+        const auto vertex_count =
+            [](const FireFront& front) {
+                std::size_t count = 0;
+                for (const FireFrontComponent& component :
+                     front.components()) {
+                    count +=
+                        component.perimeter.size();
+                }
+                return count;
+            };
+
+        const std::size_t
+            pre_remesh_vertex_count =
+                vertex_count(final_front);
+
+        FireFrontRemeshResult remeshed =
+            remesh_front(
+                final_front,
+                config_.remesh_options);
+
+        const std::size_t
+            post_remesh_vertex_count =
+                vertex_count(remeshed.front);
+
+        const auto combustion_totals =
+            next_combustion.totals();
+
+        ERFFireStepDiagnostics diagnostics{
+            start_time_s,
+            end_time_s,
+            pre_remesh_vertex_count,
+            post_remesh_vertex_count,
+            remeshed.stats.vertices_removed,
+            remeshed.stats.vertices_added,
+            newly_arrived_cell_count,
+            arrived_cell_count,
+            newly_burned_area_m2,
+            next_burned.burned_area_m2(),
+            newly_consumed_dry_fuel_kg,
+            combustion_totals
+                .remaining_dry_fuel_kg,
+            combustion_totals
+                .consumed_dry_fuel_kg,
+            sensible_energy_increment_j,
+            combustion_totals
+                .sensible_energy_j,
+            water_released_increment_kg,
+            combustion_totals
+                .water_released_kg};
+
+        front_ = std::move(remeshed.front);
+        first_arrival_ =
+            std::move(next_arrival);
+        burned_fraction_ =
+            std::move(next_burned);
+        combustion_ =
+            std::move(next_combustion);
+        current_time_s_ =
+            end_time_s;
+
+        return diagnostics;
+    }
+
+    const FirePerimeter& advanced =
+        topology_advance.front
+            .components()
+            .front()
+            .perimeter;
 
     const auto& geometry = config_.raster_geometry;
     const amrex::Real xhi_m =
@@ -1112,7 +2000,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
     FireFirstArrivalRaster next_arrival = first_arrival_;
     const FireFirstArrivalRasterUpdate arrival_update =
         next_arrival.update_from_sweep(
-            perimeter_,
+            perimeter(),
             advanced,
             start_time_s,
             end_time_s,
@@ -1121,14 +2009,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
     FireBurnedFractionRaster next_burned = burned_fraction_;
     const FireRasterBurnedAreaUpdate burned_update =
         next_burned.update_from_linear_sweep(
-            perimeter_,
+            perimeter(),
             advanced,
             config_.combustion_options.temporal_substeps);
 
     FireCombustionRaster next_combustion = combustion_;
     const FireCombustionRasterAdvance combustion_update =
         next_combustion.advance_from_linear_sweep(
-            perimeter_,
+            perimeter(),
             advanced,
             burned_fraction_,
             next_burned,
@@ -1160,7 +2048,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
         combustion_update.water_released_increment_kg,
         combustion_update.totals.water_released_kg};
 
-    perimeter_ = std::move(remeshed.perimeter);
+    front_ =
+        FireFront(
+            std::vector<FireFrontComponent>{
+                {
+                    FireFrontRole::Outer,
+                    std::move(remeshed.perimeter)
+                }
+            });
     first_arrival_ = std::move(next_arrival);
     burned_fraction_ = std::move(next_burned);
     combustion_ = std::move(next_combustion);

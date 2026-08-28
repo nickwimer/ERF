@@ -1,6 +1,7 @@
 #ifndef ERF_FIRE_BURNED_FRACTION_RASTER_H
 #define ERF_FIRE_BURNED_FRACTION_RASTER_H
 
+#include <ERF_FireTypes.H>
 #include <ERF_FireBurnedFraction.H>
 #include <ERF_FireRasterGeometry.H>
 #include <ERF_FireSurfaceLayout.H>
@@ -15,6 +16,7 @@ namespace ERFFire
 {
 
 class FirePerimeter;
+class FireFront;
 
 /**
  * Aggregate result of updating the persistent burned-fraction raster.
@@ -146,6 +148,30 @@ public:
 
     [[nodiscard]] FireRasterBurnedAreaUpdate update_from_perimeter(
         const FirePerimeter& perimeter);
+
+    [[nodiscard]] FireRasterBurnedAreaUpdate update_from_front(
+        const FireFront& front);
+
+    [[nodiscard]] FireRasterBurnedAreaUpdate
+    update_from_front_linear_sweep(
+        const FireFront& start_front,
+        const FireFront& end_front,
+        std::size_t temporal_substeps);
+
+    /**
+     * Update monotone burn history across the pre-event linear motion from
+     * one simple perimeter to its first topology-changing contact.
+     *
+     * event_vertices_m preserves the start-perimeter vertex correspondence
+     * at the contact instant. event_front is the resolved Outer/Hole topology
+     * at that same instant.
+     */
+    [[nodiscard]] FireRasterBurnedAreaUpdate
+    update_from_topology_event_sweep(
+        const FirePerimeter& start_perimeter,
+        const std::vector<FireVec2>& event_vertices_m,
+        const FireFront& event_front,
+        std::size_t temporal_substeps);
 
     [[nodiscard]] FireRasterBurnedAreaUpdate update_from_linear_sweep(
         const FirePerimeter& start_perimeter,

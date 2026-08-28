@@ -5,6 +5,8 @@
 
 #include <AMReX_REAL.H>
 
+#include <vector>
+
 namespace ERFFire
 {
 
@@ -55,6 +57,25 @@ fire_cell_first_arrival_time_linear_sweep(
     const FireCartesianCell2D& cell,
     amrex::Real start_time_s,
     amrex::Real end_time_s,
+    amrex::Real time_tolerance_s);
+
+/**
+ * First positive-area arrival during motion from one simple perimeter to its
+ * first topology-changing contact.
+ *
+ * event_vertices_m preserves the start-perimeter vertex correspondence at
+ * the contact instant. For every alpha < 1 the boundary is the ordinary
+ * linearly interpolated simple perimeter. The exact alpha == 1 endpoint is
+ * represented by event_front rather than by the raw self-contact boundary.
+ */
+[[nodiscard]] FireCellArrivalResult
+fire_cell_first_arrival_time_topology_event_sweep(
+    const FirePerimeter& start_perimeter,
+    const std::vector<FireVec2>& event_vertices_m,
+    const FireFront& event_front,
+    const FireCartesianCell2D& cell,
+    amrex::Real start_time_s,
+    amrex::Real event_time_s,
     amrex::Real time_tolerance_s);
 
 } // namespace ERFFire
