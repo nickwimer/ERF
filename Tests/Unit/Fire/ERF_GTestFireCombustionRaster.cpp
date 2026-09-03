@@ -366,6 +366,125 @@ TEST(
         Real(0.0));
 }
 
+TEST(
+    FireCombustionRaster,
+    FrontTopologyEventSweepMatchesHoleExtinctionBurnHistory)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        4,
+        4,
+        Real(0.0),
+        Real(0.0),
+        Real(1.0),
+        Real(1.0)
+    };
+
+    const FirePerimeter outer(
+        std::vector<FireVec2>{
+            {Real(0.0), Real(0.0)},
+            {Real(4.0), Real(0.0)},
+            {Real(4.0), Real(4.0)},
+            {Real(0.0), Real(4.0)}
+        });
+
+    const FirePerimeter hole(
+        std::vector<FireVec2>{
+            {Real(1.0), Real(1.0)},
+            {Real(3.0), Real(1.0)},
+            {Real(1.0), Real(3.0)}
+        });
+
+    const FireFront start_front(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                outer
+            },
+            {
+                ERFFire::FireFrontRole::Hole,
+                hole
+            }
+        });
+
+    std::vector<std::vector<FireVec2>>
+        event_vertices_m{
+            outer.vertices_m(),
+            hole.vertices_m()
+        };
+
+    event_vertices_m[1][0] = {
+        Real(2.0),
+        Real(2.0)
+    };
+
+    const FireFront event_front(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                outer
+            }
+        });
+
+    FireBurnedFractionRaster burned_before(
+        geometry);
+    (void)burned_before.update_from_front(
+        start_front);
+
+    FireBurnedFractionRaster burned_after =
+        burned_before;
+    (void)burned_after
+        .update_from_front_topology_event_sweep(
+            start_front,
+            event_vertices_m,
+            event_front,
+            4U);
+
+    EXPECT_NEAR(
+        burned_before.burned_area_m2(),
+        Real(14.0),
+        Real(1.0e-12));
+    EXPECT_NEAR(
+        burned_after.burned_area_m2(),
+        Real(16.0),
+        Real(1.0e-12));
+
+    FireCombustionRaster combustion(
+        geometry,
+        synthetic_parameters(),
+        FireCombustionRasterOptions{4U});
+
+    (void)combustion.initialize_from_burned_fraction(
+        burned_before);
+
+    const auto update =
+        combustion
+            .advance_from_front_topology_event_sweep(
+                start_front,
+                event_vertices_m,
+                event_front,
+                burned_before,
+                burned_after,
+                Real(2.0));
+
+    EXPECT_GT(
+        update.newly_consumed_dry_fuel_kg,
+        Real(0.0));
+
+    for (std::size_t j = 0;
+         j < geometry.ny;
+         ++j) {
+        for (std::size_t i = 0;
+             i < geometry.nx;
+             ++i) {
+            EXPECT_NEAR(
+                combustion.state(i, j)
+                    .ignited_area_fraction,
+                burned_after.burned_fraction(i, j),
+                Real(2.0e-14));
+        }
+    }
+}
+
 TEST(FireCombustionRaster, InitializesFractionalHistoryAsFuelMass)
 {
     const auto geometry = unit_geometry();

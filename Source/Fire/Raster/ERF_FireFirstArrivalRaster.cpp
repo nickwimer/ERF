@@ -1103,6 +1103,280 @@ FireFirstArrivalRaster::initialize_from_front (
 }
 
 FireFirstArrivalRasterUpdate
+FireFirstArrivalRaster::update_from_front_topology_event_sweep (
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& event_vertices_m,
+    const FireFront& event_front,
+    amrex::Real start_time_s,
+    amrex::Real event_time_s,
+    amrex::Real time_tolerance_s)
+{
+    if (has_committed_sweep_
+        && start_time_s != last_sweep_end_time_s_) {
+        throw std::invalid_argument(
+            "Fire first-arrival raster sweeps must be contiguous in time");
+    }
+
+    if (!has_committed_sweep_
+        && has_initial_condition_
+        && start_time_s != initial_condition_time_s_) {
+        throw std::invalid_argument(
+            "Fire first-arrival first sweep must start at the "
+            "initial-condition time");
+    }
+
+    if (!std::isfinite(start_time_s)
+        || !std::isfinite(event_time_s)
+        || !std::isfinite(time_tolerance_s)) {
+        throw std::invalid_argument(
+            "Fire first-arrival front topology-event times and tolerance "
+            "must be finite");
+    }
+
+    if (!(event_time_s > start_time_s)) {
+        throw std::invalid_argument(
+            "Fire first-arrival front topology-event time must exceed "
+            "start time");
+    }
+
+    const amrex::Real duration_s =
+        event_time_s - start_time_s;
+
+    if (!std::isfinite(duration_s)
+        || !(duration_s > amrex::Real(0.0))) {
+        throw std::overflow_error(
+            "Fire first-arrival front topology-event duration is not "
+            "finite and positive");
+    }
+
+    if (!(time_tolerance_s > amrex::Real(0.0))
+        || time_tolerance_s > duration_s) {
+        throw std::invalid_argument(
+            "Fire first-arrival front topology-event tolerance must lie "
+            "in (0,duration]");
+    }
+
+    if (!(start_time_s + time_tolerance_s
+          > start_time_s)) {
+        throw std::invalid_argument(
+            "Fire first-arrival front topology-event tolerance is not "
+            "representable");
+    }
+
+    // Validate component ordering, vertex correspondence, and raw event
+    // coordinates without constructing the degenerate event boundary.
+    (void)interpolate_fire_front_topology_event_sweep(
+        start_front,
+        event_vertices_m,
+        amrex::Real(0.0));
+
+    const auto has_positive_coverage =
+        [](const FireFront& front,
+           const FireCartesianCell2D& cell) {
+            return fire_front_cell_intersection_area_m2(
+                       front,
+                       cell)
+                > amrex::Real(0.0);
+        };
+
+    const auto first_arrival_for_cell =
+        [&](const FireCartesianCell2D& cell)
+            -> FireCellArrivalResult {
+            if (has_positive_coverage(
+                    start_front,
+                    cell)) {
+                return {
+                    true,
+                    start_time_s
+                };
+            }
+
+            if (!has_positive_coverage(
+                    event_front,
+                    cell)) {
+                return {
+                    false,
+                    amrex::Real(0.0)
+                };
+            }
+
+            amrex::Real lower_alpha =
+                amrex::Real(0.0);
+            amrex::Real upper_alpha =
+                amrex::Real(1.0);
+            amrex::Real lower_time_s =
+                start_time_s;
+            amrex::Real upper_time_s =
+                event_time_s;
+
+            for (;;) {
+                if (upper_time_s - lower_time_s
+                    <= time_tolerance_s) {
+                    break;
+                }
+
+                const amrex::Real middle_alpha =
+                    amrex::Real(0.5)
+                    * (lower_alpha
+                       + upper_alpha);
+
+                if (middle_alpha == lower_alpha
+                    || middle_alpha == upper_alpha) {
+                    break;
+                }
+
+                const amrex::Real middle_time_s =
+                    start_time_s
+                    + middle_alpha * duration_s;
+
+                if (middle_time_s == lower_time_s
+                    || middle_time_s == upper_time_s) {
+                    break;
+                }
+
+                const FireFront middle_front =
+                    interpolate_fire_front_topology_event_sweep(
+                        start_front,
+                        event_vertices_m,
+                        middle_alpha);
+
+                if (has_positive_coverage(
+                        middle_front,
+                        cell)) {
+                    upper_alpha =
+                        middle_alpha;
+                    upper_time_s =
+                        middle_time_s;
+                } else {
+                    lower_alpha =
+                        middle_alpha;
+                    lower_time_s =
+                        middle_time_s;
+                }
+            }
+
+            return {
+                true,
+                upper_time_s
+            };
+        };
+
+    amrex::iMultiFab next_arrived(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        1,
+        0,
+        fire_surface_mf_info());
+
+    amrex::MultiFab next_first_arrival_time_s(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        1,
+        0,
+        fire_surface_mf_info());
+
+    copy_distributed_state(
+        arrived_mf_,
+        first_arrival_time_mf_,
+        next_arrived,
+        next_first_arrival_time_s);
+
+    amrex::Long local_newly_arrived_cell_count = 0;
+    std::string local_error;
+
+    try {
+        for (amrex::MFIter mfi(next_arrived);
+             mfi.isValid();
+             ++mfi) {
+            const amrex::Box& box =
+                mfi.validbox();
+            const auto next_mask =
+                next_arrived.array(mfi);
+            const auto next_times =
+                next_first_arrival_time_s.array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    if (next_mask(i, j, 0) != 0) {
+                        continue;
+                    }
+
+                    const FireCellArrivalResult result =
+                        first_arrival_for_cell(
+                            cell_bounds(
+                                static_cast<std::size_t>(i),
+                                static_cast<std::size_t>(j)));
+
+                    if (result.arrived) {
+                        next_mask(i, j, 0) = 1;
+                        next_times(i, j, 0) =
+                            result.arrival_time_s;
+                        ++local_newly_arrived_cell_count;
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& error) {
+        local_error = error.what();
+    } catch (...) {
+        local_error =
+            "unknown local Fire first-arrival front topology-event "
+            "sweep error";
+    }
+
+    int failed =
+        local_error.empty() ? 0 : 1;
+    amrex::ParallelDescriptor::ReduceIntMax(
+        failed);
+
+    if (failed != 0) {
+        if (!local_error.empty()) {
+            throw std::runtime_error(
+                "distributed Fire first-arrival front topology-event "
+                "sweep failed: "
+                + local_error);
+        }
+
+        throw std::runtime_error(
+            "distributed Fire first-arrival front topology-event "
+            "sweep failed on another MPI rank");
+    }
+
+    amrex::ParallelDescriptor::ReduceLongSum(
+        local_newly_arrived_cell_count);
+
+    const std::size_t newly_arrived_cell_count =
+        static_cast<std::size_t>(
+            local_newly_arrived_cell_count);
+
+    if (arrived_cell_count_ > cell_count()
+        || newly_arrived_cell_count
+            > cell_count() - arrived_cell_count_) {
+        throw std::logic_error(
+            "Fire first-arrival count exceeds raster cell count");
+    }
+
+    arrived_mf_ =
+        std::move(next_arrived);
+    first_arrival_time_mf_ =
+        std::move(next_first_arrival_time_s);
+    arrived_cell_count_ +=
+        newly_arrived_cell_count;
+    has_committed_sweep_ = true;
+    last_sweep_end_time_s_ =
+        event_time_s;
+
+    return {
+        arrived_cell_count_,
+        newly_arrived_cell_count
+    };
+}
+
+FireFirstArrivalRasterUpdate
 FireFirstArrivalRaster::update_from_topology_event_sweep (
     const FirePerimeter& start_perimeter,
     const std::vector<FireVec2>& event_vertices_m,

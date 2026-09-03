@@ -492,6 +492,87 @@ TEST(
 
 TEST(
     FirePropagationBatch,
+    StopsAtHoleAreaCollapseBeforeClockwiseMidpoint)
+{
+    const ERFFire::FireFront initial(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                FirePerimeter(
+                    std::vector<FireVec2>{
+                        {Real(-10.0), Real(-10.0)},
+                        {Real( 10.0), Real(-10.0)},
+                        {Real( 10.0), Real( 10.0)},
+                        {Real(-10.0), Real( 10.0)}
+                    })
+            },
+            {
+                ERFFire::FireFrontRole::Hole,
+                FirePerimeter(
+                    std::vector<FireVec2>{
+                        {Real(0.0), Real(0.0)},
+                        {Real(4.0), Real(0.0)},
+                        {Real(0.0), Real(4.0)}
+                    })
+            }
+        });
+
+    int batch_calls = 0;
+    ERFFire::FireFrontTopologyAdvanceResult result;
+
+    EXPECT_NO_THROW(
+        result =
+            ERFFire::
+                advance_front_rk2_batched_until_topology_event(
+                    initial,
+                    Real(4.0),
+                    Real(2.0),
+                    [&batch_calls](
+                        const std::vector<FireVec2>& positions,
+                        const std::vector<FireVec2>& normals,
+                        Real) {
+                        ++batch_calls;
+
+                        EXPECT_EQ(positions.size(), 7U);
+                        EXPECT_EQ(normals.size(), 7U);
+
+                        std::vector<Real> speeds(
+                            positions.size(),
+                            Real(0.0));
+                        speeds[4] = Real(4.0);
+                        return speeds;
+                    }));
+
+    EXPECT_EQ(batch_calls, 1);
+    EXPECT_FALSE(
+        result.completed_front.has_value());
+    ASSERT_TRUE(
+        result.topology_event.has_value());
+    EXPECT_EQ(
+        result.topology_event->component_index,
+        1U);
+    EXPECT_EQ(
+        result.topology_event->role,
+        ERFFire::FireFrontRole::Hole);
+    EXPECT_EQ(
+        result.topology_event->type,
+        ERFFire::FireFrontComponentTopologyEventType::
+            HoleExtinction);
+    EXPECT_NEAR(
+        static_cast<double>(
+            result.topology_event
+                ->motion_fraction),
+        0.3535533905932738,
+        1.0e-12);
+    EXPECT_NEAR(
+        static_cast<double>(
+            result.advanced_dt_s),
+        0.7071067811865476,
+        1.0e-12);
+}
+
+TEST(
+    FirePropagationBatch,
     StopsAtEarliestFrontComponentSelfContact)
 {
     const FirePerimeter stationary_outer(
@@ -626,6 +707,149 @@ TEST(
         2.0,
         1.0e-12);
 }
+
+
+TEST(
+    FirePropagationBatch,
+    ExactlyTiedComponentSelfContactsChooseFirstComponentDeterministically)
+{
+    const auto make_pinching_outer =
+        [](Real x_offset) {
+            return FirePerimeter(
+                std::vector<FireVec2>{
+                    {x_offset + Real(0.0), Real(0.0)},
+                    {x_offset + Real(10.0), Real(0.0)},
+                    {x_offset + Real(10.0), Real(2.0)},
+                    {x_offset + Real(3.0), Real(2.0)},
+                    {x_offset + Real(3.0), Real(8.0)},
+                    {x_offset + Real(7.0), Real(8.0)},
+                    {x_offset + Real(7.0), Real(2.2)},
+                    {x_offset + Real(8.0), Real(2.2)},
+                    {x_offset + Real(9.0), Real(2.2)},
+                    {x_offset + Real(9.0), Real(8.0)},
+                    {x_offset + Real(10.0), Real(8.0)},
+                    {x_offset + Real(10.0), Real(10.0)},
+                    {x_offset + Real(0.0), Real(10.0)}
+                });
+        };
+
+    const FirePerimeter first =
+        make_pinching_outer(Real(0.0));
+    const FirePerimeter second =
+        make_pinching_outer(Real(20.0));
+
+    const ERFFire::FireFront initial(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                first
+            },
+            {
+                ERFFire::FireFrontRole::Outer,
+                second
+            }
+        });
+
+    int batch_calls = 0;
+
+    const auto result =
+        ERFFire::
+            advance_front_rk2_batched_until_topology_event(
+                initial,
+                Real(4.0),
+                Real(0.3),
+                [&batch_calls](
+                    const std::vector<FireVec2>& positions,
+                    const std::vector<FireVec2>& normals,
+                    Real) {
+                    ++batch_calls;
+
+                    EXPECT_EQ(
+                        positions.size(),
+                        26U);
+                    EXPECT_EQ(
+                        normals.size(),
+                        26U);
+
+                    std::vector<Real> speeds(
+                        positions.size(),
+                        Real(0.0));
+
+                    for (std::size_t i = 0;
+                         i < positions.size();
+                         ++i) {
+                        const bool first_driver =
+                            std::abs(
+                                positions[i].x
+                                - Real(8.0))
+                                < Real(1.0e-12)
+                            && positions[i].y
+                                < Real(3.0);
+
+                        const bool second_driver =
+                            std::abs(
+                                positions[i].x
+                                - Real(28.0))
+                                < Real(1.0e-12)
+                            && positions[i].y
+                                < Real(3.0);
+
+                        if (first_driver
+                            || second_driver) {
+                            speeds[i] = Real(1.0);
+                        }
+                    }
+
+                    return speeds;
+                });
+
+    EXPECT_EQ(batch_calls, 2);
+    EXPECT_FALSE(
+        result.completed_front.has_value());
+    ASSERT_TRUE(
+        result.topology_event.has_value());
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            result.advanced_dt_s),
+        0.2,
+        1.0e-12);
+
+    EXPECT_EQ(
+        result.topology_event
+            ->component_index,
+        0U);
+    EXPECT_EQ(
+        result.topology_event->role,
+        ERFFire::FireFrontRole::Outer);
+    EXPECT_EQ(
+        result.topology_event->type,
+        ERFFire::FireFrontComponentTopologyEventType::
+            SelfContact);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            result.topology_event
+                ->collision.motion_fraction),
+        2.0 / 3.0,
+        1.0e-12);
+
+    ASSERT_EQ(
+        result.terminal_vertices_m.size(),
+        2U);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            result.terminal_vertices_m[0][7].y),
+        2.0,
+        1.0e-12);
+    EXPECT_NEAR(
+        static_cast<double>(
+            result.terminal_vertices_m[1][7].y),
+        2.0,
+        1.0e-12);
+}
+
 
 TEST(
     FirePropagationBatch,

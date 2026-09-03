@@ -614,6 +614,181 @@ TEST(
 
 TEST(
     FireSpreadRuntime,
+    MultiComponentBatchedAdvanceResolvesOuterPinchAndPreservesExistingHole)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16,
+        16,
+        Real(0.0),
+        Real(0.0),
+        Real(1.0),
+        Real(1.0)
+    };
+
+    ERFFire::FireFront initial_front(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                FirePerimeter({
+                    {Real(2.0), Real(2.0)},
+                    {Real(12.0), Real(2.0)},
+                    {Real(12.0), Real(4.0)},
+                    {Real(5.0), Real(4.0)},
+                    {Real(5.0), Real(10.0)},
+                    {Real(9.0), Real(10.0)},
+                    {Real(9.0), Real(4.2)},
+                    {Real(10.0), Real(4.2)},
+                    {Real(11.0), Real(4.2)},
+                    {Real(11.0), Real(10.0)},
+                    {Real(12.0), Real(10.0)},
+                    {Real(12.0), Real(12.0)},
+                    {Real(2.0), Real(12.0)}
+                })
+            },
+            {
+                ERFFire::FireFrontRole::Hole,
+                FirePerimeter({
+                    {Real(2.5), Real(6.0)},
+                    {Real(4.5), Real(6.0)},
+                    {Real(4.5), Real(8.0)},
+                    {Real(2.5), Real(8.0)}
+                })
+            }
+        });
+
+    ERFFireSpreadRuntime runtime(
+        std::move(initial_front),
+        Real(0.0),
+        make_config(geometry));
+
+    ASSERT_EQ(
+        runtime.front().components().size(),
+        2U);
+
+    const Real burned_before =
+        runtime.burned_fraction_raster()
+            .burned_area_m2();
+
+    int batch_calls = 0;
+
+    const auto diagnostics =
+        runtime.advance_direct_reference_wind_batched(
+            [&batch_calls](
+                const std::vector<FireVec2>& positions_m) {
+                ++batch_calls;
+
+                std::vector<ERFFire::FireEnvironmentSample>
+                    samples;
+                samples.reserve(
+                    positions_m.size());
+
+                for (const FireVec2& position :
+                     positions_m) {
+                    ERFFire::FireEnvironmentSample
+                        sample{};
+
+                    const bool drives_pinch =
+                        std::abs(
+                            position.x
+                            - Real(10.0))
+                            < Real(0.5)
+                        && position.y
+                            < Real(5.0);
+
+                    sample.horizontal_wind_mps =
+                        drives_pinch
+                            ? FireVec2{
+                                Real(0.0),
+                                Real(-10.0)}
+                            : FireVec2{
+                                Real(0.0),
+                                Real(0.0)};
+
+                    sample.terrain_gradient_m_per_m =
+                        FireVec2{
+                            Real(0.0),
+                            Real(0.0)};
+
+                    samples.push_back(sample);
+                }
+
+                return samples;
+            },
+            Real(0.5));
+
+    EXPECT_EQ(
+        diagnostics.start_time_s,
+        Real(0.0));
+    EXPECT_EQ(
+        diagnostics.end_time_s,
+        Real(0.5));
+    EXPECT_EQ(
+        runtime.current_time_s(),
+        Real(0.5));
+
+    EXPECT_GT(
+        batch_calls,
+        2);
+
+    ASSERT_EQ(
+        runtime.front().components().size(),
+        3U);
+
+    EXPECT_EQ(
+        runtime.front().components()[0].role,
+        ERFFire::FireFrontRole::Outer);
+    EXPECT_EQ(
+        runtime.front().components()[1].role,
+        ERFFire::FireFrontRole::Hole);
+    EXPECT_EQ(
+        runtime.front().components()[2].role,
+        ERFFire::FireFrontRole::Hole);
+
+    EXPECT_THROW(
+        (void)runtime.perimeter(),
+        std::logic_error);
+
+    EXPECT_GT(
+        runtime.front().components()[1]
+            .perimeter.area_m2(),
+        Real(0.0));
+    EXPECT_GT(
+        runtime.front().components()[2]
+            .perimeter.area_m2(),
+        Real(0.0));
+
+    EXPECT_GT(
+        runtime.burned_fraction_raster()
+            .burned_area_m2(),
+        burned_before);
+
+    ASSERT_TRUE(
+        runtime.first_arrival_raster()
+            .has_committed_sweep());
+    EXPECT_EQ(
+        runtime.first_arrival_raster()
+            .last_sweep_end_time_s(),
+        Real(0.5));
+
+    for (std::size_t j = 0;
+         j < geometry.ny;
+         ++j) {
+        for (std::size_t i = 0;
+             i < geometry.nx;
+             ++i) {
+            EXPECT_NEAR(
+                runtime.combustion_raster()
+                    .state(i, j)
+                    .ignited_area_fraction,
+                runtime.burned_fraction_raster()
+                    .burned_fraction(i, j),
+                Real(2.0e-14));
+        }
+    }
+}
+
+TEST(
+    FireSpreadRuntime,
     MultiComponentFrontBatchedAdvanceCommitsAllPersistentHistory)
 {
     const FireCartesianRasterGeometry2D geometry{
@@ -750,6 +925,457 @@ TEST(
         }
     }
 }
+
+TEST(
+    FireSpreadRuntime,
+    MultiComponentBatchedAdvanceExtinguishesHoleAndConsumesRemainder)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16,
+        16,
+        Real(0.0),
+        Real(0.0),
+        Real(1.0),
+        Real(1.0)
+    };
+
+    ERFFire::FireFront initial_front(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                FirePerimeter({
+                    {Real(4.0), Real(4.0)},
+                    {Real(12.0), Real(4.0)},
+                    {Real(12.0), Real(12.0)},
+                    {Real(4.0), Real(12.0)}
+                })
+            },
+            {
+                ERFFire::FireFrontRole::Hole,
+                FirePerimeter({
+                    {Real(7.999), Real(7.999)},
+                    {Real(8.001), Real(7.999)},
+                    {Real(7.999), Real(8.001)}
+                })
+            }
+        });
+
+    ERFFireSpreadRuntime runtime(
+        std::move(initial_front),
+        Real(0.0),
+        make_config(geometry));
+
+    ASSERT_EQ(
+        runtime.front().components().size(),
+        2U);
+    EXPECT_EQ(
+        runtime.front().components()[1].role,
+        ERFFire::FireFrontRole::Hole);
+
+    const Real burned_before =
+        runtime.burned_fraction_raster()
+            .burned_area_m2();
+
+    const FireFlatEnvironmentSampler environment =
+        make_uniform_sampler(
+            Real(0.0),
+            Real(0.0),
+            Real(1.0),
+            Real(1.0),
+            16,
+            16,
+            FireVec2{
+                Real(0.0),
+                Real(0.0)
+            });
+
+    int batch_calls = 0;
+
+    const auto diagnostics =
+        runtime.advance_direct_reference_wind_batched(
+            [&environment, &batch_calls](
+                const std::vector<FireVec2>& positions_m) {
+                ++batch_calls;
+
+                std::vector<ERFFire::FireEnvironmentSample>
+                    samples;
+                samples.reserve(
+                    positions_m.size());
+
+                for (const FireVec2& position :
+                     positions_m) {
+                    samples.push_back(
+                        environment.sample(
+                            position.x,
+                            position.y));
+                }
+
+                return samples;
+            },
+            Real(1.0));
+
+    EXPECT_GT(
+        batch_calls,
+        2);
+    EXPECT_EQ(
+        diagnostics.start_time_s,
+        Real(0.0));
+    EXPECT_EQ(
+        diagnostics.end_time_s,
+        Real(1.0));
+    EXPECT_EQ(
+        runtime.current_time_s(),
+        Real(1.0));
+
+    ASSERT_EQ(
+        runtime.front().components().size(),
+        1U);
+    EXPECT_EQ(
+        runtime.front().components()[0].role,
+        ERFFire::FireFrontRole::Outer);
+
+    EXPECT_GT(
+        runtime.burned_fraction_raster()
+            .burned_area_m2(),
+        burned_before);
+
+    ASSERT_TRUE(
+        runtime.first_arrival_raster()
+            .has_committed_sweep());
+    EXPECT_EQ(
+        runtime.first_arrival_raster()
+            .last_sweep_end_time_s(),
+        Real(1.0));
+
+    for (std::size_t j = 0;
+         j < geometry.ny;
+         ++j) {
+        for (std::size_t i = 0;
+             i < geometry.nx;
+             ++i) {
+            EXPECT_NEAR(
+                runtime.combustion_raster()
+                    .state(i, j)
+                    .ignited_area_fraction,
+                runtime.burned_fraction_raster()
+                    .burned_fraction(i, j),
+                Real(2.0e-14));
+        }
+    }
+}
+
+
+TEST(
+    FireSpreadRuntime,
+    MultiComponentBatchedAdvanceSplitsPinchingHoleAndConsumesRemainder)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        32,
+        32,
+        Real(0.0),
+        Real(0.0),
+        Real(1.0),
+        Real(1.0)
+    };
+
+    ERFFire::FireFront initial_front(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                FirePerimeter({
+                    {Real(2.0), Real(2.0)},
+                    {Real(30.0), Real(2.0)},
+                    {Real(30.0), Real(30.0)},
+                    {Real(2.0), Real(30.0)}
+                })
+            },
+            {
+                ERFFire::FireFrontRole::Hole,
+                FirePerimeter({
+                    {Real(16.0), Real(16.0)},
+                    {Real(18.0), Real(16.0)},
+                    {Real(17.0), Real(17.0)},
+                    {Real(16.0), Real(16.4)},
+                    {Real(15.0), Real(17.0)},
+                    {Real(14.0), Real(16.0)}
+                })
+            }
+        });
+
+    const Real initial_hole_area_m2 =
+        initial_front.components()[1]
+            .perimeter.area_m2();
+
+    ERFFireSpreadRuntime runtime(
+        std::move(initial_front),
+        Real(0.0),
+        make_config(
+            geometry,
+            FirePerimeterRemeshOptions{
+                Real(1.0e-9),
+                Real(1000.0),
+                Real(0.0)
+            }));
+
+    int batch_calls = 0;
+
+    const auto diagnostics =
+        runtime.advance_direct_reference_wind_batched(
+            [&batch_calls](
+                const std::vector<FireVec2>& positions_m) {
+                ++batch_calls;
+
+                std::vector<ERFFire::FireEnvironmentSample>
+                    samples;
+                samples.reserve(positions_m.size());
+
+                for (const FireVec2& position :
+                     positions_m) {
+                    ERFFire::FireEnvironmentSample
+                        sample{};
+
+                    const bool drives_hole_pinch =
+                        std::abs(
+                            position.x - Real(16.0))
+                            < Real(0.5)
+                        && position.y > Real(16.1)
+                        && position.y < Real(16.8);
+
+                    sample.horizontal_wind_mps =
+                        drives_hole_pinch
+                            ? FireVec2{
+                                Real(0.0),
+                                Real(-10.0)}
+                            : FireVec2{
+                                Real(0.0),
+                                Real(0.0)};
+
+                    sample.terrain_gradient_m_per_m =
+                        FireVec2{
+                            Real(0.0),
+                            Real(0.0)};
+
+                    samples.push_back(sample);
+                }
+
+                return samples;
+            },
+            Real(2.0));
+
+    EXPECT_GT(batch_calls, 2);
+    EXPECT_EQ(
+        diagnostics.start_time_s,
+        Real(0.0));
+    EXPECT_EQ(
+        diagnostics.end_time_s,
+        Real(2.0));
+    EXPECT_EQ(
+        runtime.current_time_s(),
+        Real(2.0));
+
+    ASSERT_EQ(
+        runtime.front().components().size(),
+        3U);
+
+    EXPECT_EQ(
+        runtime.front().components()[0].role,
+        ERFFire::FireFrontRole::Outer);
+    EXPECT_EQ(
+        runtime.front().components()[1].role,
+        ERFFire::FireFrontRole::Hole);
+    EXPECT_EQ(
+        runtime.front().components()[2].role,
+        ERFFire::FireFrontRole::Hole);
+
+    EXPECT_GT(
+        runtime.front().components()[1]
+            .perimeter.area_m2(),
+        Real(0.0));
+    EXPECT_GT(
+        runtime.front().components()[2]
+            .perimeter.area_m2(),
+        Real(0.0));
+
+    EXPECT_LT(
+        runtime.front().components()[1]
+                .perimeter.area_m2()
+            + runtime.front().components()[2]
+                .perimeter.area_m2(),
+        initial_hole_area_m2);
+
+    ASSERT_TRUE(
+        runtime.first_arrival_raster()
+            .has_committed_sweep());
+    EXPECT_EQ(
+        runtime.first_arrival_raster()
+            .last_sweep_end_time_s(),
+        Real(2.0));
+
+    for (std::size_t j = 0;
+         j < geometry.ny;
+         ++j) {
+        for (std::size_t i = 0;
+             i < geometry.nx;
+             ++i) {
+            EXPECT_NEAR(
+                runtime.combustion_raster()
+                    .state(i, j)
+                    .ignited_area_fraction,
+                runtime.burned_fraction_raster()
+                    .burned_fraction(i, j),
+                Real(2.0e-14));
+        }
+    }
+}
+
+TEST(
+    FireSpreadRuntime,
+    MultiComponentBatchedAdvanceDropsDegenerateHoleEarAndConsumesRemainder)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        32,
+        32,
+        Real(0.0),
+        Real(0.0),
+        Real(1.0),
+        Real(1.0)
+    };
+
+    ERFFire::FireFront initial_front(
+        std::vector<ERFFire::FireFrontComponent>{
+            {
+                ERFFire::FireFrontRole::Outer,
+                FirePerimeter({
+                    {Real(2.0), Real(2.0)},
+                    {Real(30.0), Real(2.0)},
+                    {Real(30.0), Real(30.0)},
+                    {Real(2.0), Real(30.0)}
+                })
+            },
+            {
+                ERFFire::FireFrontRole::Hole,
+                FirePerimeter({
+                    {Real(16.0), Real(16.2)},
+                    {Real(16.0), Real(18.0)},
+                    {Real(14.0), Real(18.0)},
+                    {Real(14.0), Real(16.0)},
+                    {Real(18.0), Real(16.0)}
+                })
+            }
+        });
+
+    ERFFireSpreadRuntime runtime(
+        std::move(initial_front),
+        Real(0.0),
+        make_config(
+            geometry,
+            FirePerimeterRemeshOptions{
+                Real(1.0e-9),
+                Real(1000.0),
+                Real(0.0)
+            }));
+
+    int batch_calls = 0;
+
+    const auto diagnostics =
+        runtime.advance_direct_reference_wind_batched(
+            [&batch_calls](
+                const std::vector<FireVec2>& positions_m) {
+                ++batch_calls;
+
+                std::vector<ERFFire::FireEnvironmentSample>
+                    samples;
+                samples.reserve(positions_m.size());
+
+                for (const FireVec2& position :
+                     positions_m) {
+                    ERFFire::FireEnvironmentSample
+                        sample{};
+
+                    const bool drives_ear =
+                        std::abs(
+                            position.x - Real(16.0))
+                            < Real(0.75)
+                        && position.y > Real(16.05)
+                        && position.y < Real(16.6);
+
+                    sample.horizontal_wind_mps =
+                        drives_ear
+                            ? FireVec2{
+                                Real(-10.0),
+                                Real(-10.0)}
+                            : FireVec2{
+                                Real(0.0),
+                                Real(0.0)};
+
+                    sample.terrain_gradient_m_per_m =
+                        FireVec2{
+                            Real(0.0),
+                            Real(0.0)};
+
+                    samples.push_back(sample);
+                }
+
+                return samples;
+            },
+            Real(2.0));
+
+    EXPECT_GT(batch_calls, 2);
+    EXPECT_EQ(
+        diagnostics.start_time_s,
+        Real(0.0));
+    EXPECT_EQ(
+        diagnostics.end_time_s,
+        Real(2.0));
+    EXPECT_EQ(
+        runtime.current_time_s(),
+        Real(2.0));
+
+    ASSERT_EQ(
+        runtime.front().components().size(),
+        2U);
+
+    EXPECT_EQ(
+        runtime.front().components()[0].role,
+        ERFFire::FireFrontRole::Outer);
+    EXPECT_EQ(
+        runtime.front().components()[1].role,
+        ERFFire::FireFrontRole::Hole);
+
+    EXPECT_EQ(
+        runtime.front().components()[1]
+            .perimeter.size(),
+        4U);
+    EXPECT_GT(
+        runtime.front().components()[1]
+            .perimeter.area_m2(),
+        Real(0.0));
+
+    ASSERT_TRUE(
+        runtime.first_arrival_raster()
+            .has_committed_sweep());
+    EXPECT_EQ(
+        runtime.first_arrival_raster()
+            .last_sweep_end_time_s(),
+        Real(2.0));
+
+    for (std::size_t j = 0;
+         j < geometry.ny;
+         ++j) {
+        for (std::size_t i = 0;
+             i < geometry.nx;
+             ++i) {
+            EXPECT_NEAR(
+                runtime.combustion_raster()
+                    .state(i, j)
+                    .ignited_area_fraction,
+                runtime.burned_fraction_raster()
+                    .burned_fraction(i, j),
+                Real(2.0e-14));
+        }
+    }
+}
+
 
 TEST(
     FireSpreadRuntime,

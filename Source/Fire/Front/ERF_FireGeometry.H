@@ -33,10 +33,19 @@ signed_polygon_area_m2 (const std::vector<FireVec2>& vertices_m) noexcept
         return amrex::Real(0.0);
     }
 
+    const FireVec2& origin = vertices_m.front();
+
     amrex::Real twice_area = 0.0;
-    for (std::size_t i = 0; i < vertices_m.size(); ++i) {
-        const auto& current = vertices_m[i];
-        const auto& next = vertices_m[(i + 1) % vertices_m.size()];
+    for (std::size_t i = 1; i + 1 < vertices_m.size(); ++i) {
+        const FireVec2 current{
+            vertices_m[i].x - origin.x,
+            vertices_m[i].y - origin.y
+        };
+        const FireVec2 next{
+            vertices_m[i + 1].x - origin.x,
+            vertices_m[i + 1].y - origin.y
+        };
+
         twice_area += cross_2d(current, next);
     }
 

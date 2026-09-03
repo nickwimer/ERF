@@ -1250,6 +1250,39 @@ FireCombustionRaster::advance_from_topology_event_sweep(
         &event_front,
         nullptr,
         nullptr,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        dt_s);
+}
+
+FireCombustionRasterAdvance
+FireCombustionRaster::advance_from_front_topology_event_sweep(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& event_vertices_m,
+    const FireFront& event_front,
+    const FireBurnedFractionRaster& burned_before,
+    const FireBurnedFractionRaster& burned_after,
+    amrex::Real dt_s)
+{
+    (void)interpolate_fire_front_topology_event_sweep(
+        start_front,
+        event_vertices_m,
+        amrex::Real(0.0));
+
+    const FirePerimeter& representative_start =
+        start_front.components().front().perimeter;
+
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        representative_start,
+        event_vertices_m.front(),
+        &event_front,
+        nullptr,
+        nullptr,
+        &start_front,
+        &event_vertices_m,
         burned_before,
         burned_after,
         dt_s);
@@ -1275,6 +1308,8 @@ FireCombustionRaster::advance_from_front_linear_sweep(
         nullptr,
         &start_front,
         &end_front,
+        nullptr,
+        nullptr,
         burned_before,
         burned_after,
         dt_s);
@@ -1295,6 +1330,8 @@ FireCombustionRaster::advance_from_linear_sweep(
         nullptr,
         nullptr,
         nullptr,
+        nullptr,
+        nullptr,
         burned_before,
         burned_after,
         dt_s);
@@ -1308,6 +1345,8 @@ detail::advance_fire_combustion_vertex_sweep(
     const FireFront* event_front,
     const FireFront* front_sweep_start,
     const FireFront* front_sweep_end,
+    const FireFront* front_topology_event_start,
+    const std::vector<std::vector<FireVec2>>* front_topology_event_vertices,
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
     amrex::Real dt_s)
@@ -1373,19 +1412,46 @@ detail::advance_fire_combustion_vertex_sweep(
         front_sweep_start != nullptr
         || front_sweep_end != nullptr;
 
+    const bool front_topology_event_sweep =
+        front_topology_event_start != nullptr
+        || front_topology_event_vertices != nullptr;
+
     require(
         (front_sweep_start != nullptr)
             == (front_sweep_end != nullptr),
         "fire combustion front sweep requires both endpoint fronts");
 
     require(
+        (front_topology_event_start != nullptr)
+            == (front_topology_event_vertices != nullptr),
+        "fire combustion front topology-event sweep requires both "
+        "start front and event vertices");
+
+    require(
         !front_sweep || event_front == nullptr,
         "fire combustion sweep cannot combine front and topology-event geometry");
+
+    require(
+        !front_sweep || !front_topology_event_sweep,
+        "fire combustion sweep cannot combine fixed-front and "
+        "front topology-event geometry");
+
+    require(
+        !front_topology_event_sweep || event_front != nullptr,
+        "fire combustion front topology-event sweep requires "
+        "resolved event front");
 
     if (front_sweep) {
         (void)interpolate_fire_front_linear_sweep(
             *front_sweep_start,
             *front_sweep_end,
+            amrex::Real(0.0));
+    }
+
+    if (front_topology_event_sweep) {
+        (void)interpolate_fire_front_topology_event_sweep(
+            *front_topology_event_start,
+            *front_topology_event_vertices,
             amrex::Real(0.0));
     }
 
@@ -1494,11 +1560,15 @@ detail::advance_fire_combustion_vertex_sweep(
         for (int substep = 0;
              substep < temporal_substeps;
              ++substep) {
-            const bool front_sample =
+            const bool fixed_front_sample =
                 front_sweep;
+
+            const bool topology_front_sample =
+                front_topology_event_sweep
+                && substep + 1 < temporal_substeps;
+
             const bool event_sample =
-                !front_sample
-                && event_front != nullptr
+                event_front != nullptr
                 && substep + 1 == temporal_substeps;
 
             const amrex::Real alpha =
@@ -1517,11 +1587,49 @@ detail::advance_fire_combustion_vertex_sweep(
             amrex::Real sample_ylo_m{};
             amrex::Real sample_yhi_m{};
 
-            if (front_sample) {
+            if (fixed_front_sample) {
                 interpolated_front.emplace(
                     interpolate_fire_front_linear_sweep(
                         *front_sweep_start,
                         *front_sweep_end,
+                        alpha));
+                sample_front =
+                    &*interpolated_front;
+
+                const auto& components =
+                    sample_front->components();
+                const auto& first_vertices =
+                    components.front()
+                        .perimeter.vertices_m();
+
+                sample_xlo_m =
+                    first_vertices.front().x;
+                sample_xhi_m =
+                    first_vertices.front().x;
+                sample_ylo_m =
+                    first_vertices.front().y;
+                sample_yhi_m =
+                    first_vertices.front().y;
+
+                for (const auto& component :
+                     components) {
+                    for (const FireVec2& vertex :
+                         component.perimeter.vertices_m()) {
+                        sample_xlo_m =
+                            std::min(sample_xlo_m, vertex.x);
+                        sample_xhi_m =
+                            std::max(sample_xhi_m, vertex.x);
+                        sample_ylo_m =
+                            std::min(sample_ylo_m, vertex.y);
+                        sample_yhi_m =
+                            std::max(sample_yhi_m, vertex.y);
+                    }
+                }
+            } else if (topology_front_sample) {
+                interpolated_front.emplace(
+                    interpolate_fire_front_topology_event_sweep(
+                        *front_topology_event_start,
+                        *front_topology_event_vertices,
                         alpha));
                 sample_front =
                     &*interpolated_front;

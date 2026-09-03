@@ -35,6 +35,22 @@ interpolate_fire_front_linear_sweep(
     const FireFront& end_front,
     amrex::Real alpha);
 
+/**
+ * Linear interpolation from a valid pre-event FireFront toward raw terminal
+ * component vertices at a topology event.
+ *
+ * event_vertices_m must preserve start-front component ordering and vertex
+ * correspondence. alpha lies in [0,1). The exact alpha == 1 geometry may be
+ * degenerate or self-contacting and therefore cannot necessarily be
+ * represented as a FireFront; callers must use the resolved post-event front
+ * at the exact event instant.
+ */
+[[nodiscard]] FireFront
+interpolate_fire_front_topology_event_sweep(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& event_vertices_m,
+    amrex::Real alpha);
+
 } // namespace ERFFire
 
 #endif

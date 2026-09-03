@@ -903,4 +903,126 @@ TEST(
         12.0);
 }
 
+TEST(
+    FireFirstArrivalRaster,
+    HoleExtinctionTopologyEventCommitsAndPreservesArrival)
+{
+    FireFirstArrivalRaster raster({
+        1,
+        1,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    });
+
+    const FirePerimeter outer =
+        make_rectangle(
+            0.0,
+            4.0,
+            0.0,
+            4.0);
+
+    const FirePerimeter hole(
+        std::vector<FireVec2>{
+            {1.0, 1.0},
+            {3.0, 1.0},
+            {1.0, 3.0}
+        });
+
+    const FireFront start_front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                outer
+            },
+            {
+                FireFrontRole::Hole,
+                hole
+            }
+        });
+
+    const auto initialized =
+        raster.initialize_from_front(
+            start_front,
+            amrex::Real(10.0));
+
+    EXPECT_EQ(
+        initialized.arrived_cell_count,
+        0U);
+    EXPECT_FALSE(
+        raster.has_arrived(0, 0));
+
+    std::vector<std::vector<FireVec2>>
+        event_vertices_m{
+            outer.vertices_m(),
+            hole.vertices_m()
+        };
+
+    event_vertices_m[1][0] = {
+        amrex::Real(2.0),
+        amrex::Real(2.0)
+    };
+
+    const FireFront event_front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                outer
+            }
+        });
+
+    const auto update =
+        raster.update_from_front_topology_event_sweep(
+            start_front,
+            event_vertices_m,
+            event_front,
+            amrex::Real(10.0),
+            amrex::Real(12.0),
+            amrex::Real(1.0e-9));
+
+    EXPECT_EQ(
+        update.newly_arrived_cell_count,
+        1U);
+    EXPECT_EQ(
+        update.arrived_cell_count,
+        1U);
+    ASSERT_TRUE(
+        raster.has_arrived(0, 0));
+
+    const amrex::Real arrival_time_s =
+        raster.first_arrival_time_s(0, 0);
+
+    EXPECT_GE(
+        static_cast<double>(
+            arrival_time_s),
+        10.0);
+    EXPECT_LT(
+        static_cast<double>(
+            arrival_time_s
+            - amrex::Real(10.0)),
+        1.0e-9);
+
+    EXPECT_TRUE(
+        raster.has_committed_sweep());
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            raster.last_sweep_end_time_s()),
+        12.0);
+
+    (void)raster.update_from_front_linear_sweep(
+        event_front,
+        event_front,
+        amrex::Real(12.0),
+        amrex::Real(13.0),
+        amrex::Real(1.0e-9),
+        1U);
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(
+            raster.first_arrival_time_s(0, 0)),
+        static_cast<double>(
+            arrival_time_s));
+}
+
 } // namespace

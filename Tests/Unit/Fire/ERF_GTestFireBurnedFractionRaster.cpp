@@ -792,4 +792,96 @@ TEST(
         0.0);
 }
 
+TEST(
+    FireBurnedFractionRaster,
+    HoleExtinctionTopologyEventConsumesFinalPocket)
+{
+    FireBurnedFractionRaster raster({
+        4,
+        4,
+        0.0,
+        0.0,
+        1.0,
+        1.0
+    });
+
+    const FirePerimeter outer =
+        make_rectangle(
+            0.0,
+            4.0,
+            0.0,
+            4.0);
+
+    const FirePerimeter hole(
+        std::vector<FireVec2>{
+            {1.0, 1.0},
+            {3.0, 1.0},
+            {1.0, 3.0}
+        });
+
+    const FireFront start_front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                outer
+            },
+            {
+                FireFrontRole::Hole,
+                hole
+            }
+        });
+
+    const auto initial =
+        raster.update_from_front(
+            start_front);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            initial.burned_area_m2),
+        14.0,
+        1.0e-12);
+
+    std::vector<std::vector<FireVec2>>
+        event_vertices_m{
+            outer.vertices_m(),
+            hole.vertices_m()
+        };
+
+    event_vertices_m[1][0] = {
+        2.0,
+        2.0
+    };
+
+    const FireFront event_front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                outer
+            }
+        });
+
+    const auto update =
+        raster.update_from_front_topology_event_sweep(
+            start_front,
+            event_vertices_m,
+            event_front,
+            4U);
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            update.newly_burned_area_m2),
+        2.0,
+        1.0e-12);
+    EXPECT_NEAR(
+        static_cast<double>(
+            update.burned_area_m2),
+        16.0,
+        1.0e-12);
+    EXPECT_NEAR(
+        static_cast<double>(
+            raster.burned_area_m2()),
+        16.0,
+        1.0e-12);
+}
+
 } // namespace

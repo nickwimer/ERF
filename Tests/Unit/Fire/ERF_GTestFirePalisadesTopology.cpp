@@ -283,4 +283,41 @@ TEST(FireFrontCollision, PalisadesPre1707FixtureLocatesObservedPinch)
         2.0e-6);
 }
 
+TEST(
+    FireFrontCollision,
+    AreaCollapseLocatorIsStableAtPalisadesScale)
+{
+    const amrex::Real x0 =
+        amrex::Real(20280.713116037427);
+    const amrex::Real y0 =
+        amrex::Real(6598.9341049977174);
+
+    const FirePerimeter start(
+        std::vector<FireVec2>{
+            {x0, y0},
+            {x0 + amrex::Real(4.0), y0},
+            {x0, y0 + amrex::Real(4.0)}
+        });
+
+    const std::vector<FireVec2> end_vertices{
+        {
+            x0 + amrex::Real(4.0),
+            y0 + amrex::Real(4.0)
+        },
+        {x0 + amrex::Real(4.0), y0},
+        {x0, y0 + amrex::Real(4.0)}
+    };
+
+    const auto collapse =
+        ERFFire::locate_first_perimeter_area_collapse(
+            start,
+            end_vertices);
+
+    ASSERT_TRUE(collapse.has_value());
+    EXPECT_NEAR(
+        static_cast<double>(*collapse),
+        0.5,
+        2.0e-12);
+}
+
 } // namespace

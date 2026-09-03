@@ -18,11 +18,23 @@ struct FireFrontAdvanceResult
     std::optional<FirePerimeterCollision> topology_event;
 };
 
+enum class FireFrontComponentTopologyEventType
+{
+    SelfContact,
+    HoleExtinction
+};
+
 struct FireFrontComponentTopologyEvent
 {
     std::size_t component_index{};
     FireFrontRole role{FireFrontRole::Outer};
+    // Valid geometry only for SelfContact. HoleExtinction is represented by
+    // raw terminal component vertices because the event perimeter has zero
+    // area and cannot be constructed as a FirePerimeter.
     FirePerimeterCollision collision{};
+    FireFrontComponentTopologyEventType type{
+        FireFrontComponentTopologyEventType::SelfContact};
+    amrex::Real motion_fraction{};
 };
 
 struct FireFrontTopologyAdvanceResult
@@ -74,10 +86,10 @@ advance_front_rk2_batched(
 
 /**
  * Advance a fixed-topology FireFront until either dt is complete or the
- * earliest self-contact of any boundary component is reached.
+ * earliest supported topology event of any boundary component is reached.
  *
- * This primitive localizes component self-contact but does not resolve its
- * resulting topology.
+ * Supported events are component self-contact and continuous extinction of a
+ * Hole when its represented signed area reaches exactly zero.
  *
  * On normal completion, completed_front is populated, topology_event is
  * empty, advanced_dt_s equals dt_s, and terminal_vertices_m contains the
@@ -86,7 +98,7 @@ advance_front_rk2_batched(
  * On a topology event, completed_front is empty, advanced_dt_s is the
  * consumed part of dt_s, terminal_vertices_m contains every component at the
  * common localized event time, and topology_event identifies the component,
- * role, and localized self-contact.
+ * role, event type, and full-step motion fraction.
  */
 [[nodiscard]] FireFrontTopologyAdvanceResult
 advance_front_rk2_batched_until_topology_event(

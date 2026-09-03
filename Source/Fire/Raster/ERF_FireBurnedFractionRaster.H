@@ -159,6 +159,20 @@ public:
         std::size_t temporal_substeps);
 
     /**
+     * Update monotone burn history through a multi-component topology event.
+     *
+     * Raw terminal vertices preserve every pre-event component through the
+     * continuous event time. The exact event geometry is represented by
+     * event_front after the topology transition.
+     */
+    [[nodiscard]] FireRasterBurnedAreaUpdate
+    update_from_front_topology_event_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& event_vertices_m,
+        const FireFront& event_front,
+        std::size_t temporal_substeps);
+
+    /**
      * Update monotone burn history across the pre-event linear motion from
      * one simple perimeter to its first topology-changing contact.
      *

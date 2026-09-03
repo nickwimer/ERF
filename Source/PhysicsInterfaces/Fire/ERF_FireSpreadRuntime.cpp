@@ -3,6 +3,7 @@
 #include <ERF_FireSpreadOutput.H>
 #include <ERF_FireWindAdjustment.H>
 #include <ERF_FireFrontPropagator.H>
+#include <ERF_FireFrontTopology.H>
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelModel.H>
 #include <ERF_VectorPerimeterPropagator.H>
@@ -152,6 +153,308 @@ require_perimeter_inside_environment(
                 "fire spread propagated perimeter leaves the physical environment domain");
         }
     }
+}
+
+FireFront
+resolve_front_topology_event(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& event_vertices_m,
+    const FireFrontComponentTopologyEvent& event)
+{
+    const auto& components =
+        start_front.components();
+
+    if (components.size()
+        != event_vertices_m.size()) {
+        throw std::logic_error(
+            "Fire topology event lost component correspondence");
+    }
+
+    if (event.component_index
+        >= components.size()) {
+        throw std::logic_error(
+            "Fire topology event component index is invalid");
+    }
+
+    for (std::size_t component_index = 0;
+         component_index < components.size();
+         ++component_index) {
+        if (components[component_index]
+                .perimeter.size()
+            != event_vertices_m[component_index]
+                .size()) {
+            throw std::logic_error(
+                "Fire topology event lost vertex correspondence");
+        }
+    }
+
+    const FireFrontComponent& affected =
+        components[event.component_index];
+
+    if (event.type
+        == FireFrontComponentTopologyEventType::
+            HoleExtinction) {
+        if (event.role != FireFrontRole::Hole
+            || affected.role != FireFrontRole::Hole) {
+            throw std::logic_error(
+                "Fire Hole-extinction event does not identify a Hole");
+        }
+
+        std::vector<FireFrontComponent>
+            post_event_components;
+        post_event_components.reserve(
+            components.size() - 1);
+
+        for (std::size_t component_index = 0;
+             component_index < components.size();
+             ++component_index) {
+            if (component_index
+                == event.component_index) {
+                continue;
+            }
+
+            post_event_components.push_back({
+                components[component_index].role,
+                FirePerimeter(
+                    event_vertices_m[
+                        component_index])
+            });
+        }
+
+        if (post_event_components.empty()) {
+            throw std::logic_error(
+                "Fire Hole extinction removed every front component");
+        }
+
+        return FireFront(
+            std::move(post_event_components));
+    }
+
+    if (event.type
+        == FireFrontComponentTopologyEventType::
+            SelfContact) {
+        if (event.role != affected.role) {
+            throw std::logic_error(
+                "Fire self-contact event role does not match affected component");
+        }
+
+        if (affected.role == FireFrontRole::Hole) {
+            std::vector<FirePerimeter> split_holes =
+                split_hole_perimeter_at_pinch(
+                    event_vertices_m[
+                        event.component_index],
+                    event.collision.pinch);
+
+            if (split_holes.empty()
+                || split_holes.size() > 2) {
+                throw std::logic_error(
+                    "Fire Hole self-contact did not resolve to one or two Holes");
+            }
+
+            std::vector<FireFrontComponent>
+                post_event_components;
+            post_event_components.reserve(
+                components.size()
+                + split_holes.size() - 1);
+
+            for (std::size_t component_index = 0;
+                 component_index < components.size();
+                 ++component_index) {
+                if (component_index
+                    == event.component_index) {
+                    for (FirePerimeter& split_hole :
+                         split_holes) {
+                        post_event_components.push_back({
+                            FireFrontRole::Hole,
+                            std::move(split_hole)
+                        });
+                    }
+                    continue;
+                }
+
+                post_event_components.push_back({
+                    components[component_index].role,
+                    FirePerimeter(
+                        event_vertices_m[
+                            component_index])
+                });
+            }
+
+            return FireFront(
+                std::move(post_event_components));
+        }
+
+        if (affected.role != FireFrontRole::Outer) {
+            throw std::logic_error(
+                "Fire self-contact component role is invalid");
+        }
+
+        FireFront split_front =
+            split_perimeter_at_pinch(
+                event_vertices_m[
+                    event.component_index],
+                event.collision.pinch);
+
+        const auto& split_components =
+            split_front.components();
+
+        if (split_components.size() == 1) {
+            if (split_components.front().role
+                != FireFrontRole::Outer) {
+                throw std::logic_error(
+                    "Fire degenerate Outer pinch did not preserve the Outer");
+            }
+
+            std::vector<FireFrontComponent>
+                post_event_components;
+            post_event_components.reserve(
+                components.size());
+
+            for (std::size_t component_index = 0;
+                 component_index < components.size();
+                 ++component_index) {
+                if (component_index
+                    == event.component_index) {
+                    post_event_components.push_back(
+                        split_components.front());
+                    continue;
+                }
+
+                if (components[component_index].role
+                    != FireFrontRole::Hole) {
+                    throw std::runtime_error(
+                        "Fire Outer self-contact with multiple Outer components "
+                        "is not yet supported");
+                }
+
+                post_event_components.push_back({
+                    FireFrontRole::Hole,
+                    FirePerimeter(
+                        event_vertices_m[
+                            component_index])
+                });
+            }
+
+            return FireFront(
+                std::move(post_event_components));
+        }
+
+        if (split_components.size() != 2
+            || split_components[0].role
+                != FireFrontRole::Outer
+            || split_components[1].role
+                != FireFrontRole::Hole) {
+            throw std::logic_error(
+                "Fire Outer self-contact did not resolve to Outer or Outer plus Hole");
+        }
+
+        struct Bounds
+        {
+            amrex::Real xmin;
+            amrex::Real xmax;
+            amrex::Real ymin;
+            amrex::Real ymax;
+        };
+
+        const auto bounds =
+            [](const std::vector<FireVec2>& vertices) {
+                if (vertices.empty()) {
+                    throw std::logic_error(
+                        "Fire topology component has no vertices");
+                }
+
+                Bounds result{
+                    vertices.front().x,
+                    vertices.front().x,
+                    vertices.front().y,
+                    vertices.front().y
+                };
+
+                for (const FireVec2& vertex : vertices) {
+                    result.xmin =
+                        std::min(result.xmin, vertex.x);
+                    result.xmax =
+                        std::max(result.xmax, vertex.x);
+                    result.ymin =
+                        std::min(result.ymin, vertex.y);
+                    result.ymax =
+                        std::max(result.ymax, vertex.y);
+                }
+
+                return result;
+            };
+
+        const auto bounds_disjoint =
+            [](const Bounds& first,
+               const Bounds& second) noexcept {
+                return first.xmax < second.xmin
+                    || second.xmax < first.xmin
+                    || first.ymax < second.ymin
+                    || second.ymax < first.ymin;
+            };
+
+        const Bounds new_hole_bounds =
+            bounds(
+                split_components[1]
+                    .perimeter.vertices_m());
+
+        std::vector<FireFrontComponent>
+            post_event_components;
+        post_event_components.reserve(
+            components.size() + 1);
+
+        for (std::size_t component_index = 0;
+             component_index < components.size();
+             ++component_index) {
+            if (component_index
+                == event.component_index) {
+                post_event_components.push_back(
+                    split_components[0]);
+                post_event_components.push_back(
+                    split_components[1]);
+                continue;
+            }
+
+            if (components[component_index].role
+                != FireFrontRole::Hole) {
+                throw std::runtime_error(
+                    "Fire Outer self-contact with multiple Outer components "
+                    "is not yet supported");
+            }
+
+            const Bounds existing_hole_bounds =
+                bounds(
+                    event_vertices_m[
+                        component_index]);
+
+            if (!bounds_disjoint(
+                    new_hole_bounds,
+                    existing_hole_bounds)
+                && !perimeters_are_strictly_disjoint(
+                    split_components[1].perimeter,
+                    FirePerimeter(
+                        event_vertices_m[
+                            component_index]))) {
+                throw std::runtime_error(
+                    "Fire Outer self-contact creates a Hole that intersects, "
+                    "touches, or contains an existing Hole; interacting Hole "
+                    "topology resolution is not yet supported");
+            }
+
+            post_event_components.push_back({
+                FireFrontRole::Hole,
+                FirePerimeter(
+                    event_vertices_m[
+                        component_index])
+            });
+        }
+
+        return FireFront(
+            std::move(post_event_components));
+    }
+
+    throw std::logic_error(
+        "Fire topology event type is invalid");
 }
 
 FireEnvironmentBatchFunction
@@ -1550,18 +1853,235 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
         return speeds;
     };
 
-    const bool single_outer =
-        front_.components().size() == 1
-        && front_.components().front().role
-            == FireFrontRole::Outer;
+    {
+        FireFront working_front =
+            front_;
+        FireFirstArrivalRaster next_arrival =
+            first_arrival_;
+        FireBurnedFractionRaster next_burned =
+            burned_fraction_;
+        FireCombustionRaster next_combustion =
+            combustion_;
 
-    if (!single_outer) {
+        std::size_t newly_arrived_cell_count = 0;
+        std::size_t arrived_cell_count =
+            first_arrival_.arrived_cell_count();
+
+        amrex::Real newly_burned_area_m2 =
+            amrex::Real(0.0);
+        amrex::Real newly_consumed_dry_fuel_kg =
+            amrex::Real(0.0);
+        amrex::Real sensible_energy_increment_j =
+            amrex::Real(0.0);
+        amrex::Real water_released_increment_kg =
+            amrex::Real(0.0);
+
+        amrex::Real segment_start_time_s =
+            start_time_s;
+
+        while (segment_start_time_s
+               < end_time_s) {
+            const amrex::Real segment_dt_s =
+                end_time_s
+                - segment_start_time_s;
+
+            require(
+                std::isfinite(segment_dt_s)
+                    && segment_dt_s
+                        > amrex::Real(0.0),
+                "fire topology-event segment dt is invalid");
+
+            FireFrontTopologyAdvanceResult
+                topology_advance =
+                    advance_front_rk2_batched_until_topology_event(
+                        working_front,
+                        segment_start_time_s,
+                        segment_dt_s,
+                        normal_speeds);
+
+            if (topology_advance
+                    .topology_event.has_value()) {
+                const amrex::Real event_dt_s =
+                    topology_advance.advanced_dt_s;
+
+                require(
+                    std::isfinite(event_dt_s)
+                        && event_dt_s
+                            > amrex::Real(0.0)
+                        && event_dt_s
+                            <= segment_dt_s,
+                    "fire topology event consumed an invalid segment");
+
+                const amrex::Real event_time_s =
+                    segment_start_time_s
+                    + event_dt_s;
+
+                require(
+                    std::isfinite(event_time_s)
+                        && event_time_s
+                            > segment_start_time_s
+                        && event_time_s
+                            <= end_time_s,
+                    "fire topology event made no forward progress");
+
+                FireFront event_front =
+                    resolve_front_topology_event(
+                        working_front,
+                        topology_advance
+                            .terminal_vertices_m,
+                        *topology_advance
+                            .topology_event);
+
+                const FireBurnedFractionRaster
+                    burned_before_segment =
+                        next_burned;
+
+                const FireFirstArrivalRasterUpdate
+                    arrival_update =
+                        next_arrival
+                            .update_from_front_topology_event_sweep(
+                                working_front,
+                                topology_advance
+                                    .terminal_vertices_m,
+                                event_front,
+                                segment_start_time_s,
+                                event_time_s,
+                                std::min(
+                                    config_
+                                        .arrival_time_tolerance_s,
+                                    event_dt_s));
+
+                const FireRasterBurnedAreaUpdate
+                    burned_update =
+                        next_burned
+                            .update_from_front_topology_event_sweep(
+                                working_front,
+                                topology_advance
+                                    .terminal_vertices_m,
+                                event_front,
+                                config_
+                                    .combustion_options
+                                    .temporal_substeps);
+
+                const FireCombustionRasterAdvance
+                    combustion_update =
+                        next_combustion
+                            .advance_from_front_topology_event_sweep(
+                                working_front,
+                                topology_advance
+                                    .terminal_vertices_m,
+                                event_front,
+                                burned_before_segment,
+                                next_burned,
+                                event_dt_s);
+
+                newly_arrived_cell_count +=
+                    arrival_update
+                        .newly_arrived_cell_count;
+                arrived_cell_count =
+                    arrival_update
+                        .arrived_cell_count;
+                newly_burned_area_m2 +=
+                    burned_update
+                        .newly_burned_area_m2;
+                newly_consumed_dry_fuel_kg +=
+                    combustion_update
+                        .newly_consumed_dry_fuel_kg;
+                sensible_energy_increment_j +=
+                    combustion_update
+                        .sensible_energy_increment_j;
+                water_released_increment_kg +=
+                    combustion_update
+                        .water_released_increment_kg;
+
+                working_front =
+                    std::move(event_front);
+                segment_start_time_s =
+                    event_time_s;
+                continue;
+            }
+
+            require(
+                topology_advance
+                    .completed_front.has_value(),
+                "fire topology-aware advance returned no result");
+
+            require(
+                topology_advance.advanced_dt_s
+                    == segment_dt_s,
+                "fire topology-aware completed segment consumed "
+                "the wrong dt");
+
+            FireFront completed_front =
+                std::move(
+                    *topology_advance
+                        .completed_front);
+
+            const FireBurnedFractionRaster
+                burned_before_segment =
+                    next_burned;
+
+            const FireFirstArrivalRasterUpdate
+                arrival_update =
+                    next_arrival
+                        .update_from_front_linear_sweep(
+                            working_front,
+                            completed_front,
+                            segment_start_time_s,
+                            end_time_s,
+                            std::min(
+                                config_
+                                    .arrival_time_tolerance_s,
+                                segment_dt_s),
+                            config_
+                                .combustion_options
+                                .temporal_substeps);
+
+            const FireRasterBurnedAreaUpdate
+                burned_update =
+                    next_burned
+                        .update_from_front_linear_sweep(
+                            working_front,
+                            completed_front,
+                            config_
+                                .combustion_options
+                                .temporal_substeps);
+
+            const FireCombustionRasterAdvance
+                combustion_update =
+                    next_combustion
+                        .advance_from_front_linear_sweep(
+                            working_front,
+                            completed_front,
+                            burned_before_segment,
+                            next_burned,
+                            segment_dt_s);
+
+            newly_arrived_cell_count +=
+                arrival_update
+                    .newly_arrived_cell_count;
+            arrived_cell_count =
+                arrival_update.arrived_cell_count;
+            newly_burned_area_m2 +=
+                burned_update.newly_burned_area_m2;
+            newly_consumed_dry_fuel_kg +=
+                combustion_update
+                    .newly_consumed_dry_fuel_kg;
+            sensible_energy_increment_j +=
+                combustion_update
+                    .sensible_energy_increment_j;
+            water_released_increment_kg +=
+                combustion_update
+                    .water_released_increment_kg;
+
+            working_front =
+                std::move(completed_front);
+            segment_start_time_s =
+                end_time_s;
+        }
+
         FireFront advanced_front =
-            advance_front_rk2_batched(
-                front_,
-                start_time_s,
-                dt_s,
-                normal_speeds);
+            std::move(working_front);
 
         const auto& geometry =
             config_.raster_geometry;
@@ -1592,46 +2112,6 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             }
         }
 
-        FireFirstArrivalRaster next_arrival =
-            first_arrival_;
-        const FireFirstArrivalRasterUpdate
-            arrival_update =
-                next_arrival
-                    .update_from_front_linear_sweep(
-                        front_,
-                        advanced_front,
-                        start_time_s,
-                        end_time_s,
-                        config_
-                            .arrival_time_tolerance_s,
-                        config_
-                            .combustion_options
-                            .temporal_substeps);
-
-        FireBurnedFractionRaster next_burned =
-            burned_fraction_;
-        const FireRasterBurnedAreaUpdate
-            burned_update =
-                next_burned
-                    .update_from_front_linear_sweep(
-                        front_,
-                        advanced_front,
-                        config_
-                            .combustion_options
-                            .temporal_substeps);
-
-        FireCombustionRaster next_combustion =
-            combustion_;
-        const FireCombustionRasterAdvance
-            combustion_update =
-                next_combustion
-                    .advance_from_front_linear_sweep(
-                        front_,
-                        advanced_front,
-                        burned_fraction_,
-                        next_burned,
-                        dt_s);
-
         const auto vertex_count =
             [](const FireFront& front) {
                 std::size_t count = 0;
@@ -1656,283 +2136,9 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             post_remesh_vertex_count =
                 vertex_count(remeshed.front);
 
-        ERFFireStepDiagnostics diagnostics{
-            start_time_s,
-            end_time_s,
-            pre_remesh_vertex_count,
-            post_remesh_vertex_count,
-            remeshed.stats.vertices_removed,
-            remeshed.stats.vertices_added,
-            arrival_update
-                .newly_arrived_cell_count,
-            arrival_update.arrived_cell_count,
-            burned_update.newly_burned_area_m2,
-            burned_update.burned_area_m2,
-            combustion_update
-                .newly_consumed_dry_fuel_kg,
-            combustion_update
-                .totals.remaining_dry_fuel_kg,
-            combustion_update
-                .totals.consumed_dry_fuel_kg,
-            combustion_update
-                .sensible_energy_increment_j,
-            combustion_update
-                .totals.sensible_energy_j,
-            combustion_update
-                .water_released_increment_kg,
-            combustion_update
-                .totals.water_released_kg};
-
-        front_ = std::move(remeshed.front);
-        first_arrival_ =
-            std::move(next_arrival);
-        burned_fraction_ =
-            std::move(next_burned);
-        combustion_ =
-            std::move(next_combustion);
-        current_time_s_ =
-            end_time_s;
-
-        return diagnostics;
-    }
-
-    const FirePerimeter& start_perimeter =
-        perimeter();
-
-    FireFrontAdvanceResult topology_advance =
-        advance_perimeter_rk2_batched_until_topology_event(
-            start_perimeter,
-            start_time_s,
-            dt_s,
-            normal_speeds);
-
-    if (topology_advance.topology_event.has_value()) {
-        const amrex::Real event_dt_s =
-            topology_advance.advanced_dt_s;
-
-        require(
-            std::isfinite(event_dt_s)
-                && event_dt_s > amrex::Real(0.0)
-                && event_dt_s <= dt_s,
-            "fire topology event consumed an invalid timestep");
-
-        const amrex::Real event_time_s =
-            start_time_s + event_dt_s;
-
-        require(
-            std::isfinite(event_time_s)
-                && event_time_s > start_time_s
-                && event_time_s <= end_time_s,
-            "fire topology event time is invalid");
-
-        const FireFront event_front =
-            topology_advance.front;
-
-        FireFirstArrivalRaster next_arrival =
-            first_arrival_;
-        const FireFirstArrivalRasterUpdate
-            event_arrival_update =
-                next_arrival
-                    .update_from_topology_event_sweep(
-                        start_perimeter,
-                        topology_advance
-                            .terminal_vertices_m,
-                        event_front,
-                        start_time_s,
-                        event_time_s,
-                        std::min(
-                            config_
-                                .arrival_time_tolerance_s,
-                            event_dt_s));
-
-        FireBurnedFractionRaster next_burned =
-            burned_fraction_;
-        const FireRasterBurnedAreaUpdate
-            event_burned_update =
-                next_burned
-                    .update_from_topology_event_sweep(
-                        start_perimeter,
-                        topology_advance
-                            .terminal_vertices_m,
-                        event_front,
-                        config_
-                            .combustion_options
-                            .temporal_substeps);
-
-        FireCombustionRaster next_combustion =
-            combustion_;
-        const FireCombustionRasterAdvance
-            event_combustion_update =
-                next_combustion
-                    .advance_from_topology_event_sweep(
-                        start_perimeter,
-                        topology_advance
-                            .terminal_vertices_m,
-                        event_front,
-                        burned_fraction_,
-                        next_burned,
-                        event_dt_s);
-
-        std::size_t newly_arrived_cell_count =
-            event_arrival_update
-                .newly_arrived_cell_count;
-        std::size_t arrived_cell_count =
-            event_arrival_update
-                .arrived_cell_count;
-
-        amrex::Real newly_burned_area_m2 =
-            event_burned_update
-                .newly_burned_area_m2;
-
-        amrex::Real
-            newly_consumed_dry_fuel_kg =
-                event_combustion_update
-                    .newly_consumed_dry_fuel_kg;
-        amrex::Real sensible_energy_increment_j =
-            event_combustion_update
-                .sensible_energy_increment_j;
-        amrex::Real
-            water_released_increment_kg =
-                event_combustion_update
-                    .water_released_increment_kg;
-
-        FireFront final_front =
-            event_front;
-
-        const amrex::Real remaining_dt_s =
-            end_time_s - event_time_s;
-
-        require(
-            std::isfinite(remaining_dt_s)
-                && remaining_dt_s
-                    >= amrex::Real(0.0),
-            "fire topology-event remainder is invalid");
-
-        if (remaining_dt_s > amrex::Real(0.0)) {
-            final_front =
-                advance_front_rk2_batched(
-                    event_front,
-                    event_time_s,
-                    remaining_dt_s,
-                    normal_speeds);
-
-            const FireFirstArrivalRasterUpdate
-                remainder_arrival_update =
-                    next_arrival
-                        .update_from_front_linear_sweep(
-                            event_front,
-                            final_front,
-                            event_time_s,
-                            end_time_s,
-                            std::min(
-                                config_
-                                    .arrival_time_tolerance_s,
-                                remaining_dt_s),
-                            config_
-                                .combustion_options
-                                .temporal_substeps);
-
-            newly_arrived_cell_count +=
-                remainder_arrival_update
-                    .newly_arrived_cell_count;
-            arrived_cell_count =
-                remainder_arrival_update
-                    .arrived_cell_count;
-
-            const FireBurnedFractionRaster
-                burned_at_event =
-                    next_burned;
-
-            const FireRasterBurnedAreaUpdate
-                remainder_burned_update =
-                    next_burned
-                        .update_from_front_linear_sweep(
-                            event_front,
-                            final_front,
-                            config_
-                                .combustion_options
-                                .temporal_substeps);
-
-            newly_burned_area_m2 +=
-                remainder_burned_update
-                    .newly_burned_area_m2;
-
-            const FireCombustionRasterAdvance
-                remainder_combustion_update =
-                    next_combustion
-                        .advance_from_front_linear_sweep(
-                            event_front,
-                            final_front,
-                            burned_at_event,
-                            next_burned,
-                            remaining_dt_s);
-
-            newly_consumed_dry_fuel_kg +=
-                remainder_combustion_update
-                    .newly_consumed_dry_fuel_kg;
-            sensible_energy_increment_j +=
-                remainder_combustion_update
-                    .sensible_energy_increment_j;
-            water_released_increment_kg +=
-                remainder_combustion_update
-                    .water_released_increment_kg;
-        }
-
-        const auto& geometry =
-            config_.raster_geometry;
-        const amrex::Real xhi_m =
-            geometry.xlo_m
-            + static_cast<amrex::Real>(
-                geometry.nx)
-                * geometry.dx_m;
-        const amrex::Real yhi_m =
-            geometry.ylo_m
-            + static_cast<amrex::Real>(
-                geometry.ny)
-                * geometry.dy_m;
-
-        for (const FireFrontComponent& component :
-             final_front.components()) {
-            for (const FireVec2& vertex :
-                 component.perimeter.vertices_m()) {
-                if (!std::isfinite(vertex.x)
-                    || !std::isfinite(vertex.y)
-                    || vertex.x < geometry.xlo_m
-                    || vertex.x > xhi_m
-                    || vertex.y < geometry.ylo_m
-                    || vertex.y > yhi_m) {
-                    throw std::out_of_range(
-                        "fire spread propagated front leaves the physical environment domain");
-                }
-            }
-        }
-
-        const auto vertex_count =
-            [](const FireFront& front) {
-                std::size_t count = 0;
-                for (const FireFrontComponent& component :
-                     front.components()) {
-                    count +=
-                        component.perimeter.size();
-                }
-                return count;
-            };
-
-        const std::size_t
-            pre_remesh_vertex_count =
-                vertex_count(final_front);
-
-        FireFrontRemeshResult remeshed =
-            remesh_front(
-                final_front,
-                config_.remesh_options);
-
-        const std::size_t
-            post_remesh_vertex_count =
-                vertex_count(remeshed.front);
-
-        const auto combustion_totals =
-            next_combustion.totals();
+        const FireCombustionRasterTotals
+            combustion_totals =
+                next_combustion.totals();
 
         ERFFireStepDiagnostics diagnostics{
             start_time_s,
@@ -1946,16 +2152,12 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             newly_burned_area_m2,
             next_burned.burned_area_m2(),
             newly_consumed_dry_fuel_kg,
-            combustion_totals
-                .remaining_dry_fuel_kg,
-            combustion_totals
-                .consumed_dry_fuel_kg,
+            combustion_totals.remaining_dry_fuel_kg,
+            combustion_totals.consumed_dry_fuel_kg,
             sensible_energy_increment_j,
-            combustion_totals
-                .sensible_energy_j,
+            combustion_totals.sensible_energy_j,
             water_released_increment_kg,
-            combustion_totals
-                .water_released_kg};
+            combustion_totals.water_released_kg};
 
         front_ = std::move(remeshed.front);
         first_arrival_ =
@@ -1970,98 +2172,6 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
         return diagnostics;
     }
 
-    const FirePerimeter& advanced =
-        topology_advance.front
-            .components()
-            .front()
-            .perimeter;
-
-    const auto& geometry = config_.raster_geometry;
-    const amrex::Real xhi_m =
-        geometry.xlo_m
-        + static_cast<amrex::Real>(geometry.nx)
-            * geometry.dx_m;
-    const amrex::Real yhi_m =
-        geometry.ylo_m
-        + static_cast<amrex::Real>(geometry.ny)
-            * geometry.dy_m;
-    for (const FireVec2& vertex : advanced.vertices_m()) {
-        if (!std::isfinite(vertex.x)
-            || !std::isfinite(vertex.y)
-            || vertex.x < geometry.xlo_m
-            || vertex.x > xhi_m
-            || vertex.y < geometry.ylo_m
-            || vertex.y > yhi_m) {
-            throw std::out_of_range(
-                "fire spread propagated perimeter leaves the physical environment domain");
-        }
-    }
-
-    FireFirstArrivalRaster next_arrival = first_arrival_;
-    const FireFirstArrivalRasterUpdate arrival_update =
-        next_arrival.update_from_sweep(
-            perimeter(),
-            advanced,
-            start_time_s,
-            end_time_s,
-            config_.arrival_time_tolerance_s);
-
-    FireBurnedFractionRaster next_burned = burned_fraction_;
-    const FireRasterBurnedAreaUpdate burned_update =
-        next_burned.update_from_linear_sweep(
-            perimeter(),
-            advanced,
-            config_.combustion_options.temporal_substeps);
-
-    FireCombustionRaster next_combustion = combustion_;
-    const FireCombustionRasterAdvance combustion_update =
-        next_combustion.advance_from_linear_sweep(
-            perimeter(),
-            advanced,
-            burned_fraction_,
-            next_burned,
-            dt_s);
-
-    const std::size_t pre_remesh_vertex_count =
-        advanced.size();
-    FirePerimeterRemeshResult remeshed =
-        remesh_perimeter(
-            advanced,
-            config_.remesh_options);
-
-    ERFFireStepDiagnostics diagnostics{
-        start_time_s,
-        end_time_s,
-        pre_remesh_vertex_count,
-        remeshed.perimeter.size(),
-        remeshed.stats.vertices_removed,
-        remeshed.stats.vertices_added,
-        arrival_update.newly_arrived_cell_count,
-        arrival_update.arrived_cell_count,
-        burned_update.newly_burned_area_m2,
-        burned_update.burned_area_m2,
-        combustion_update.newly_consumed_dry_fuel_kg,
-        combustion_update.totals.remaining_dry_fuel_kg,
-        combustion_update.totals.consumed_dry_fuel_kg,
-        combustion_update.sensible_energy_increment_j,
-        combustion_update.totals.sensible_energy_j,
-        combustion_update.water_released_increment_kg,
-        combustion_update.totals.water_released_kg};
-
-    front_ =
-        FireFront(
-            std::vector<FireFrontComponent>{
-                {
-                    FireFrontRole::Outer,
-                    std::move(remeshed.perimeter)
-                }
-            });
-    first_arrival_ = std::move(next_arrival);
-    burned_fraction_ = std::move(next_burned);
-    combustion_ = std::move(next_combustion);
-    current_time_s_ = end_time_s;
-
-    return diagnostics;
 }
 
 } // namespace ERFFire

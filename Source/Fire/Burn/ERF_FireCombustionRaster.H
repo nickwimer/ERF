@@ -65,6 +65,8 @@ advance_fire_combustion_vertex_sweep(
     const FireFront* event_front,
     const FireFront* front_sweep_start,
     const FireFront* front_sweep_end,
+    const FireFront* front_topology_event_start,
+    const std::vector<std::vector<FireVec2>>* front_topology_event_vertices,
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
     amrex::Real dt_s);
@@ -254,6 +256,15 @@ public:
         amrex::Real dt_s);
 
     [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_front_topology_event_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& event_vertices_m,
+        const FireFront& event_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        amrex::Real dt_s);
+
+    [[nodiscard]] FireCombustionRasterAdvance
     advance_from_topology_event_sweep(
         const FirePerimeter& start_perimeter,
         const std::vector<FireVec2>& event_vertices_m,
@@ -271,6 +282,8 @@ private:
         const FireFront* event_front,
         const FireFront* front_sweep_start,
         const FireFront* front_sweep_end,
+        const FireFront* front_topology_event_start,
+        const std::vector<std::vector<FireVec2>>* front_topology_event_vertices,
         const FireBurnedFractionRaster& burned_before,
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);

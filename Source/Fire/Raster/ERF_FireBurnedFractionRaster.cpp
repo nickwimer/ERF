@@ -799,322 +799,104 @@ FireBurnedFractionRaster::update_from_front_linear_sweep (
 }
 
 FireRasterBurnedAreaUpdate
+FireBurnedFractionRaster::update_from_front_topology_event_sweep (
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& event_vertices_m,
+    const FireFront& event_front,
+    std::size_t temporal_substeps)
+{
+    if (temporal_substeps == 0) {
+        throw std::invalid_argument(
+            "Fire burned-fraction front topology-event sweep "
+            "temporal_substeps must be positive");
+    }
+
+    // Validate component/vertex correspondence and all raw endpoint vertices
+    // before any temporary history update.
+    (void)interpolate_fire_front_topology_event_sweep(
+        start_front,
+        event_vertices_m,
+        amrex::Real(0.0));
+
+    FireBurnedFractionRaster next(*this);
+
+    amrex::Real newly_burned_area_m2 =
+        amrex::Real(0.0);
+
+    for (std::size_t substep = 0;
+         substep < temporal_substeps;
+         ++substep) {
+        const bool event_sample =
+            substep + 1 == temporal_substeps;
+
+        FireRasterBurnedAreaUpdate update;
+
+        if (event_sample) {
+            update =
+                next.update_from_front(
+                    event_front);
+        } else {
+            const amrex::Real alpha =
+                static_cast<amrex::Real>(
+                    substep + 1)
+                / static_cast<amrex::Real>(
+                    temporal_substeps);
+
+            const FireFront sample_front =
+                interpolate_fire_front_topology_event_sweep(
+                    start_front,
+                    event_vertices_m,
+                    alpha);
+
+            update =
+                next.update_from_front(
+                    sample_front);
+        }
+
+        newly_burned_area_m2 +=
+            update.newly_burned_area_m2;
+    }
+
+    const amrex::Real burned_area_m2 =
+        next.burned_area_m2();
+
+    if (!std::isfinite(newly_burned_area_m2)
+        || !std::isfinite(burned_area_m2)) {
+        throw std::overflow_error(
+            "Fire front topology-event burned-area accounting is not finite");
+    }
+
+    *this = std::move(next);
+
+    return {
+        burned_area_m2,
+        newly_burned_area_m2
+    };
+}
+
+FireRasterBurnedAreaUpdate
 FireBurnedFractionRaster::update_from_topology_event_sweep (
     const FirePerimeter& start_perimeter,
     const std::vector<FireVec2>& event_vertices_m,
     const FireFront& event_front,
     std::size_t temporal_substeps)
 {
-    if (start_perimeter.size()
-        != event_vertices_m.size()) {
-        throw std::invalid_argument(
-            "Fire burned-fraction topology-event sweep requires "
-            "matching vertex counts");
-    }
-
-    if (temporal_substeps == 0) {
-        throw std::invalid_argument(
-            "Fire burned-fraction topology-event sweep "
-            "temporal_substeps must be positive");
-    }
-
-    for (const FireVec2& vertex : event_vertices_m) {
-        if (!std::isfinite(vertex.x)
-            || !std::isfinite(vertex.y)) {
-            throw std::invalid_argument(
-                "Fire burned-fraction topology-event vertices "
-                "must be finite");
-        }
-    }
-
-    amrex::MultiFab next_burned_fraction(
-        surface_layout_.box_array(),
-        surface_layout_.distribution_map(),
-        1,
-        0,
-        fire_surface_mf_info());
-
-    copy_distributed_state(
-        burned_fraction_mf_,
-        next_burned_fraction);
-
-    amrex::Real local_newly_burned_area_m2 =
-        amrex::Real(0.0);
-    amrex::Real local_burned_area_m2 =
-        amrex::Real(0.0);
-
-    const auto& start_vertices =
-        start_perimeter.vertices_m();
-
-    std::string local_error;
-
-    try {
-        for (std::size_t substep = 0;
-             substep < temporal_substeps;
-             ++substep) {
-            const bool event_sample =
-                substep + 1 == temporal_substeps;
-
-            std::optional<FirePerimeter>
-                sample_perimeter;
-
-            amrex::Real sample_xlo_m{};
-            amrex::Real sample_xhi_m{};
-            amrex::Real sample_ylo_m{};
-            amrex::Real sample_yhi_m{};
-
-            if (event_sample) {
-                const auto& components =
-                    event_front.components();
-                const auto& first_vertices =
-                    components.front()
-                        .perimeter.vertices_m();
-
-                sample_xlo_m =
-                    first_vertices.front().x;
-                sample_xhi_m =
-                    first_vertices.front().x;
-                sample_ylo_m =
-                    first_vertices.front().y;
-                sample_yhi_m =
-                    first_vertices.front().y;
-
-                for (const auto& component :
-                     components) {
-                    for (const FireVec2& vertex :
-                         component.perimeter
-                             .vertices_m()) {
-                        sample_xlo_m =
-                            std::min(
-                                sample_xlo_m,
-                                vertex.x);
-                        sample_xhi_m =
-                            std::max(
-                                sample_xhi_m,
-                                vertex.x);
-                        sample_ylo_m =
-                            std::min(
-                                sample_ylo_m,
-                                vertex.y);
-                        sample_yhi_m =
-                            std::max(
-                                sample_yhi_m,
-                                vertex.y);
-                    }
-                }
-            } else {
-                const amrex::Real alpha =
-                    static_cast<amrex::Real>(
-                        substep + 1)
-                    / static_cast<amrex::Real>(
-                        temporal_substeps);
-
-                std::vector<FireVec2>
-                    sample_vertices;
-                sample_vertices.reserve(
-                    start_vertices.size());
-
-                for (std::size_t index = 0;
-                     index < start_vertices.size();
-                     ++index) {
-                    sample_vertices.push_back(
-                        start_vertices[index]
-                        + alpha
-                            * (event_vertices_m[index]
-                               - start_vertices[index]));
-                }
-
-                sample_perimeter.emplace(
-                    std::move(sample_vertices));
-
-                const auto& vertices =
-                    sample_perimeter
-                        ->vertices_m();
-
-                sample_xlo_m =
-                    vertices.front().x;
-                sample_xhi_m =
-                    vertices.front().x;
-                sample_ylo_m =
-                    vertices.front().y;
-                sample_yhi_m =
-                    vertices.front().y;
-
-                for (const FireVec2& vertex :
-                     vertices) {
-                    sample_xlo_m =
-                        std::min(
-                            sample_xlo_m,
-                            vertex.x);
-                    sample_xhi_m =
-                        std::max(
-                            sample_xhi_m,
-                            vertex.x);
-                    sample_ylo_m =
-                        std::min(
-                            sample_ylo_m,
-                            vertex.y);
-                    sample_yhi_m =
-                        std::max(
-                            sample_yhi_m,
-                            vertex.y);
-                }
+    const FireFront start_front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                start_perimeter
             }
+        });
 
-            for (amrex::MFIter mfi(
-                     next_burned_fraction);
-                 mfi.isValid();
-                 ++mfi) {
-                const amrex::Box& box =
-                    mfi.validbox();
-                const auto next =
-                    next_burned_fraction.array(mfi);
+    return update_from_front_topology_event_sweep(
+        start_front,
+        std::vector<std::vector<FireVec2>>{
+            event_vertices_m
+        },
+        event_front,
+        temporal_substeps);
 
-                for (int j = box.smallEnd(1);
-                     j <= box.bigEnd(1);
-                     ++j) {
-                    for (int i = box.smallEnd(0);
-                         i <= box.bigEnd(0);
-                         ++i) {
-                        const amrex::Real previous =
-                            next(i, j, 0);
-
-                        if (previous
-                            == amrex::Real(1.0)) {
-                            continue;
-                        }
-
-                        const FireCartesianCell2D cell =
-                            cell_bounds(
-                                static_cast<std::size_t>(
-                                    i),
-                                static_cast<std::size_t>(
-                                    j));
-
-                        if (cell.xhi_m < sample_xlo_m
-                            || cell.xlo_m
-                                > sample_xhi_m
-                            || cell.yhi_m
-                                < sample_ylo_m
-                            || cell.ylo_m
-                                > sample_yhi_m) {
-                            continue;
-                        }
-
-                        const amrex::Real coverage =
-                            event_sample
-                            ? fire_front_cell_coverage_fraction(
-                                event_front,
-                                cell)
-                            : fire_perimeter_cell_coverage_fraction(
-                                *sample_perimeter,
-                                cell);
-
-                        next(i, j, 0) =
-                            update_fire_burned_fraction(
-                                previous,
-                                coverage)
-                                .burned_fraction;
-                    }
-                }
-            }
-        }
-
-        for (amrex::MFIter mfi(
-                 next_burned_fraction);
-             mfi.isValid();
-             ++mfi) {
-            const amrex::Box& box =
-                mfi.validbox();
-            const auto previous =
-                burned_fraction_mf_.const_array(
-                    mfi);
-            const auto next =
-                next_burned_fraction.const_array(
-                    mfi);
-
-            for (int j = box.smallEnd(1);
-                 j <= box.bigEnd(1);
-                 ++j) {
-                for (int i = box.smallEnd(0);
-                     i <= box.bigEnd(0);
-                     ++i) {
-                    const FireCartesianCell2D cell =
-                        cell_bounds(
-                            static_cast<std::size_t>(
-                                i),
-                            static_cast<std::size_t>(
-                                j));
-
-                    const amrex::Real represented_area_m2 =
-                        detail::
-                            fire_cartesian_cell_area_m2(
-                                cell);
-
-                    local_newly_burned_area_m2 +=
-                        (next(i, j, 0)
-                         - previous(i, j, 0))
-                        * represented_area_m2;
-
-                    local_burned_area_m2 +=
-                        next(i, j, 0)
-                        * represented_area_m2;
-                }
-            }
-        }
-    } catch (const std::exception& error) {
-        local_error = error.what();
-    } catch (...) {
-        local_error =
-            "unknown local Fire burned-fraction "
-            "topology-event sweep error";
-    }
-
-    int failed =
-        local_error.empty() ? 0 : 1;
-    amrex::ParallelDescriptor::ReduceIntMax(
-        failed);
-
-    if (failed != 0) {
-        if (!local_error.empty()) {
-            throw std::runtime_error(
-                "distributed Fire burned-fraction "
-                "topology-event sweep failed: "
-                + local_error);
-        }
-
-        throw std::runtime_error(
-            "distributed Fire burned-fraction "
-            "topology-event sweep failed on "
-            "another MPI rank");
-    }
-
-    amrex::Real newly_burned_area_m2 =
-        local_newly_burned_area_m2;
-    amrex::Real burned_area_m2 =
-        local_burned_area_m2;
-
-    amrex::ParallelDescriptor::ReduceRealSum(
-        newly_burned_area_m2);
-    amrex::ParallelDescriptor::ReduceRealSum(
-        burned_area_m2);
-
-    if (!std::isfinite(newly_burned_area_m2)
-        || !std::isfinite(burned_area_m2)) {
-        throw std::overflow_error(
-            "Fire topology-event raster burned-area "
-            "accounting is not finite");
-    }
-
-    burned_fraction_mf_ =
-        std::move(next_burned_fraction);
-    burned_area_m2_ =
-        burned_area_m2;
-
-    return {
-        burned_area_m2,
-        newly_burned_area_m2
-    };
 }
 
 FireRasterBurnedAreaUpdate

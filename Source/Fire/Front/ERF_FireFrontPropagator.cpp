@@ -617,6 +617,84 @@ advance_front_rk2_batched_until_topology_event(
         }
     }
 
+    std::optional<amrex::Real>
+        midpoint_hole_extinction;
+    std::size_t
+        midpoint_hole_extinction_component_index = 0;
+
+    for (std::size_t component_index = 0;
+         component_index < initial_components.size();
+         ++component_index) {
+        if (initial_components[component_index].role
+            != FireFrontRole::Hole) {
+            continue;
+        }
+
+        const auto extinction =
+            locate_first_perimeter_area_collapse(
+                initial_components[
+                    component_index]
+                    .perimeter,
+                midpoint_vertices_m[
+                    component_index]);
+
+        if (extinction.has_value()
+            && (!midpoint_hole_extinction.has_value()
+                || *extinction
+                    < *midpoint_hole_extinction)) {
+            midpoint_hole_extinction =
+                *extinction;
+            midpoint_hole_extinction_component_index =
+                component_index;
+        }
+    }
+
+    const bool midpoint_extinction_precedes =
+        midpoint_hole_extinction.has_value()
+        && (!midpoint_collision.has_value()
+            || *midpoint_hole_extinction
+                < midpoint_collision->motion_fraction);
+
+    if (midpoint_extinction_precedes) {
+        const amrex::Real local_fraction =
+            *midpoint_hole_extinction;
+        const amrex::Real full_step_fraction =
+            amrex::Real(0.5)
+            * local_fraction;
+
+        std::vector<std::vector<FireVec2>>
+            event_vertices_m;
+        event_vertices_m.reserve(
+            initial_components.size());
+
+        for (std::size_t component_index = 0;
+             component_index
+                 < initial_components.size();
+             ++component_index) {
+            event_vertices_m.push_back(
+                interpolate_vertices(
+                    initial_vertices_m[
+                        component_index],
+                    midpoint_vertices_m[
+                        component_index],
+                    local_fraction));
+        }
+
+        return {
+            std::nullopt,
+            dt_s * full_step_fraction,
+            std::move(event_vertices_m),
+            FireFrontComponentTopologyEvent{
+                midpoint_hole_extinction_component_index,
+                FireFrontRole::Hole,
+                FirePerimeterCollision{},
+                FireFrontComponentTopologyEventType::
+                    HoleExtinction,
+                full_step_fraction
+            }
+        };
+    }
+
     if (midpoint_collision.has_value()) {
         const amrex::Real local_fraction =
             midpoint_collision->motion_fraction;
@@ -656,7 +734,10 @@ advance_front_rk2_batched_until_topology_event(
                 initial_components[
                     midpoint_component_index]
                     .role,
-                std::move(collision)
+                std::move(collision),
+                FireFrontComponentTopologyEventType::
+                    SelfContact,
+                full_step_fraction
             }
         };
     }
@@ -782,6 +863,81 @@ advance_front_rk2_batched_until_topology_event(
         }
     }
 
+    std::optional<amrex::Real>
+        final_hole_extinction;
+    std::size_t
+        final_hole_extinction_component_index = 0;
+
+    for (std::size_t component_index = 0;
+         component_index < initial_components.size();
+         ++component_index) {
+        if (initial_components[component_index].role
+            != FireFrontRole::Hole) {
+            continue;
+        }
+
+        const auto extinction =
+            locate_first_perimeter_area_collapse(
+                initial_components[
+                    component_index]
+                    .perimeter,
+                final_vertices_m[
+                    component_index]);
+
+        if (extinction.has_value()
+            && (!final_hole_extinction.has_value()
+                || *extinction
+                    < *final_hole_extinction)) {
+            final_hole_extinction =
+                *extinction;
+            final_hole_extinction_component_index =
+                component_index;
+        }
+    }
+
+    const bool final_extinction_precedes =
+        final_hole_extinction.has_value()
+        && (!final_collision.has_value()
+            || *final_hole_extinction
+                < final_collision->motion_fraction);
+
+    if (final_extinction_precedes) {
+        const amrex::Real full_step_fraction =
+            *final_hole_extinction;
+
+        std::vector<std::vector<FireVec2>>
+            event_vertices_m;
+        event_vertices_m.reserve(
+            initial_components.size());
+
+        for (std::size_t component_index = 0;
+             component_index
+                 < initial_components.size();
+             ++component_index) {
+            event_vertices_m.push_back(
+                interpolate_vertices(
+                    initial_vertices_m[
+                        component_index],
+                    final_vertices_m[
+                        component_index],
+                    full_step_fraction));
+        }
+
+        return {
+            std::nullopt,
+            dt_s * full_step_fraction,
+            std::move(event_vertices_m),
+            FireFrontComponentTopologyEvent{
+                final_hole_extinction_component_index,
+                FireFrontRole::Hole,
+                FirePerimeterCollision{},
+                FireFrontComponentTopologyEventType::
+                    HoleExtinction,
+                full_step_fraction
+            }
+        };
+    }
+
     if (final_collision.has_value()) {
         const amrex::Real full_step_fraction =
             final_collision->motion_fraction;
@@ -813,7 +969,10 @@ advance_front_rk2_batched_until_topology_event(
                 initial_components[
                     final_component_index]
                     .role,
-                *final_collision
+                *final_collision,
+                FireFrontComponentTopologyEventType::
+                    SelfContact,
+                full_step_fraction
             }
         };
     }

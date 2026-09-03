@@ -675,4 +675,84 @@ locate_first_perimeter_collision (
     return best->collision;
 }
 
+std::optional<amrex::Real>
+locate_first_perimeter_area_collapse (
+    const FirePerimeter& start,
+    const std::vector<FireVec2>& end_vertices_m)
+{
+    if (end_vertices_m.size() != start.size()) {
+        throw std::invalid_argument(
+            "Fire area-collapse endpoint must preserve perimeter vertex count");
+    }
+
+    for (const FireVec2& vertex : end_vertices_m) {
+        if (!finite(vertex)) {
+            throw std::invalid_argument(
+                "Fire area-collapse endpoint vertices must be finite");
+        }
+    }
+
+    const auto& start_vertices_m =
+        start.vertices_m();
+
+    // Translate by a fixed origin before forming the area polynomial. Polygon
+    // area is translation invariant, and this substantially reduces
+    // cancellation for georeferenced coordinates such as the Palisades case.
+    const FireVec2 origin =
+        start_vertices_m.front();
+
+    amrex::Real quadratic = amrex::Real(0.0);
+    amrex::Real linear = amrex::Real(0.0);
+    amrex::Real constant = amrex::Real(0.0);
+
+    for (std::size_t i = 0;
+         i < start_vertices_m.size();
+         ++i) {
+        const std::size_t j =
+            (i + 1) % start_vertices_m.size();
+
+        const FireVec2 initial_i =
+            start_vertices_m[i] - origin;
+        const FireVec2 initial_j =
+            start_vertices_m[j] - origin;
+        const FireVec2 motion_i =
+            end_vertices_m[i] - start_vertices_m[i];
+        const FireVec2 motion_j =
+            end_vertices_m[j] - start_vertices_m[j];
+
+        constant +=
+            detail::cross_2d(
+                initial_i,
+                initial_j);
+        linear +=
+            detail::cross_2d(
+                motion_i,
+                initial_j)
+            + detail::cross_2d(
+                initial_i,
+                motion_j);
+        quadratic +=
+            detail::cross_2d(
+                motion_i,
+                motion_j);
+    }
+
+    const QuadraticRootSet roots =
+        quadratic_roots_unit_interval(
+            quadratic,
+            linear,
+            constant);
+
+    const amrex::Real tolerance =
+        fraction_tolerance();
+
+    for (const amrex::Real root : roots.roots) {
+        if (root > tolerance) {
+            return root;
+        }
+    }
+
+    return std::nullopt;
+}
+
 } // namespace ERFFire

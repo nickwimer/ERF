@@ -31,6 +31,21 @@ locate_first_perimeter_collision(
     const FirePerimeter& start,
     const std::vector<FireVec2>& end_vertices_m);
 
+/**
+ * Locate the first positive motion fraction at which the signed area of a
+ * perimeter becomes exactly zero while corresponding vertices move linearly
+ * from start to end_vertices_m.
+ *
+ * The represented signed area is quadratic in motion fraction. start must be
+ * a valid counter-clockwise perimeter and end_vertices_m must preserve vertex
+ * correspondence. Returns std::nullopt when no zero-area event occurs in
+ * (0,1].
+ */
+[[nodiscard]] std::optional<amrex::Real>
+locate_first_perimeter_area_collapse(
+    const FirePerimeter& start,
+    const std::vector<FireVec2>& end_vertices_m);
+
 } // namespace ERFFire
 
 #endif // ERF_FIRE_FRONT_COLLISION_H

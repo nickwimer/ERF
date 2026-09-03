@@ -208,6 +208,15 @@ public:
         amrex::Real time_s);
 
     [[nodiscard]] FireFirstArrivalRasterUpdate
+    update_from_front_topology_event_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& event_vertices_m,
+        const FireFront& event_front,
+        amrex::Real start_time_s,
+        amrex::Real event_time_s,
+        amrex::Real time_tolerance_s);
+
+    [[nodiscard]] FireFirstArrivalRasterUpdate
     update_from_topology_event_sweep(
         const FirePerimeter& start_perimeter,
         const std::vector<FireVec2>& event_vertices_m,
