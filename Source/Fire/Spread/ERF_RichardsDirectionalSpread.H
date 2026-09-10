@@ -41,9 +41,19 @@ struct RothermelWindSlopeVector
     [[nodiscard]] FireVec2 heading_unit() const noexcept
     {
         const amrex::Real magnitude = resultant_factor();
-        return magnitude > amrex::Real(0.0)
-            ? resultant_vector / magnitude
-            : FireVec2{1.0, 0.0};
+
+        // Embed the isotropic +x fallback in the normalization operands so an
+        // optimized build never has a zero divisor to evaluate speculatively.
+        const amrex::Real inactive =
+            magnitude > amrex::Real(0.0)
+                ? amrex::Real(0.0)
+                : amrex::Real(1.0);
+
+        const FireVec2 numerator{
+            resultant_vector.x + inactive,
+            resultant_vector.y};
+
+        return numerator / (magnitude + inactive);
     }
 };
 

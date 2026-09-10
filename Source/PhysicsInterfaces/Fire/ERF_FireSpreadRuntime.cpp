@@ -35,10 +35,19 @@ require(bool condition, const char* message)
 FireVec2
 wind_push_unit(const FireVec2& wind_mps, amrex::Real speed_mps)
 {
-    if (!(speed_mps > amrex::Real(0.0))) {
-        return {amrex::Real(1.0), amrex::Real(0.0)};
-    }
-    return wind_mps / speed_mps;
+    // Build the zero-wind fallback into the arithmetic itself.  This prevents
+    // optimized builds from speculatively evaluating 0/0 before selecting the
+    // inactive +x direction when floating-point exceptions are trapped.
+    const amrex::Real inactive =
+        speed_mps > amrex::Real(0.0)
+            ? amrex::Real(0.0)
+            : amrex::Real(1.0);
+
+    const FireVec2 numerator{
+        wind_mps.x + inactive,
+        wind_mps.y};
+
+    return numerator / (speed_mps + inactive);
 }
 
 
@@ -47,12 +56,18 @@ terrain_upslope_unit(
     const FireVec2& gradient_m_per_m,
     amrex::Real slope_tangent)
 {
-    if (!(slope_tangent > amrex::Real(0.0))) {
-        return {
-            amrex::Real(1.0),
-            amrex::Real(0.0)};
-    }
-    return gradient_m_per_m / slope_tangent;
+    // As above, make both the numerator and denominator intrinsically valid
+    // for the zero-slope state rather than computing a disposable 0/0 result.
+    const amrex::Real inactive =
+        slope_tangent > amrex::Real(0.0)
+            ? amrex::Real(0.0)
+            : amrex::Real(1.0);
+
+    const FireVec2 numerator{
+        gradient_m_per_m.x + inactive,
+        gradient_m_per_m.y};
+
+    return numerator / (slope_tangent + inactive);
 }
 
 amrex::Real

@@ -26,7 +26,13 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
         fz.define(convert(ba, IntVect(0,0,1)), dm, 1, 0); // No ghost cells
 
         Real dtn  = dt;
-        Real coef = dtn/m_dzmin;
+        // NOTE: coef carries only the reference vertical spacing. The physical
+        //       spacing is supplied by the inverse Jacobian in the tendency below,
+        //       since detJ = dz_phys/CellSize(2). Dividing by m_dzmin here as well
+        //       would apply the vertical metric twice. m_dzmin is still the correct
+        //       length scale for the substep (CFL) count, which must bound the
+        //       thinnest cell in the domain.
+        Real coef = dtn * m_geom.InvCellSize(2);
 
         for ( MFIter mfi(*tabs,TilingIfNotGPU()); mfi.isValid(); ++mfi) {
             auto qv_array    = mic_fab_vars[MicVar_Kess::qv]->array(mfi);
@@ -128,8 +134,19 @@ void Kessler::AdvanceKessler (const SolverChoice &solverChoice)
                                                                  kessler_face_state(k, k_hi, rho_km1, rho_k, qp_km1, qp_k);
                                                              return { kessler_terminal_velocity(face_state.rho, face_state.qp) };
                                                          });
-        int n_substep = kessler_num_sedimentation_substeps(get<0>(max_terminal_velocity),
-                                                           dt, m_dzmin);
+        Real max_vt = get<0>(max_terminal_velocity);
+        //
+        // ParReduce over a MultiFab gives the local rank maximum here.  Every rank must
+        //    arrive at the SAME substep count: otherwise different parts of the domain
+        //    advance with different effective timesteps, the answer depends on the number
+        //    of ranks, and the ranks make different numbers of the collective FillBoundary
+        //    calls in the substep loop below.  A rank owning no boxes would also see
+        //    ReduceOpMax's lowest() initial value here.  (SAM's PrecipFall does this same
+        //    reduction for the same reasons.)
+        //
+        ParallelDescriptor::ReduceRealMax(max_vt);
+
+        int n_substep = kessler_num_sedimentation_substeps(max_vt, dt, m_dzmin);
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(n_substep >= 1,
                                          "Kessler: Number of precipitation substeps must be greater than 0!");
         coef /= Real(n_substep);
