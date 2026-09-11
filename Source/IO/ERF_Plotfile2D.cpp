@@ -69,12 +69,12 @@ bool is_land_surface_diagnostic (const plotfile2d::DiagnosticDescriptor* descrip
     return descriptor && descriptor->category == plotfile2d::DiagnosticCategory::LandSurface;
 }
 
+#ifdef ERF_USE_FIRE
 bool is_fire_diagnostic (const plotfile2d::DiagnosticDescriptor* descriptor) noexcept
 {
     return descriptor && descriptor->category == plotfile2d::DiagnosticCategory::Fire;
 }
 
-#ifdef ERF_USE_FIRE
 bool
 fire_raster_matches_level0_geometry(
     const ERFFire::FireCartesianRasterGeometry2D& fire_geometry,
