@@ -4,6 +4,15 @@
 #include <ERF_ReadFromERFBdy.H>
 #include <ERF_LagrangianMicrophysics.H>
 
+#ifdef ERF_USE_FIRE
+#include <ERF_FireLevel0Environment.H>
+#include <ERF_FireLevel0TerrainWindSampler.H>
+#include <ERF_FireLevel0SourceCoupling.H>
+#include <ERF_FireRuntimeInit.H>
+#include <ERF_FireSpreadOutput.H>
+#include <ERF_FireSurfaceFeedback.H>
+#endif
+
 using namespace amrex;
 
 /**
@@ -157,6 +166,227 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                            {&S_new, &rU_new[lev], &rV_new[lev], &rW_new[lev]},
                            base_state[lev], base_state[lev]);
     }
+
+#ifdef ERF_USE_FIRE
+    // Explicit Fire coupling sequencing:
+    //   FillPatch atmosphere at t^n
+    //   -> bind one immutable t^n distributed environment view
+    //   -> advance one candidate coupling-neutral Fire state across dt[0]
+    //   -> for two_way only, difference combustion history, project the
+    //      step-integrated release using t^n pressure, and prepare a constant
+    //      native ERF source tendency for the same atmospheric step
+    //   -> atomically commit the Fire candidate/source
+    //   -> ordinary ERF Advance.
+    //
+    // one_way follows the same Fire evolution path but installs no atmospheric
+    // source. The selected wind mode chooses either the configured DirectReference
+    // AGL height or the canonical 20-ft (6.096 m) local-AGL snapshot; the latter
+    // is reduced by its explicit WAF inside the coupling-neutral spread runtime
+    // before Rothermel wind/slope combination. VariableDz uses the same policy
+    // with map-plane terrain slope in both coupling modes. VariableDz two_way
+    // projects the same combustion feedback through local terrain-following AGL
+    // columns using authoritative detJ_cc physical volumes.
+    if (lev == 0 && m_fire_runtime_options.enabled) {
+        ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
+            geom[0],
+            U_new,
+            V_new,
+            *z_phys_cc[0],
+            *z_phys_nd[0],
+            solverChoice.mesh_type,
+            solverChoice.terrain_type,
+            solverChoice.buildings_type,
+            max_level};
+
+        std::unique_ptr<ERFFire::ERFFireLevel0TerrainWindSampler>
+            next_terrain_sampler;
+        std::unique_ptr<ERFFire::ERFFireLevel0FlatWindSampler>
+            next_flat_sampler;
+
+        const Real fire_reference_height_agl_m =
+            m_fire_runtime_options.wind_mode
+                    == ERFFire::ERFFireWindMode::ExplicitWaf20ft
+                ? ERFFire::explicit_waf_20ft_reference_height_agl_m
+                : m_fire_runtime_options.reference_height_agl_m;
+
+        if (solverChoice.mesh_type == MeshType::VariableDz) {
+            next_terrain_sampler =
+                std::make_unique<ERFFire::ERFFireLevel0TerrainWindSampler>(
+                    fire_inputs,
+                    fire_reference_height_agl_m);
+        } else {
+            next_flat_sampler =
+                std::make_unique<
+                    ERFFire::ERFFireLevel0FlatWindSampler>(
+                    fire_inputs,
+                    fire_reference_height_agl_m);
+        }
+
+        m_fire_environment_snapshot.reset();
+        m_fire_environment_snapshot_time = time;
+        m_fire_environment_reference_height_agl_m =
+            static_cast<double>(
+                fire_reference_height_agl_m);
+
+        if (!m_fire_spread_runtime) {
+            m_fire_spread_runtime =
+                ERFFire::make_erf_fire_spread_runtime(
+                    m_fire_runtime_options,
+                    geom[0],
+                    static_cast<Real>(time));
+            m_fire_step_index = 0;
+
+            if (m_fire_runtime_options.output_interval_steps > 0) {
+                ERFFire::write_erf_fire_spread_snapshot(
+                    *m_fire_spread_runtime,
+                    m_fire_runtime_options.output_dir,
+                    m_fire_step_index);
+            }
+        }
+
+        if (next_terrain_sampler
+            && !m_fire_terrain_surface) {
+            const ERFFire::FireCartesianRasterGeometry2D
+                fire_terrain_geometry =
+                    m_fire_spread_runtime
+                        ->config()
+                        .raster_geometry;
+
+            const ERFTerrainSource* shared_terrain_source =
+                prob->terrain_source();
+
+            if (shared_terrain_source != nullptr) {
+                m_fire_terrain_surface =
+                    std::make_unique<ERFFire::FireTerrainSurface>(
+                        ERFFire::make_erf_terrain_source_surface_on_geometry(
+                            *shared_terrain_source,
+                            fire_terrain_geometry));
+            } else {
+                m_fire_terrain_surface =
+                    std::make_unique<ERFFire::FireTerrainSurface>(
+                        ERFFire::make_erf_level0_terrain_surface_on_geometry(
+                            fire_inputs,
+                            fire_terrain_geometry));
+            }
+        }
+
+        if (m_fire_spread_runtime->current_time_s()
+            != static_cast<Real>(time)) {
+            Error(
+                "ERF-Fire runtime clock is not synchronized with level-0 t^n");
+        }
+
+        ERFFire::ERFFireSpreadRuntime next_fire_runtime =
+            *m_fire_spread_runtime;
+
+        const ERFFire::FireEnvironmentBatchFunction
+            flat_environment =
+                [&next_flat_sampler](
+                    const std::vector<ERFFire::FireVec2>& positions_m) {
+                    return next_flat_sampler->sample_points(
+                        positions_m);
+                };
+
+        const ERFFire::FireEnvironmentBatchFunction
+            terrain_environment =
+                [&next_terrain_sampler](
+                    const std::vector<ERFFire::FireVec2>& positions_m) {
+                    return next_terrain_sampler->sample_points(
+                        positions_m);
+                };
+
+        if (m_fire_runtime_options.wind_mode
+                == ERFFire::ERFFireWindMode::DirectReference) {
+            if (next_terrain_sampler) {
+                (void)next_fire_runtime
+                    .advance_direct_reference_wind_batched(
+                        terrain_environment,
+                        *m_fire_terrain_surface,
+                        static_cast<Real>(dt[0]));
+            } else {
+                (void)next_fire_runtime
+                    .advance_direct_reference_wind_batched(
+                        flat_environment,
+                        static_cast<Real>(dt[0]));
+            }
+        } else if (m_fire_runtime_options.wind_mode
+                   == ERFFire::ERFFireWindMode::ExplicitWaf20ft) {
+            if (next_terrain_sampler) {
+                (void)next_fire_runtime
+                    .advance_explicit_waf_20ft_batched(
+                        terrain_environment,
+                        *m_fire_terrain_surface,
+                        m_fire_runtime_options.wind_adjustment_factor,
+                        static_cast<Real>(dt[0]));
+            } else {
+                (void)next_fire_runtime
+                    .advance_explicit_waf_20ft_batched(
+                        flat_environment,
+                        m_fire_runtime_options.wind_adjustment_factor,
+                        static_cast<Real>(dt[0]));
+            }
+        } else {
+            Error("unsupported ERF-Fire wind mode");
+        }
+
+        std::unique_ptr<MultiFab> next_fire_source;
+        double next_fire_source_time =
+            std::numeric_limits<double>::quiet_NaN();
+
+        if (m_fire_runtime_options.coupling_mode
+            == ERFFire::ERFFireCouplingMode::TwoWay) {
+            const ERFFire::FireSurfaceFeedbackRaster feedback =
+                ERFFire::make_fire_surface_feedback_increment(
+                    m_fire_spread_runtime->combustion_raster(),
+                    next_fire_runtime.combustion_raster());
+
+            const ERFFire::ERFFireAtmosphericSourceOptions
+                source_options{
+                    m_fire_runtime_options
+                        .feedback_extinction_depth_m};
+
+            if (solverChoice.mesh_type == MeshType::VariableDz) {
+                next_fire_source =
+                    ERFFire::make_erf_fire_level0_terrain_source_tendency(
+                        feedback,
+                        fire_inputs,
+                        *detJ_cc[0],
+                        S_new,
+                        solverChoice.moisture_type,
+                        static_cast<Real>(dt[0]),
+                        source_options);
+            } else {
+                next_fire_source =
+                    ERFFire::make_erf_fire_level0_source_tendency(
+                        feedback,
+                        fire_inputs,
+                        S_new,
+                        solverChoice.moisture_type,
+                        static_cast<Real>(dt[0]),
+                        source_options);
+            }
+            next_fire_source_time = time;
+        }
+
+        *m_fire_spread_runtime =
+            std::move(next_fire_runtime);
+        m_fire_atmospheric_source_tendency =
+            std::move(next_fire_source);
+        m_fire_atmospheric_source_time =
+            next_fire_source_time;
+
+        ++m_fire_step_index;
+        if (m_fire_runtime_options.output_interval_steps > 0
+            && m_fire_step_index
+                   % m_fire_runtime_options.output_interval_steps
+               == 0) {
+            ERFFire::write_erf_fire_spread_snapshot(
+                *m_fire_spread_runtime,
+                m_fire_runtime_options.output_dir,
+                m_fire_step_index);
+        }
+    }
+#endif
 
     if (regrid_int > 0)  // We may need to regrid
     {

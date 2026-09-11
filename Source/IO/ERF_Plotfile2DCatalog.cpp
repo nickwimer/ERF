@@ -91,6 +91,14 @@ const amrex::Vector<DiagnosticDescriptor>& catalog_storage ()
         {DiagnosticID::Temperature2m, "temperature_2m", "Physical air temperature 2 m above the local surface", "K", DiagnosticCategory::LandSurface, MissingPolicy::FillMinus999WhenUnavailable},
         {DiagnosticID::WaterVaporMixingRatio2m, "water_vapor_mixing_ratio_2m", "Water-vapor mixing ratio 2 m above the local surface per unit dry-air mass", "kg kg^-1 dry air", DiagnosticCategory::LandSurface, MissingPolicy::FillMinus999WhenUnavailable},
         {DiagnosticID::NearSurfaceDiagnosticSource, "near_surface_diagnostic_source", "Source code for the unified near-surface diagnostic bundle", "1", DiagnosticCategory::LandSurface, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireBurnedFraction, "fire_burned_fraction", "Persistent Fire burned-area fraction", "1", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireHasArrived, "fire_has_arrived", "Fire first-arrival validity mask", "1", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireFirstArrivalTime, "fire_first_arrival_time_s", "First positive-area Fire arrival time; valid where fire_has_arrived is 1", "s", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireIgnitedAreaFraction, "fire_ignited_area_fraction", "Fire combustion ignited-area fraction", "1", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireRemainingDryFuel, "fire_remaining_dry_fuel_kg_m2", "Remaining oven-dry Fire fuel load", "kg/m^2", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireConsumedDryFuel, "fire_consumed_dry_fuel_kg_m2", "Cumulative consumed oven-dry Fire fuel load", "kg/m^2", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireSensibleEnergy, "fire_sensible_energy_j_m2", "Cumulative Fire sensible energy released per unit surface area", "J/m^2", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
+        {DiagnosticID::FireWaterReleased, "fire_water_released_kg_m2", "Cumulative Fire combustion water released per unit surface area", "kg/m^2", DiagnosticCategory::Fire, MissingPolicy::AlwaysAvailable},
     };
 
     return catalog;

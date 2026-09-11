@@ -4,11 +4,21 @@
 
 #include <iostream>
 #include <fstream>
+#include <exception>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <sstream>
 #include <cmath>
 #include <vector>
 #include <string>
 
 #include "ERF.H"
+
+#ifdef ERF_USE_FIRE
+#include <ERF_FireRuntimeInit.H>
+#include <ERF_FireSpreadOutput.H>
+#endif
 #include "AMReX_PlotFileUtil.H"
 #include "ERF_ReadFromERFBdy.H"
 #include "ERF_Provenance.H"
@@ -20,6 +30,367 @@ namespace
 {
 
 bool provenance_warning_emitted = false;
+
+#ifdef ERF_USE_FIRE
+
+enum class FireTerrainSourcePolicyMode
+{
+    NotApplicable,
+    Level0,
+    RegularFile
+};
+
+struct FireTerrainSourcePolicy
+{
+    FireTerrainSourcePolicyMode mode{
+        FireTerrainSourcePolicyMode::NotApplicable};
+    std::uint64_t fingerprint_fnv1a64{};
+};
+
+const char*
+fire_terrain_source_policy_mode_token(
+    FireTerrainSourcePolicyMode mode)
+{
+    if (mode == FireTerrainSourcePolicyMode::NotApplicable) {
+        return "not_applicable";
+    }
+    if (mode == FireTerrainSourcePolicyMode::Level0) {
+        return "level0";
+    }
+    if (mode == FireTerrainSourcePolicyMode::RegularFile) {
+        return "regular_file";
+    }
+    throw std::logic_error(
+        "unsupported ERF-Fire terrain-source policy mode");
+}
+
+FireTerrainSourcePolicyMode
+read_fire_terrain_source_policy_mode(
+    std::istream& stream)
+{
+    std::string token;
+    if (!(stream >> token)) {
+        throw std::runtime_error(
+            "missing ERF-Fire terrain-source policy mode");
+    }
+    if (token == "not_applicable") {
+        return FireTerrainSourcePolicyMode::NotApplicable;
+    }
+    if (token == "level0") {
+        return FireTerrainSourcePolicyMode::Level0;
+    }
+    if (token == "regular_file") {
+        return FireTerrainSourcePolicyMode::RegularFile;
+    }
+    throw std::runtime_error(
+        "invalid ERF-Fire terrain-source policy mode");
+}
+
+void
+expect_fire_terrain_source_policy_token(
+    std::istream& stream,
+    const char* expected)
+{
+    std::string token;
+    if (!(stream >> token) || token != expected) {
+        throw std::runtime_error(
+            std::string(
+                "invalid ERF-Fire terrain-source policy field; expected ")
+            + expected);
+    }
+}
+
+FireTerrainSourcePolicy
+current_fire_terrain_source_policy(
+    const SolverChoice& choices,
+    const ERFTerrainSource* terrain_source)
+{
+    if (choices.mesh_type != MeshType::VariableDz
+        || choices.terrain_type
+            != TerrainType::StaticFittedMesh) {
+        return {
+            FireTerrainSourcePolicyMode::NotApplicable,
+            0};
+    }
+
+    amrex::ParmParse pp("erf");
+
+    // Match ProblemBase::init_terrain_surface() and terrain_source()
+    // precedence.  NetCDF/WPS terrain is consumed by Fire through the
+    // authoritative level-0 terrain surface rather than ERFTerrainSource.
+    // In particular, a lower-priority terrain_file_name must not cause the
+    // checkpoint policy to classify the run as RegularFile when
+    // terrain_file_name_nc is also present.
+    std::string filename_nc;
+    if (pp.query("terrain_file_name_nc", filename_nc)) {
+        return {
+            FireTerrainSourcePolicyMode::Level0,
+            0};
+    }
+
+    std::string filename;
+    if (!pp.query(
+            "terrain_file_name",
+            filename)) {
+        return {
+            FireTerrainSourcePolicyMode::Level0,
+            0};
+    }
+
+    if (filename.empty()) {
+        throw std::runtime_error(
+            "erf.terrain_file_name must not be empty");
+    }
+
+    if (terrain_source == nullptr) {
+        throw std::runtime_error(
+            "regular ERF terrain source is not loaded while evaluating Fire checkpoint policy");
+    }
+
+    const auto fingerprint =
+        terrain_source->source_fingerprint_fnv1a64();
+
+    if (!fingerprint.has_value()) {
+        throw std::runtime_error(
+            "loaded regular ERF terrain source has no file fingerprint");
+    }
+
+    return {
+        FireTerrainSourcePolicyMode::RegularFile,
+        *fingerprint};
+}
+
+void
+write_fire_terrain_source_policy(
+    std::ostream& stream,
+    const SolverChoice& choices,
+    const ERFTerrainSource* terrain_source)
+{
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "ERF-Fire terrain-source policy stream is not writable");
+    }
+
+    const FireTerrainSourcePolicy policy =
+        current_fire_terrain_source_policy(
+            choices,
+            terrain_source);
+
+    stream
+        << "ERF_FIRE_TERRAIN_SOURCE_POLICY 1\n"
+        << "mode "
+        << fire_terrain_source_policy_mode_token(
+               policy.mode)
+        << "\n";
+
+    if (policy.mode
+        == FireTerrainSourcePolicyMode::RegularFile) {
+        stream
+            << "fingerprint_fnv1a64 "
+            << policy.fingerprint_fnv1a64
+            << "\n";
+    }
+
+    stream
+        << "END_ERF_FIRE_TERRAIN_SOURCE_POLICY\n";
+
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "failed while writing ERF-Fire terrain-source policy");
+    }
+}
+
+FireTerrainSourcePolicy
+read_fire_terrain_source_policy(
+    std::istream& stream)
+{
+    expect_fire_terrain_source_policy_token(
+        stream,
+        "ERF_FIRE_TERRAIN_SOURCE_POLICY");
+
+    int version = 0;
+    if (!(stream >> version)
+        || version != 1) {
+        throw std::runtime_error(
+            "unsupported ERF-Fire terrain-source policy version");
+    }
+
+    expect_fire_terrain_source_policy_token(
+        stream,
+        "mode");
+
+    FireTerrainSourcePolicy policy;
+    policy.mode =
+        read_fire_terrain_source_policy_mode(
+            stream);
+
+    if (policy.mode
+        == FireTerrainSourcePolicyMode::RegularFile) {
+        expect_fire_terrain_source_policy_token(
+            stream,
+            "fingerprint_fnv1a64");
+
+        if (!(stream
+              >> policy.fingerprint_fnv1a64)) {
+            throw std::runtime_error(
+                "invalid ERF-Fire terrain-source fingerprint");
+        }
+    }
+
+    expect_fire_terrain_source_policy_token(
+        stream,
+        "END_ERF_FIRE_TERRAIN_SOURCE_POLICY");
+
+    return policy;
+}
+
+void
+validate_fire_terrain_source_restart_policy(
+    const std::string& checkpoint_directory,
+    const SolverChoice& choices,
+    const ERFTerrainSource* terrain_source)
+{
+    const FireTerrainSourcePolicy current =
+        current_fire_terrain_source_policy(
+            choices,
+            terrain_source);
+
+    const std::string policy_name =
+        checkpoint_directory
+        + "/FireTerrainSourcePolicy";
+
+    if (!amrex::FileExists(policy_name)) {
+        if (current.mode
+            == FireTerrainSourcePolicyMode::RegularFile) {
+            throw std::runtime_error(
+                "legacy ERF-Fire checkpoint cannot verify the current regular terrain source");
+        }
+        return;
+    }
+
+    std::ifstream stream(
+        policy_name,
+        std::ios::in | std::ios::binary);
+    if (!stream.good()) {
+        throw std::runtime_error(
+            "unable to open ERF-Fire terrain-source policy "
+            + policy_name);
+    }
+
+    const FireTerrainSourcePolicy checkpoint =
+        read_fire_terrain_source_policy(
+            stream);
+
+    if (checkpoint.mode != current.mode) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint terrain-source mode does not match current inputs");
+    }
+
+    if (checkpoint.mode
+            == FireTerrainSourcePolicyMode::RegularFile
+        && checkpoint.fingerprint_fnv1a64
+            != current.fingerprint_fnv1a64) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint terrain-source fingerprint does not match current terrain file");
+    }
+}
+
+bool
+same_fire_fuel(
+    const ERFFire::RothermelFuelParameters& lhs,
+    const ERFFire::RothermelFuelParameters& rhs) noexcept
+{
+    return lhs.dead_1h_load_kg_m2 == rhs.dead_1h_load_kg_m2
+        && lhs.dead_1h_sav_m_inv == rhs.dead_1h_sav_m_inv
+        && lhs.fuel_bed_depth_m == rhs.fuel_bed_depth_m
+        && lhs.dead_heat_content_j_kg == rhs.dead_heat_content_j_kg
+        && lhs.particle_density_kg_m3 == rhs.particle_density_kg_m3
+        && lhs.total_mineral_fraction == rhs.total_mineral_fraction
+        && lhs.effective_mineral_fraction
+            == rhs.effective_mineral_fraction
+        && lhs.dead_moisture_of_extinction
+            == rhs.dead_moisture_of_extinction;
+}
+
+bool
+same_fire_spread_config(
+    const ERFFire::ERFFireSpreadConfig& lhs,
+    const ERFFire::ERFFireSpreadConfig& rhs) noexcept
+{
+    const auto& lc = lhs.combustion_parameters;
+    const auto& rc = rhs.combustion_parameters;
+    const auto& lr = lhs.remesh_options;
+    const auto& rr = rhs.remesh_options;
+    const auto& lg = lhs.raster_geometry;
+    const auto& rg = rhs.raster_geometry;
+
+    return same_fire_fuel(lhs.fuel, rhs.fuel)
+        && lhs.dead_fuel_moisture_fraction
+            == rhs.dead_fuel_moisture_fraction
+        && lc.dry_fuel_load_kg_m2
+            == rc.dry_fuel_load_kg_m2
+        && lc.sensible_heat_release_j_kg_dry
+            == rc.sensible_heat_release_j_kg_dry
+        && lc.fuel_moisture_fraction
+            == rc.fuel_moisture_fraction
+        && lc.burn_time_constant_s
+            == rc.burn_time_constant_s
+        && lc.combustion_water_yield_kg_per_kg_dry
+            == rc.combustion_water_yield_kg_per_kg_dry
+        && lhs.combustion_options.temporal_substeps
+            == rhs.combustion_options.temporal_substeps
+        && lr.min_edge_length_m == rr.min_edge_length_m
+        && lr.max_edge_length_m == rr.max_edge_length_m
+        && lr.max_chord_error_m == rr.max_chord_error_m
+        && lg.nx == rg.nx
+        && lg.ny == rg.ny
+        && lg.xlo_m == rg.xlo_m
+        && lg.ylo_m == rg.ylo_m
+        && lg.dx_m == rg.dx_m
+        && lg.dy_m == rg.dy_m
+        && lhs.arrival_time_tolerance_s
+            == rhs.arrival_time_tolerance_s;
+}
+
+void
+validate_fire_checkpoint_policy(
+    const ERFFire::ERFFireCheckpointState& checkpoint,
+    const ERFFire::ERFFireRuntimeOptions& options)
+{
+    if (checkpoint.coupling_mode != options.coupling_mode) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint coupling mode does not match current inputs");
+    }
+    if (checkpoint.wind_mode != options.wind_mode) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint wind mode does not match current inputs");
+    }
+
+    if (options.wind_mode
+            == ERFFire::ERFFireWindMode::DirectReference) {
+        if (checkpoint.reference_height_agl_m
+            != options.reference_height_agl_m) {
+            throw std::runtime_error(
+                "ERF-Fire checkpoint reference height does not match current inputs");
+        }
+    } else {
+        if (checkpoint.wind_adjustment_factor
+            != options.wind_adjustment_factor) {
+            throw std::runtime_error(
+                "ERF-Fire checkpoint wind adjustment factor does not match current inputs");
+        }
+    }
+
+    if (options.coupling_mode
+            == ERFFire::ERFFireCouplingMode::TwoWay
+        && checkpoint.feedback_extinction_depth_m
+            != options.feedback_extinction_depth_m) {
+        throw std::runtime_error(
+            "ERF-Fire checkpoint feedback extinction depth does not match current inputs");
+    }
+}
+
+#endif
 
 } // namespace
 
@@ -602,6 +973,98 @@ ERF::WriteCheckpointFile () const
 
 #ifdef ERF_USE_PARTICLES
    particleData.Checkpoint(checkpointname);
+#endif
+
+#ifdef ERF_USE_FIRE
+    if (m_fire_runtime_options.enabled) {
+        std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
+            initial_fire_runtime;
+        const ERFFire::ERFFireSpreadRuntime*
+            fire_runtime_for_checkpoint =
+                m_fire_spread_runtime.get();
+
+        if (fire_runtime_for_checkpoint == nullptr) {
+            if (istep[0] != 0
+                || t_new[0] != amrex::Real(0.0)) {
+                Error(
+                    "ERF-Fire runtime is missing while writing a noninitial checkpoint");
+            }
+
+            initial_fire_runtime =
+                ERFFire::make_erf_fire_spread_runtime(
+                    m_fire_runtime_options,
+                    geom[0],
+                    static_cast<Real>(t_new[0]));
+            fire_runtime_for_checkpoint =
+                initial_fire_runtime.get();
+        }
+
+        amrex::MultiFab fire_checkpoint_raster =
+            ERFFire::make_erf_fire_checkpoint_v2_raster(
+                *fire_runtime_for_checkpoint);
+        VisMF::Write(
+            fire_checkpoint_raster,
+            MultiFabFileFullPrefix(
+                0,
+                checkpointname,
+                "Level_",
+                "FireStateRaster"));
+
+        // terrain_source() may perform collective I/O and broadcasts, so load
+        // the retained source on every rank before entering the I/O-rank-only
+        // metadata block.  NetCDF/WPS terrain intentionally returns nullptr
+        // here and is represented by the level-0 terrain checkpoint state.
+        const ERFTerrainSource* fire_terrain_source_for_checkpoint = nullptr;
+        if (solverChoice.mesh_type == MeshType::VariableDz
+            && solverChoice.terrain_type
+                == TerrainType::StaticFittedMesh) {
+            fire_terrain_source_for_checkpoint =
+                prob->terrain_source();
+        }
+
+        if (ParallelDescriptor::IOProcessor()) {
+            const std::string fire_state_name =
+                checkpointname + "/FireState";
+            std::ofstream fire_state(
+                fire_state_name,
+                std::ios::out
+                    | std::ios::trunc
+                    | std::ios::binary);
+            if (!fire_state.good()) {
+                FileOpenFailed(fire_state_name);
+            }
+
+            try {
+                ERFFire::write_erf_fire_checkpoint_v3_metadata(
+                    *fire_runtime_for_checkpoint,
+                    m_fire_runtime_options,
+                    fire_state);
+
+                const std::string fire_terrain_policy_name =
+                    checkpointname
+                    + "/FireTerrainSourcePolicy";
+                std::ofstream fire_terrain_policy(
+                    fire_terrain_policy_name,
+                    std::ios::out
+                        | std::ios::trunc
+                        | std::ios::binary);
+                if (!fire_terrain_policy.good()) {
+                    FileOpenFailed(
+                        fire_terrain_policy_name);
+                }
+
+                write_fire_terrain_source_policy(
+                    fire_terrain_policy,
+                    solverChoice,
+                    fire_terrain_source_for_checkpoint);
+            } catch (const std::exception& error) {
+                Error(
+                    std::string(
+                        "failed to write ERF-Fire checkpoint metadata: ")
+                    + error.what());
+            }
+        }
+    }
 #endif
 
 #if 0
@@ -1544,6 +2007,200 @@ ERF::ReadCheckpointFile ()
                                  nvars_erfbdy, real_width);
                 Print() << "Restart: Loaded erfbdy time index " << itime << std::endl;
             }
+        }
+    }
+#endif
+
+#ifdef ERF_USE_FIRE
+    if (m_fire_runtime_options.enabled) {
+        const std::string fire_state_name =
+            restart_chkfile + "/FireState";
+        if (!amrex::FileExists(fire_state_name)) {
+            Error(
+                "Fire-enabled restart requires persistent FireState in native checkpoint "
+                + restart_chkfile);
+        }
+
+        try {
+            const ERFFire::ERFFireSpreadConfig expected_config =
+                ERFFire::make_erf_fire_spread_config(
+                    m_fire_runtime_options,
+                    geom[0]);
+
+            int checkpoint_version = 0;
+            int fire_version_read_failed = 0;
+            if (ParallelDescriptor::IOProcessor()) {
+                try {
+                    std::ifstream version_stream(
+                        fire_state_name,
+                        std::ios::in | std::ios::binary);
+                    if (!version_stream.good()) {
+                        throw std::runtime_error(
+                            "unable to open ERF-Fire checkpoint state "
+                            + fire_state_name);
+                    }
+                    checkpoint_version =
+                        ERFFire::read_erf_fire_checkpoint_version(
+                            version_stream);
+                } catch (const std::exception&) {
+                    fire_version_read_failed = 1;
+                }
+            }
+
+            ParallelDescriptor::Bcast(
+                &fire_version_read_failed,
+                1,
+                ParallelDescriptor::IOProcessorNumber());
+            ParallelDescriptor::Bcast(
+                &checkpoint_version,
+                1,
+                ParallelDescriptor::IOProcessorNumber());
+            if (fire_version_read_failed != 0) {
+                throw std::runtime_error(
+                    "IO rank failed to identify ERF-Fire checkpoint version");
+            }
+            if (checkpoint_version != 1
+                && checkpoint_version != 2
+                && checkpoint_version != 3) {
+                throw std::runtime_error(
+                    "unsupported ERF-Fire checkpoint format version");
+            }
+
+            ERFFire::ERFFireSpreadRuntimeState restore_state;
+            restore_state.config = expected_config;
+            restore_state.current_time_s =
+                static_cast<Real>(t_new[0]);
+            ERFFire::ERFFireCheckpointV2Metadata v2_metadata;
+            ERFFire::ERFFireCheckpointV3Metadata v3_metadata;
+
+            const ERFTerrainSource* current_terrain_source =
+                prob->terrain_source();
+
+            int fire_state_read_failed = 0;
+            if (ParallelDescriptor::IOProcessor()) {
+                try {
+                    validate_fire_terrain_source_restart_policy(
+                        restart_chkfile,
+                        solverChoice,
+                        current_terrain_source);
+
+                    std::ifstream fire_state_stream(
+                        fire_state_name,
+                        std::ios::in | std::ios::binary);
+                    if (!fire_state_stream.good()) {
+                        throw std::runtime_error(
+                            "unable to open ERF-Fire checkpoint state "
+                            + fire_state_name);
+                    }
+
+                    ERFFire::ERFFireCheckpointState* checkpoint = nullptr;
+                    ERFFire::ERFFireCheckpointState v1_checkpoint;
+                    if (checkpoint_version == 1) {
+                        v1_checkpoint =
+                            ERFFire::read_erf_fire_checkpoint_state(
+                                fire_state_stream);
+                        checkpoint = &v1_checkpoint;
+                    } else if (checkpoint_version == 2) {
+                        v2_metadata =
+                            ERFFire::read_erf_fire_checkpoint_v2_metadata(
+                                fire_state_stream);
+                        checkpoint = &v2_metadata.checkpoint;
+                    } else {
+                        v3_metadata =
+                            ERFFire::read_erf_fire_checkpoint_v3_metadata(
+                                fire_state_stream);
+                        checkpoint =
+                            &v3_metadata.checkpoint;
+                    }
+
+                    validate_fire_checkpoint_policy(
+                        *checkpoint,
+                        m_fire_runtime_options);
+
+                    if (!same_fire_spread_config(
+                            checkpoint->runtime_state.config,
+                            expected_config)) {
+                        throw std::runtime_error(
+                            "ERF-Fire checkpoint spread configuration does not match current inputs or level-0 geometry");
+                    }
+
+                    if (checkpoint->runtime_state.current_time_s
+                        != static_cast<Real>(t_new[0])) {
+                        throw std::runtime_error(
+                            "ERF-Fire checkpoint clock does not match ERF level-0 checkpoint time");
+                    }
+
+                    restore_state =
+                        std::move(checkpoint->runtime_state);
+                } catch (const std::exception& error) {
+                    amrex::Print()
+                        << "ERF-Fire restart validation error: "
+                        << error.what()
+                        << "\n";
+                    fire_state_read_failed = 1;
+                }
+            }
+
+            ParallelDescriptor::Bcast(
+                &fire_state_read_failed,
+                1,
+                ParallelDescriptor::IOProcessorNumber());
+            if (fire_state_read_failed != 0) {
+                throw std::runtime_error(
+                    "IO rank failed to read or validate ERF-Fire checkpoint state");
+            }
+
+            if (checkpoint_version == 1) {
+                ERFFire::ERFFireSpreadRuntime restored =
+                    ERFFire::ERFFireSpreadRuntime::
+                        collective_restore_from_io_rank_state(
+                            std::move(restore_state));
+                m_fire_spread_runtime =
+                    std::make_unique<
+                        ERFFire::ERFFireSpreadRuntime>(
+                            std::move(restored));
+            } else {
+                const std::string fire_raster_name =
+                    MultiFabFileFullPrefix(
+                        0,
+                        restart_chkfile,
+                        "Level_",
+                        "FireStateRaster");
+                if (!amrex::FileExists(
+                        fire_raster_name + "_H")) {
+                    throw std::runtime_error(
+                        "ERF-Fire distributed checkpoint is missing FireStateRaster");
+                }
+
+                amrex::MultiFab checkpoint_raster;
+                VisMF::Read(
+                    checkpoint_raster,
+                    fire_raster_name);
+
+                ERFFire::ERFFireSpreadRuntime restored =
+                    ERFFire::ERFFireSpreadRuntime::
+                        collective_restore_from_checkpoint_raster(
+                            std::move(restore_state),
+                            checkpoint_raster);
+                m_fire_spread_runtime =
+                    std::make_unique<
+                        ERFFire::ERFFireSpreadRuntime>(
+                            std::move(restored));
+            }
+
+            m_fire_step_index = istep[0];
+
+            m_fire_environment_snapshot.reset();
+            m_fire_environment_snapshot_time =
+                std::numeric_limits<double>::quiet_NaN();
+            m_fire_atmospheric_source_tendency.reset();
+            m_fire_atmospheric_source_time =
+                std::numeric_limits<double>::quiet_NaN();
+        } catch (const std::exception& error) {
+            Error(
+                std::string(
+                    "failed to restore ERF-Fire checkpoint state: ")
+                + error.what());
         }
     }
 #endif

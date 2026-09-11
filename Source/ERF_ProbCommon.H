@@ -16,6 +16,7 @@
 #include "ERF_HSEUtils.H"
 #include "ERF_GridUtils.H"
 #include "ERF_TileNoZ.H"
+#include "ERF_TerrainSource.H"
 
 #ifdef ERF_USE_NETCDF
 #include <ERF_NCInterface.H>
@@ -346,6 +347,37 @@ public:
     }
 
 
+    [[nodiscard]] const ERFTerrainSource*
+    terrain_source ()
+    {
+        amrex::ParmParse pp("erf");
+
+        // Match init_terrain_surface() precedence exactly.  When NetCDF terrain
+        // is selected, Fire must use the authoritative level-0 terrain surface
+        // rather than silently loading a lower-priority regular text source.
+        std::string fname_nc;
+        if (pp.query("terrain_file_name_nc", fname_nc)) {
+            return nullptr;
+        }
+
+        if (!m_terrain_source) {
+            std::string fname;
+            if (pp.query("terrain_file_name", fname)) {
+                m_terrain_source =
+                    std::make_unique<ERFTerrainSource>(
+                        ERFTerrainSource::read_regular_text_file(
+                            fname));
+            }
+        }
+        return m_terrain_source.get();
+    }
+
+    [[nodiscard]] const ERFTerrainSource*
+    loaded_terrain_source () const noexcept
+    {
+        return m_terrain_source.get();
+    }
+
     /**
      * Function to perform custom initialization of terrain
      *
@@ -375,10 +407,23 @@ public:
             amrex::Abort("ERF must be compiled with NetCDF support to use terrain_file_name_nc");
 #endif
         } else if (valid_fname) {
-            read_custom_terrain(fname, false, geom, terrain_fab, time);
+            // Keep the atmospheric terrain path identical to current ERF.
+            // ERF-Fire obtains its retained source lazily through
+            // terrain_source() when source-resolution terrain is required.
+            read_custom_terrain(
+                fname,
+                false,
+                geom,
+                terrain_fab,
+                time);
 
         } else if (valid_fname_USGS) {
-            read_custom_terrain(fname_usgs, true, geom, terrain_fab, time);
+            read_custom_terrain(
+                fname_usgs,
+                true,
+                geom,
+                terrain_fab,
+                time);
 
         } else {
             init_my_custom_terrain (geom, terrain_fab, time);
@@ -1169,6 +1214,8 @@ public:
     }
 
 protected:
+    std::unique_ptr<ERFTerrainSource> m_terrain_source;
+
     // Struct to store problem parameters
     ProbParmDefaults base_parms;
 

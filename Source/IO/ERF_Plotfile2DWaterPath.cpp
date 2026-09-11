@@ -163,6 +163,13 @@ available_diagnostic_names (const SolverChoice& solver_choice,
     const bool has_moisture = solver_choice.moisture_type != MoistureType::None;
 
     for (const auto& descriptor : diagnostic_catalog()) {
+        // Fire diagnostics are runtime-state dependent. The generic catalog
+        // availability helper has no Fire runtime handle, so ERF appends this
+        // category explicitly only when fire.enabled is true.
+        if (descriptor.category == DiagnosticCategory::Fire) {
+            continue;
+        }
+
         if (is_land_surface_provider_field(descriptor.id) &&
             ((!active_lsm_names.empty() &&
               !active_lsm_contains(active_lsm_names, descriptor.name)) ||
