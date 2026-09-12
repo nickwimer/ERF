@@ -5,6 +5,18 @@
 
 #ifdef ERF_USE_FIRE
 
+namespace ERFFire
+{
+
+void
+ERFFireContext::configure_from_inputs(
+    const ERFFireHostCapabilities& host)
+{
+    runtime_options_ = read_erf_fire_runtime_options(host);
+}
+
+} // namespace ERFFire
+
 bool
 ERF::FireEnabled () const noexcept
 {

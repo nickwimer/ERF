@@ -1,7 +1,7 @@
 #ifndef ERF_FIRE_CONTEXT_H_
 #define ERF_FIRE_CONTEXT_H_
 
-#include <ERF_FireRuntimeOptions.H>
+#include <ERF_FireRuntimeConfig.H>
 #include <ERF_FireSpreadRuntime.H>
 #include <ERF_FireTerrainSurface.H>
 
@@ -33,6 +33,9 @@ public:
     ERFFireContext& operator=(const ERFFireContext&) = delete;
     ERFFireContext(ERFFireContext&&) = delete;
     ERFFireContext& operator=(ERFFireContext&&) = delete;
+
+    void configure_from_inputs(
+        const ERFFireHostCapabilities& host);
 
     [[nodiscard]] ERFFireRuntimeOptions&
     runtime_options() noexcept

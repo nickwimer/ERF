@@ -25,6 +25,7 @@ function(erf_add_fire_sources target)
 
   target_sources(${target} PRIVATE
     ${FIRE_IFACE_DIR}/ERF_FireContext.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireRuntimeConfig.cpp
     ${FIRE_IFACE_DIR}/ERF_FireLevel0Environment.cpp
     ${FIRE_IFACE_DIR}/ERF_FireLevel0TerrainWindSampler.cpp
     ${FIRE_IFACE_DIR}/ERF_FireRuntimeInit.cpp
