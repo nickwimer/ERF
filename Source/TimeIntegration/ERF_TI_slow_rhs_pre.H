@@ -132,25 +132,25 @@
 
 #ifdef ERF_USE_FIRE
         if (level == 0
-            && m_fire_atmospheric_source_tendency) {
-            if (!m_fire_runtime_options.enabled
-                || m_fire_runtime_options.coupling_mode
+            && m_fire->atmospheric_source_tendency()) {
+            if (!m_fire->runtime_options().enabled
+                || m_fire->runtime_options().coupling_mode
                     != ERFFire::ERFFireCouplingMode::TwoWay) {
                 Error(
                     "ERF Fire atmospheric source exists outside two_way coupling");
             }
             if (cc_src.nComp()
-                    != m_fire_atmospheric_source_tendency->nComp()
+                    != m_fire->atmospheric_source_tendency()->nComp()
                 || !amrex::match(
                     cc_src.boxArray(),
-                    m_fire_atmospheric_source_tendency->boxArray())) {
+                    m_fire->atmospheric_source_tendency()->boxArray())) {
                 Error(
                     "ERF Fire atmospheric source layout does not match cc_src");
             }
 
             MultiFab::Add(
                 cc_src,
-                *m_fire_atmospheric_source_tendency,
+                *m_fire->atmospheric_source_tendency(),
                 0,
                 0,
                 cc_src.nComp(),

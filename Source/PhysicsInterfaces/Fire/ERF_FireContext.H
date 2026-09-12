@@ -1,0 +1,154 @@
+#ifndef ERF_FIRE_CONTEXT_H_
+#define ERF_FIRE_CONTEXT_H_
+
+#include <ERF_FireRuntimeOptions.H>
+#include <ERF_FireSpreadRuntime.H>
+#include <ERF_FireTerrainSurface.H>
+
+#include <AMReX_MultiFab.H>
+
+#include <limits>
+#include <memory>
+
+namespace ERFFire
+{
+
+/**
+ * ERF-facing owner for Fire coupling state.
+ *
+ * ERFFireSpreadRuntime remains coupling-neutral. This context owns the
+ * adapter state needed to connect that runtime to ERF.
+ *
+ * The low-level accessors below are transitional. Constructor parsing,
+ * timestep orchestration, atmospheric source application, checkpointing,
+ * and diagnostics will move behind subsystem-level Fire interface methods
+ * in subsequent refactors.
+ */
+class ERFFireContext
+{
+public:
+    ERFFireContext() = default;
+
+    ERFFireContext(const ERFFireContext&) = delete;
+    ERFFireContext& operator=(const ERFFireContext&) = delete;
+    ERFFireContext(ERFFireContext&&) = delete;
+    ERFFireContext& operator=(ERFFireContext&&) = delete;
+
+    [[nodiscard]] ERFFireRuntimeOptions&
+    runtime_options() noexcept
+    {
+        return runtime_options_;
+    }
+
+    [[nodiscard]] const ERFFireRuntimeOptions&
+    runtime_options() const noexcept
+    {
+        return runtime_options_;
+    }
+
+    [[nodiscard]] double&
+    environment_snapshot_time() noexcept
+    {
+        return environment_snapshot_time_;
+    }
+
+    [[nodiscard]] double
+    environment_snapshot_time() const noexcept
+    {
+        return environment_snapshot_time_;
+    }
+
+    [[nodiscard]] double&
+    environment_reference_height_agl_m() noexcept
+    {
+        return environment_reference_height_agl_m_;
+    }
+
+    [[nodiscard]] double
+    environment_reference_height_agl_m() const noexcept
+    {
+        return environment_reference_height_agl_m_;
+    }
+
+    [[nodiscard]] std::unique_ptr<ERFFireSpreadRuntime>&
+    spread_runtime() noexcept
+    {
+        return spread_runtime_;
+    }
+
+    [[nodiscard]] const std::unique_ptr<ERFFireSpreadRuntime>&
+    spread_runtime() const noexcept
+    {
+        return spread_runtime_;
+    }
+
+    [[nodiscard]] std::unique_ptr<FireTerrainSurface>&
+    terrain_surface() noexcept
+    {
+        return terrain_surface_;
+    }
+
+    [[nodiscard]] const std::unique_ptr<FireTerrainSurface>&
+    terrain_surface() const noexcept
+    {
+        return terrain_surface_;
+    }
+
+    [[nodiscard]] std::unique_ptr<amrex::MultiFab>&
+    atmospheric_source_tendency() noexcept
+    {
+        return atmospheric_source_tendency_;
+    }
+
+    [[nodiscard]] const std::unique_ptr<amrex::MultiFab>&
+    atmospheric_source_tendency() const noexcept
+    {
+        return atmospheric_source_tendency_;
+    }
+
+    [[nodiscard]] double&
+    atmospheric_source_time() noexcept
+    {
+        return atmospheric_source_time_;
+    }
+
+    [[nodiscard]] double
+    atmospheric_source_time() const noexcept
+    {
+        return atmospheric_source_time_;
+    }
+
+    [[nodiscard]] int&
+    step_index() noexcept
+    {
+        return step_index_;
+    }
+
+    [[nodiscard]] int
+    step_index() const noexcept
+    {
+        return step_index_;
+    }
+
+private:
+    ERFFireRuntimeOptions runtime_options_{};
+
+    double environment_snapshot_time_ =
+        std::numeric_limits<double>::quiet_NaN();
+
+    double environment_reference_height_agl_m_ =
+        std::numeric_limits<double>::quiet_NaN();
+
+    std::unique_ptr<ERFFireSpreadRuntime> spread_runtime_;
+    std::unique_ptr<FireTerrainSurface> terrain_surface_;
+    std::unique_ptr<amrex::MultiFab> atmospheric_source_tendency_;
+
+    double atmospheric_source_time_ =
+        std::numeric_limits<double>::quiet_NaN();
+
+    int step_index_ = 0;
+};
+
+} // namespace ERFFire
+
+#endif

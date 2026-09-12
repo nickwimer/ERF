@@ -16,6 +16,7 @@
 #include "ERF.H"
 
 #ifdef ERF_USE_FIRE
+#include <ERF_FireContext.H>
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireSpreadOutput.H>
 #endif
@@ -976,12 +977,12 @@ ERF::WriteCheckpointFile () const
 #endif
 
 #ifdef ERF_USE_FIRE
-    if (m_fire_runtime_options.enabled) {
+    if (m_fire->runtime_options().enabled) {
         std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
             initial_fire_runtime;
         const ERFFire::ERFFireSpreadRuntime*
             fire_runtime_for_checkpoint =
-                m_fire_spread_runtime.get();
+                m_fire->spread_runtime().get();
 
         if (fire_runtime_for_checkpoint == nullptr) {
             if (istep[0] != 0
@@ -992,7 +993,7 @@ ERF::WriteCheckpointFile () const
 
             initial_fire_runtime =
                 ERFFire::make_erf_fire_spread_runtime(
-                    m_fire_runtime_options,
+                    m_fire->runtime_options(),
                     geom[0],
                     static_cast<Real>(t_new[0]));
             fire_runtime_for_checkpoint =
@@ -1037,7 +1038,7 @@ ERF::WriteCheckpointFile () const
             try {
                 ERFFire::write_erf_fire_checkpoint_v3_metadata(
                     *fire_runtime_for_checkpoint,
-                    m_fire_runtime_options,
+                    m_fire->runtime_options(),
                     fire_state);
 
                 const std::string fire_terrain_policy_name =
@@ -2012,7 +2013,7 @@ ERF::ReadCheckpointFile ()
 #endif
 
 #ifdef ERF_USE_FIRE
-    if (m_fire_runtime_options.enabled) {
+    if (m_fire->runtime_options().enabled) {
         const std::string fire_state_name =
             restart_chkfile + "/FireState";
         if (!amrex::FileExists(fire_state_name)) {
@@ -2024,7 +2025,7 @@ ERF::ReadCheckpointFile ()
         try {
             const ERFFire::ERFFireSpreadConfig expected_config =
                 ERFFire::make_erf_fire_spread_config(
-                    m_fire_runtime_options,
+                    m_fire->runtime_options(),
                     geom[0]);
 
             int checkpoint_version = 0;
@@ -2115,7 +2116,7 @@ ERF::ReadCheckpointFile ()
 
                     validate_fire_checkpoint_policy(
                         *checkpoint,
-                        m_fire_runtime_options);
+                        m_fire->runtime_options());
 
                     if (!same_fire_spread_config(
                             checkpoint->runtime_state.config,
@@ -2155,7 +2156,7 @@ ERF::ReadCheckpointFile ()
                     ERFFire::ERFFireSpreadRuntime::
                         collective_restore_from_io_rank_state(
                             std::move(restore_state));
-                m_fire_spread_runtime =
+                m_fire->spread_runtime() =
                     std::make_unique<
                         ERFFire::ERFFireSpreadRuntime>(
                             std::move(restored));
@@ -2182,19 +2183,18 @@ ERF::ReadCheckpointFile ()
                         collective_restore_from_checkpoint_raster(
                             std::move(restore_state),
                             checkpoint_raster);
-                m_fire_spread_runtime =
+                m_fire->spread_runtime() =
                     std::make_unique<
                         ERFFire::ERFFireSpreadRuntime>(
                             std::move(restored));
             }
 
-            m_fire_step_index = istep[0];
+            m_fire->step_index() = istep[0];
 
-            m_fire_environment_snapshot.reset();
-            m_fire_environment_snapshot_time =
+            m_fire->environment_snapshot_time() =
                 std::numeric_limits<double>::quiet_NaN();
-            m_fire_atmospheric_source_tendency.reset();
-            m_fire_atmospheric_source_time =
+            m_fire->atmospheric_source_tendency().reset();
+            m_fire->atmospheric_source_time() =
                 std::numeric_limits<double>::quiet_NaN();
         } catch (const std::exception& error) {
             Error(

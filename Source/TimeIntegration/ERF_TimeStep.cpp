@@ -5,6 +5,7 @@
 #include <ERF_LagrangianMicrophysics.H>
 
 #ifdef ERF_USE_FIRE
+#include <ERF_FireContext.H>
 #include <ERF_FireLevel0Environment.H>
 #include <ERF_FireLevel0TerrainWindSampler.H>
 #include <ERF_FireLevel0SourceCoupling.H>
@@ -186,7 +187,7 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
     // with map-plane terrain slope in both coupling modes. VariableDz two_way
     // projects the same combustion feedback through local terrain-following AGL
     // columns using authoritative detJ_cc physical volumes.
-    if (lev == 0 && m_fire_runtime_options.enabled) {
+    if (lev == 0 && m_fire->runtime_options().enabled) {
         ERFFire::ERFFireLevel0EnvironmentInputs fire_inputs{
             geom[0],
             U_new,
@@ -204,10 +205,10 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             next_flat_sampler;
 
         const Real fire_reference_height_agl_m =
-            m_fire_runtime_options.wind_mode
+            m_fire->runtime_options().wind_mode
                     == ERFFire::ERFFireWindMode::ExplicitWaf20ft
                 ? ERFFire::explicit_waf_20ft_reference_height_agl_m
-                : m_fire_runtime_options.reference_height_agl_m;
+                : m_fire->runtime_options().reference_height_agl_m;
 
         if (solverChoice.mesh_type == MeshType::VariableDz) {
             next_terrain_sampler =
@@ -222,33 +223,32 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                     fire_reference_height_agl_m);
         }
 
-        m_fire_environment_snapshot.reset();
-        m_fire_environment_snapshot_time = time;
-        m_fire_environment_reference_height_agl_m =
+        m_fire->environment_snapshot_time() = time;
+        m_fire->environment_reference_height_agl_m() =
             static_cast<double>(
                 fire_reference_height_agl_m);
 
-        if (!m_fire_spread_runtime) {
-            m_fire_spread_runtime =
+        if (!m_fire->spread_runtime()) {
+            m_fire->spread_runtime() =
                 ERFFire::make_erf_fire_spread_runtime(
-                    m_fire_runtime_options,
+                    m_fire->runtime_options(),
                     geom[0],
                     static_cast<Real>(time));
-            m_fire_step_index = 0;
+            m_fire->step_index() = 0;
 
-            if (m_fire_runtime_options.output_interval_steps > 0) {
+            if (m_fire->runtime_options().output_interval_steps > 0) {
                 ERFFire::write_erf_fire_spread_snapshot(
-                    *m_fire_spread_runtime,
-                    m_fire_runtime_options.output_dir,
-                    m_fire_step_index);
+                    *m_fire->spread_runtime(),
+                    m_fire->runtime_options().output_dir,
+                    m_fire->step_index());
             }
         }
 
         if (next_terrain_sampler
-            && !m_fire_terrain_surface) {
+            && !m_fire->terrain_surface()) {
             const ERFFire::FireCartesianRasterGeometry2D
                 fire_terrain_geometry =
-                    m_fire_spread_runtime
+                    m_fire->spread_runtime()
                         ->config()
                         .raster_geometry;
 
@@ -256,13 +256,13 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 prob->terrain_source();
 
             if (shared_terrain_source != nullptr) {
-                m_fire_terrain_surface =
+                m_fire->terrain_surface() =
                     std::make_unique<ERFFire::FireTerrainSurface>(
                         ERFFire::make_erf_terrain_source_surface_on_geometry(
                             *shared_terrain_source,
                             fire_terrain_geometry));
             } else {
-                m_fire_terrain_surface =
+                m_fire->terrain_surface() =
                     std::make_unique<ERFFire::FireTerrainSurface>(
                         ERFFire::make_erf_level0_terrain_surface_on_geometry(
                             fire_inputs,
@@ -270,14 +270,14 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             }
         }
 
-        if (m_fire_spread_runtime->current_time_s()
+        if (m_fire->spread_runtime()->current_time_s()
             != static_cast<Real>(time)) {
             Error(
                 "ERF-Fire runtime clock is not synchronized with level-0 t^n");
         }
 
         ERFFire::ERFFireSpreadRuntime next_fire_runtime =
-            *m_fire_spread_runtime;
+            *m_fire->spread_runtime();
 
         const ERFFire::FireEnvironmentBatchFunction
             flat_environment =
@@ -295,13 +295,13 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                         positions_m);
                 };
 
-        if (m_fire_runtime_options.wind_mode
+        if (m_fire->runtime_options().wind_mode
                 == ERFFire::ERFFireWindMode::DirectReference) {
             if (next_terrain_sampler) {
                 (void)next_fire_runtime
                     .advance_direct_reference_wind_batched(
                         terrain_environment,
-                        *m_fire_terrain_surface,
+                        *m_fire->terrain_surface(),
                         static_cast<Real>(dt[0]));
             } else {
                 (void)next_fire_runtime
@@ -309,20 +309,20 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                         flat_environment,
                         static_cast<Real>(dt[0]));
             }
-        } else if (m_fire_runtime_options.wind_mode
+        } else if (m_fire->runtime_options().wind_mode
                    == ERFFire::ERFFireWindMode::ExplicitWaf20ft) {
             if (next_terrain_sampler) {
                 (void)next_fire_runtime
                     .advance_explicit_waf_20ft_batched(
                         terrain_environment,
-                        *m_fire_terrain_surface,
-                        m_fire_runtime_options.wind_adjustment_factor,
+                        *m_fire->terrain_surface(),
+                        m_fire->runtime_options().wind_adjustment_factor,
                         static_cast<Real>(dt[0]));
             } else {
                 (void)next_fire_runtime
                     .advance_explicit_waf_20ft_batched(
                         flat_environment,
-                        m_fire_runtime_options.wind_adjustment_factor,
+                        m_fire->runtime_options().wind_adjustment_factor,
                         static_cast<Real>(dt[0]));
             }
         } else {
@@ -333,16 +333,16 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
         double next_fire_source_time =
             std::numeric_limits<double>::quiet_NaN();
 
-        if (m_fire_runtime_options.coupling_mode
+        if (m_fire->runtime_options().coupling_mode
             == ERFFire::ERFFireCouplingMode::TwoWay) {
             const ERFFire::FireSurfaceFeedbackRaster feedback =
                 ERFFire::make_fire_surface_feedback_increment(
-                    m_fire_spread_runtime->combustion_raster(),
+                    m_fire->spread_runtime()->combustion_raster(),
                     next_fire_runtime.combustion_raster());
 
             const ERFFire::ERFFireAtmosphericSourceOptions
                 source_options{
-                    m_fire_runtime_options
+                    m_fire->runtime_options()
                         .feedback_extinction_depth_m};
 
             if (solverChoice.mesh_type == MeshType::VariableDz) {
@@ -368,22 +368,22 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
             next_fire_source_time = time;
         }
 
-        *m_fire_spread_runtime =
+        *m_fire->spread_runtime() =
             std::move(next_fire_runtime);
-        m_fire_atmospheric_source_tendency =
+        m_fire->atmospheric_source_tendency() =
             std::move(next_fire_source);
-        m_fire_atmospheric_source_time =
+        m_fire->atmospheric_source_time() =
             next_fire_source_time;
 
-        ++m_fire_step_index;
-        if (m_fire_runtime_options.output_interval_steps > 0
-            && m_fire_step_index
-                   % m_fire_runtime_options.output_interval_steps
+        ++m_fire->step_index();
+        if (m_fire->runtime_options().output_interval_steps > 0
+            && m_fire->step_index()
+                   % m_fire->runtime_options().output_interval_steps
                == 0) {
             ERFFire::write_erf_fire_spread_snapshot(
-                *m_fire_spread_runtime,
-                m_fire_runtime_options.output_dir,
-                m_fire_step_index);
+                *m_fire->spread_runtime(),
+                m_fire->runtime_options().output_dir,
+                m_fire->step_index());
         }
     }
 #endif

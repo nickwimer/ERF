@@ -83,8 +83,12 @@
 #endif
 
 #ifdef ERF_USE_FIRE
-#include <ERF_FireRuntimeOptions.H>
-#include <ERF_FireSpreadRuntime.H>
+namespace ERFFire
+{
+class ERFFireContext;
+class ERFFireSpreadRuntime;
+class FireFlatEnvironmentSampler;
+}
 #endif
 
 #include <iostream>
@@ -153,40 +157,22 @@ public:
     double EvolveOneStep (double time, double dt_request);
 
 #ifdef ERF_USE_FIRE
-    bool FireEnabled () const noexcept
-    {
-        return m_fire_runtime_options.enabled;
-    }
+    bool FireEnabled () const noexcept;
 
-    const ERFFire::FireFlatEnvironmentSampler* FireEnvironmentSnapshot () const noexcept
-    {
-        return m_fire_environment_snapshot.get();
-    }
+    const ERFFire::FireFlatEnvironmentSampler*
+    FireEnvironmentSnapshot () const noexcept;
 
-    double FireEnvironmentSnapshotTime () const noexcept
-    {
-        return m_fire_environment_snapshot_time;
-    }
+    double FireEnvironmentSnapshotTime () const noexcept;
 
-    double FireEnvironmentReferenceHeightAGL () const noexcept
-    {
-        return m_fire_environment_reference_height_agl_m;
-    }
+    double FireEnvironmentReferenceHeightAGL () const noexcept;
 
-    const ERFFire::ERFFireSpreadRuntime* FireSpreadRuntime () const noexcept
-    {
-        return m_fire_spread_runtime.get();
-    }
+    const ERFFire::ERFFireSpreadRuntime*
+    FireSpreadRuntime () const noexcept;
 
-    const amrex::MultiFab* FireAtmosphericSourceTendency () const noexcept
-    {
-        return m_fire_atmospheric_source_tendency.get();
-    }
+    const amrex::MultiFab*
+    FireAtmosphericSourceTendency () const noexcept;
 
-    double FireAtmosphericSourceTime () const noexcept
-    {
-        return m_fire_atmospheric_source_time;
-    }
+    double FireAtmosphericSourceTime () const noexcept;
 #endif
 
     void ConfigureDriverAtmosToOceanCoupling (bool use_coupling_driver,
@@ -922,22 +908,7 @@ public:
 private:
 
 #ifdef ERF_USE_FIRE
-    ERFFire::ERFFireRuntimeOptions m_fire_runtime_options{};
-    double m_fire_environment_snapshot_time =
-        std::numeric_limits<double>::quiet_NaN();
-    double m_fire_environment_reference_height_agl_m =
-        std::numeric_limits<double>::quiet_NaN();
-    std::unique_ptr<ERFFire::FireFlatEnvironmentSampler>
-        m_fire_environment_snapshot;
-    std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
-        m_fire_spread_runtime;
-    std::unique_ptr<ERFFire::FireTerrainSurface>
-        m_fire_terrain_surface;
-    std::unique_ptr<amrex::MultiFab>
-        m_fire_atmospheric_source_tendency;
-    double m_fire_atmospheric_source_time =
-        std::numeric_limits<double>::quiet_NaN();
-    int m_fire_step_index = 0;
+    std::unique_ptr<ERFFire::ERFFireContext> m_fire;
 #endif
 
     ///////////////////////////

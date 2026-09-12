@@ -19,6 +19,7 @@
 #include "Diagnostics/ERF_SeaLevelPressure.H"
 
 #ifdef ERF_USE_FIRE
+#include <ERF_FireContext.H>
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireSpreadOutput.H>
 #include <ERF_FireSpreadRuntime.H>
@@ -198,7 +199,7 @@ ERF::setPlotVariables2D (const std::string& pp_plot_var_names, Vector<std::strin
 #ifdef ERF_USE_FIRE
     // Runtime Fire diagnostics follow dynamic land-surface fields so every
     // existing non-Fire component index remains unchanged.
-    if (m_fire_runtime_options.enabled) {
+    if (m_fire->runtime_options().enabled) {
         for (const auto& descriptor : plotfile2d::diagnostic_catalog()) {
             if (descriptor.category == plotfile2d::DiagnosticCategory::Fire) {
                 available_names.push_back(descriptor.name);
@@ -259,12 +260,12 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
     MultiFab fire_plot_raster;
     std::unique_ptr<ERFFire::ERFFireSpreadRuntime> initial_fire_runtime;
     if (fire_plot_requested) {
-        if (!m_fire_runtime_options.enabled) {
+        if (!m_fire->runtime_options().enabled) {
             Abort("Fire 2D diagnostics were selected while fire.enabled is false");
         }
 
         const ERFFire::ERFFireSpreadRuntime* fire_runtime =
-            m_fire_spread_runtime.get();
+            m_fire->spread_runtime().get();
 
         // Initial-time output can precede construction by the coupling driver.
         // Build an equivalent temporary runtime without mutating solver state.
@@ -274,7 +275,7 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             }
             initial_fire_runtime =
                 ERFFire::make_erf_fire_spread_runtime(
-                    m_fire_runtime_options,
+                    m_fire->runtime_options(),
                     geom[0],
                     static_cast<Real>(t_new[0]));
             fire_runtime = initial_fire_runtime.get();
