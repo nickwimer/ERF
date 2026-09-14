@@ -24,6 +24,7 @@ function(erf_add_fire_sources target)
   set(FIRE_IFACE_DIR ${PROJECT_SOURCE_DIR}/Source/PhysicsInterfaces/Fire)
 
   target_sources(${target} PRIVATE
+    ${FIRE_IFACE_DIR}/ERF_FireCheckpoint.cpp
     ${FIRE_IFACE_DIR}/ERF_FireContext.cpp
     ${FIRE_IFACE_DIR}/ERF_FireLevel0Advance.cpp
     ${FIRE_IFACE_DIR}/ERF_FireRuntimeConfig.cpp
