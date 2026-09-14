@@ -13,6 +13,8 @@
 namespace ERFFire
 {
 
+struct ERFFireLevel0AdvanceInputs;
+
 /**
  * ERF-facing owner for Fire coupling state.
  *
@@ -36,6 +38,9 @@ public:
 
     void configure_from_inputs(
         const ERFFireHostCapabilities& host);
+
+    void advance_level0(
+        const ERFFireLevel0AdvanceInputs& inputs);
 
     [[nodiscard]] ERFFireRuntimeOptions&
     runtime_options() noexcept
