@@ -16,6 +16,10 @@ namespace ERFFire
 struct ERFFireCheckpointRestoreInputs;
 struct ERFFireCheckpointWriteInputs;
 struct ERFFireLevel0AdvanceInputs;
+struct ERFFirePlotfile2DAvailabilityInputs;
+struct ERFFirePlotfile2DFillInputs;
+struct ERFFirePlotfile2DPrepareInputs;
+struct ERFFirePlotfile2DState;
 
 /**
  * ERF-facing owner for Fire coupling state.
@@ -23,10 +27,8 @@ struct ERFFireLevel0AdvanceInputs;
  * ERFFireSpreadRuntime remains coupling-neutral. This context owns the
  * adapter state needed to connect that runtime to ERF.
  *
- * The low-level accessors below are transitional. Constructor parsing,
- * timestep orchestration, atmospheric source application, checkpointing,
- * and diagnostics will move behind subsystem-level Fire interface methods
- * in subsequent refactors.
+ * The low-level accessors below are transitional and remain only for
+ * callers not yet moved behind subsystem-level Fire interface methods.
  */
 class ERFFireContext
 {
@@ -60,6 +62,16 @@ public:
 
     void restore_checkpoint(
         const ERFFireCheckpointRestoreInputs& inputs);
+
+    void append_available_plotfile2d_diagnostics(
+        const ERFFirePlotfile2DAvailabilityInputs& inputs) const;
+
+    [[nodiscard]] ERFFirePlotfile2DState
+    prepare_plotfile2d_diagnostics(
+        const ERFFirePlotfile2DPrepareInputs& inputs) const;
+
+    void fill_plotfile2d_diagnostics(
+        const ERFFirePlotfile2DFillInputs& inputs) const;
 
     [[nodiscard]] ERFFireRuntimeOptions&
     runtime_options() noexcept
