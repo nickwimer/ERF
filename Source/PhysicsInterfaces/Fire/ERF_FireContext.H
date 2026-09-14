@@ -13,6 +13,7 @@
 namespace ERFFire
 {
 
+struct ERFFireCheckpointRestoreInputs;
 struct ERFFireCheckpointWriteInputs;
 struct ERFFireLevel0AdvanceInputs;
 
@@ -56,6 +57,9 @@ public:
 
     void write_checkpoint(
         const ERFFireCheckpointWriteInputs& inputs) const;
+
+    void restore_checkpoint(
+        const ERFFireCheckpointRestoreInputs& inputs);
 
     [[nodiscard]] ERFFireRuntimeOptions&
     runtime_options() noexcept

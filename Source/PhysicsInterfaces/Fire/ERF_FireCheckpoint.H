@@ -40,6 +40,24 @@ struct ERFFireCheckpointWriteInputs
 };
 
 /**
+ * ERF-owned inputs required to restore persistent Fire checkpoint state.
+ *
+ * terrain_source_provider is invoked collectively after checkpoint-version
+ * discovery and before IO-rank-only metadata validation. This preserves the
+ * existing restart collective-I/O ordering while avoiding any ERF or
+ * ProblemBase backpointer in Fire.
+ */
+struct ERFFireCheckpointRestoreInputs
+{
+    const std::string& checkpoint_directory;
+    const amrex::Geometry& level0_geometry;
+    const SolverChoice& solver_choices;
+    ERFFireCheckpointTerrainSourceProvider terrain_source_provider{};
+    int level0_step{};
+    amrex::Real level0_time_s{};
+};
+
+/**
  * Write the Fire terrain-source restart policy.
  *
  * terrain_source must already have been prepared collectively by the ERF

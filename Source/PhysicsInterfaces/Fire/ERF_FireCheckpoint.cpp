@@ -10,8 +10,11 @@
 
 #include <cstdint>
 #include <fstream>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace ERFFire
 {
@@ -129,6 +132,248 @@ ERFFireContext::write_checkpoint(
         amrex::Error(
             std::string(
                 "failed to write ERF-Fire checkpoint metadata: ")
+            + error.what());
+    }
+}
+
+void
+ERFFireContext::restore_checkpoint(
+    const ERFFireCheckpointRestoreInputs& inputs)
+{
+    if (!runtime_options_.enabled) {
+        return;
+    }
+
+    const std::string fire_state_name =
+        inputs.checkpoint_directory
+        + "/FireState";
+
+    if (!amrex::FileExists(fire_state_name)) {
+        amrex::Error(
+            "Fire-enabled restart requires persistent FireState in native checkpoint "
+            + inputs.checkpoint_directory);
+    }
+
+    try {
+        const ERFFireSpreadConfig expected_config =
+            make_erf_fire_spread_config(
+                runtime_options_,
+                inputs.level0_geometry);
+
+        int checkpoint_version = 0;
+        int fire_version_read_failed = 0;
+
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            try {
+                std::ifstream version_stream(
+                    fire_state_name,
+                    std::ios::in | std::ios::binary);
+
+                if (!version_stream.good()) {
+                    throw std::runtime_error(
+                        "unable to open ERF-Fire checkpoint state "
+                        + fire_state_name);
+                }
+
+                checkpoint_version =
+                    read_erf_fire_checkpoint_version(
+                        version_stream);
+
+            } catch (const std::exception&) {
+                fire_version_read_failed = 1;
+            }
+        }
+
+        amrex::ParallelDescriptor::Bcast(
+            &fire_version_read_failed,
+            1,
+            amrex::ParallelDescriptor::IOProcessorNumber());
+
+        amrex::ParallelDescriptor::Bcast(
+            &checkpoint_version,
+            1,
+            amrex::ParallelDescriptor::IOProcessorNumber());
+
+        if (fire_version_read_failed != 0) {
+            throw std::runtime_error(
+                "IO rank failed to identify ERF-Fire checkpoint version");
+        }
+
+        if (checkpoint_version != 1
+            && checkpoint_version != 2
+            && checkpoint_version != 3) {
+            throw std::runtime_error(
+                "unsupported ERF-Fire checkpoint format version");
+        }
+
+        ERFFireSpreadRuntimeState restore_state;
+        restore_state.config = expected_config;
+        restore_state.current_time_s =
+            inputs.level0_time_s;
+
+        ERFFireCheckpointV2Metadata v2_metadata;
+        ERFFireCheckpointV3Metadata v3_metadata;
+
+        // Preserve the existing collective restart ordering exactly.
+        // terrain_source() may load a regular-text terrain source using
+        // IO-rank file I/O followed by MPI broadcasts, so this provider is
+        // invoked on every rank before entering the metadata IO-rank block.
+        if (!inputs.terrain_source_provider) {
+            throw std::runtime_error(
+                "ERF-Fire checkpoint terrain source provider is unavailable");
+        }
+
+        const ERFTerrainSource* current_terrain_source =
+            inputs.terrain_source_provider();
+
+        int fire_state_read_failed = 0;
+
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            try {
+                validate_fire_terrain_source_restart_policy(
+                    inputs.checkpoint_directory,
+                    inputs.solver_choices,
+                    current_terrain_source);
+
+                std::ifstream fire_state_stream(
+                    fire_state_name,
+                    std::ios::in | std::ios::binary);
+
+                if (!fire_state_stream.good()) {
+                    throw std::runtime_error(
+                        "unable to open ERF-Fire checkpoint state "
+                        + fire_state_name);
+                }
+
+                ERFFireCheckpointState* checkpoint =
+                    nullptr;
+
+                ERFFireCheckpointState v1_checkpoint;
+
+                if (checkpoint_version == 1) {
+                    v1_checkpoint =
+                        read_erf_fire_checkpoint_state(
+                            fire_state_stream);
+
+                    checkpoint =
+                        &v1_checkpoint;
+
+                } else if (checkpoint_version == 2) {
+                    v2_metadata =
+                        read_erf_fire_checkpoint_v2_metadata(
+                            fire_state_stream);
+
+                    checkpoint =
+                        &v2_metadata.checkpoint;
+
+                } else {
+                    v3_metadata =
+                        read_erf_fire_checkpoint_v3_metadata(
+                            fire_state_stream);
+
+                    checkpoint =
+                        &v3_metadata.checkpoint;
+                }
+
+                validate_fire_checkpoint_policy(
+                    *checkpoint,
+                    runtime_options_);
+
+                if (!same_fire_spread_config(
+                        checkpoint->runtime_state.config,
+                        expected_config)) {
+                    throw std::runtime_error(
+                        "ERF-Fire checkpoint spread configuration does not match current inputs or level-0 geometry");
+                }
+
+                if (checkpoint->runtime_state.current_time_s
+                    != inputs.level0_time_s) {
+                    throw std::runtime_error(
+                        "ERF-Fire checkpoint clock does not match ERF level-0 checkpoint time");
+                }
+
+                restore_state =
+                    std::move(
+                        checkpoint->runtime_state);
+
+            } catch (const std::exception& error) {
+                amrex::Print()
+                    << "ERF-Fire restart validation error: "
+                    << error.what()
+                    << "\n";
+
+                fire_state_read_failed = 1;
+            }
+        }
+
+        amrex::ParallelDescriptor::Bcast(
+            &fire_state_read_failed,
+            1,
+            amrex::ParallelDescriptor::IOProcessorNumber());
+
+        if (fire_state_read_failed != 0) {
+            throw std::runtime_error(
+                "IO rank failed to read or validate ERF-Fire checkpoint state");
+        }
+
+        if (checkpoint_version == 1) {
+            ERFFireSpreadRuntime restored =
+                ERFFireSpreadRuntime::
+                    collective_restore_from_io_rank_state(
+                        std::move(restore_state));
+
+            spread_runtime_ =
+                std::make_unique<
+                    ERFFireSpreadRuntime>(
+                        std::move(restored));
+
+        } else {
+            const std::string fire_raster_name =
+                amrex::MultiFabFileFullPrefix(
+                    0,
+                    inputs.checkpoint_directory,
+                    "Level_",
+                    "FireStateRaster");
+
+            if (!amrex::FileExists(
+                    fire_raster_name + "_H")) {
+                throw std::runtime_error(
+                    "ERF-Fire distributed checkpoint is missing FireStateRaster");
+            }
+
+            amrex::MultiFab checkpoint_raster;
+
+            amrex::VisMF::Read(
+                checkpoint_raster,
+                fire_raster_name);
+
+            ERFFireSpreadRuntime restored =
+                ERFFireSpreadRuntime::
+                    collective_restore_from_checkpoint_raster(
+                        std::move(restore_state),
+                        checkpoint_raster);
+
+            spread_runtime_ =
+                std::make_unique<
+                    ERFFireSpreadRuntime>(
+                        std::move(restored));
+        }
+
+        step_index_ =
+            inputs.level0_step;
+
+        environment_snapshot_time_ =
+            std::numeric_limits<double>::quiet_NaN();
+
+        atmospheric_source_tendency_.reset();
+
+        atmospheric_source_time_ =
+            std::numeric_limits<double>::quiet_NaN();
+
+    } catch (const std::exception& error) {
+        amrex::Error(
+            std::string(
+                "failed to restore ERF-Fire checkpoint state: ")
             + error.what());
     }
 }
