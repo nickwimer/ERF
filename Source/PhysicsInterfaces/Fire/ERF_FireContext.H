@@ -13,6 +13,7 @@
 namespace ERFFire
 {
 
+struct ERFFireCheckpointWriteInputs;
 struct ERFFireLevel0AdvanceInputs;
 
 /**
@@ -52,6 +53,9 @@ public:
     void add_atmospheric_source(
         int level,
         amrex::MultiFab& conserved_source) const;
+
+    void write_checkpoint(
+        const ERFFireCheckpointWriteInputs& inputs) const;
 
     [[nodiscard]] ERFFireRuntimeOptions&
     runtime_options() noexcept

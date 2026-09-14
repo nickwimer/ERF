@@ -617,95 +617,20 @@ ERF::WriteCheckpointFile () const
 #endif
 
 #ifdef ERF_USE_FIRE
-    if (m_fire->runtime_options().enabled) {
-        std::unique_ptr<ERFFire::ERFFireSpreadRuntime>
-            initial_fire_runtime;
-        const ERFFire::ERFFireSpreadRuntime*
-            fire_runtime_for_checkpoint =
-                m_fire->spread_runtime().get();
+    const ERFFire::ERFFireCheckpointWriteInputs
+        fire_checkpoint_inputs{
+            checkpointname,
+            geom[0],
+            solverChoice,
+            [this]() -> const ERFTerrainSource* {
+                return prob->terrain_source();
+            },
+            istep[0],
+            static_cast<Real>(t_new[0])
+        };
 
-        if (fire_runtime_for_checkpoint == nullptr) {
-            if (istep[0] != 0
-                || t_new[0] != amrex::Real(0.0)) {
-                Error(
-                    "ERF-Fire runtime is missing while writing a noninitial checkpoint");
-            }
-
-            initial_fire_runtime =
-                ERFFire::make_erf_fire_spread_runtime(
-                    m_fire->runtime_options(),
-                    geom[0],
-                    static_cast<Real>(t_new[0]));
-            fire_runtime_for_checkpoint =
-                initial_fire_runtime.get();
-        }
-
-        amrex::MultiFab fire_checkpoint_raster =
-            ERFFire::make_erf_fire_checkpoint_v2_raster(
-                *fire_runtime_for_checkpoint);
-        VisMF::Write(
-            fire_checkpoint_raster,
-            MultiFabFileFullPrefix(
-                0,
-                checkpointname,
-                "Level_",
-                "FireStateRaster"));
-
-        // terrain_source() may perform collective I/O and broadcasts, so load
-        // the retained source on every rank before entering the I/O-rank-only
-        // metadata block.  NetCDF/WPS terrain intentionally returns nullptr
-        // here and is represented by the level-0 terrain checkpoint state.
-        const ERFTerrainSource* fire_terrain_source_for_checkpoint = nullptr;
-        if (solverChoice.mesh_type == MeshType::VariableDz
-            && solverChoice.terrain_type
-                == TerrainType::StaticFittedMesh) {
-            fire_terrain_source_for_checkpoint =
-                prob->terrain_source();
-        }
-
-        if (ParallelDescriptor::IOProcessor()) {
-            const std::string fire_state_name =
-                checkpointname + "/FireState";
-            std::ofstream fire_state(
-                fire_state_name,
-                std::ios::out
-                    | std::ios::trunc
-                    | std::ios::binary);
-            if (!fire_state.good()) {
-                FileOpenFailed(fire_state_name);
-            }
-
-            try {
-                ERFFire::write_erf_fire_checkpoint_v3_metadata(
-                    *fire_runtime_for_checkpoint,
-                    m_fire->runtime_options(),
-                    fire_state);
-
-                const std::string fire_terrain_policy_name =
-                    checkpointname
-                    + "/FireTerrainSourcePolicy";
-                std::ofstream fire_terrain_policy(
-                    fire_terrain_policy_name,
-                    std::ios::out
-                        | std::ios::trunc
-                        | std::ios::binary);
-                if (!fire_terrain_policy.good()) {
-                    FileOpenFailed(
-                        fire_terrain_policy_name);
-                }
-
-                ERFFire::write_fire_terrain_source_policy(
-                    fire_terrain_policy,
-                    solverChoice,
-                    fire_terrain_source_for_checkpoint);
-            } catch (const std::exception& error) {
-                Error(
-                    std::string(
-                        "failed to write ERF-Fire checkpoint metadata: ")
-                    + error.what());
-            }
-        }
-    }
+    m_fire->write_checkpoint(
+        fire_checkpoint_inputs);
 #endif
 
 #if 0

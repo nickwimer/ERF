@@ -1,9 +1,12 @@
 #include <ERF_FireCheckpoint.H>
 
+#include <ERF_FireContext.H>
+#include <ERF_FireRuntimeInit.H>
 #include <ERF_TerrainSource.H>
 
 #include <AMReX.H>
 #include <AMReX_ParmParse.H>
+#include <AMReX_PlotFileUtil.H>
 
 #include <cstdint>
 #include <fstream>
@@ -12,6 +15,123 @@
 
 namespace ERFFire
 {
+
+void
+ERFFireContext::write_checkpoint(
+    const ERFFireCheckpointWriteInputs& inputs) const
+{
+    if (!runtime_options_.enabled) {
+        return;
+    }
+
+    std::unique_ptr<ERFFireSpreadRuntime>
+        initial_fire_runtime;
+
+    const ERFFireSpreadRuntime*
+        fire_runtime_for_checkpoint =
+            spread_runtime_.get();
+
+    if (fire_runtime_for_checkpoint == nullptr) {
+        if (inputs.level0_step != 0
+            || inputs.level0_time_s != amrex::Real(0.0)) {
+            amrex::Error(
+                "ERF-Fire runtime is missing while writing a noninitial checkpoint");
+        }
+
+        initial_fire_runtime =
+            make_erf_fire_spread_runtime(
+                runtime_options_,
+                inputs.level0_geometry,
+                inputs.level0_time_s);
+
+        fire_runtime_for_checkpoint =
+            initial_fire_runtime.get();
+    }
+
+    amrex::MultiFab fire_checkpoint_raster =
+        make_erf_fire_checkpoint_v2_raster(
+            *fire_runtime_for_checkpoint);
+
+    amrex::VisMF::Write(
+        fire_checkpoint_raster,
+        amrex::MultiFabFileFullPrefix(
+            0,
+            inputs.checkpoint_directory,
+            "Level_",
+            "FireStateRaster"));
+
+    // This lookup may perform collective regular-text terrain I/O and
+    // broadcasts. It must remain on all ranks and must occur before the
+    // IO-rank-only metadata block below.
+    const ERFTerrainSource*
+        fire_terrain_source_for_checkpoint = nullptr;
+
+    if (inputs.solver_choices.mesh_type
+            == MeshType::VariableDz
+        && inputs.solver_choices.terrain_type
+            == TerrainType::StaticFittedMesh) {
+        if (!inputs.terrain_source_provider) {
+            amrex::Error(
+                "ERF-Fire checkpoint terrain source provider is unavailable");
+        }
+
+        fire_terrain_source_for_checkpoint =
+            inputs.terrain_source_provider();
+    }
+
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        return;
+    }
+
+    const std::string fire_state_name =
+        inputs.checkpoint_directory
+        + "/FireState";
+
+    std::ofstream fire_state(
+        fire_state_name,
+        std::ios::out
+            | std::ios::trunc
+            | std::ios::binary);
+
+    if (!fire_state.good()) {
+        amrex::FileOpenFailed(
+            fire_state_name);
+    }
+
+    try {
+        write_erf_fire_checkpoint_v3_metadata(
+            *fire_runtime_for_checkpoint,
+            runtime_options_,
+            fire_state);
+
+        const std::string
+            fire_terrain_policy_name =
+                inputs.checkpoint_directory
+                + "/FireTerrainSourcePolicy";
+
+        std::ofstream fire_terrain_policy(
+            fire_terrain_policy_name,
+            std::ios::out
+                | std::ios::trunc
+                | std::ios::binary);
+
+        if (!fire_terrain_policy.good()) {
+            amrex::FileOpenFailed(
+                fire_terrain_policy_name);
+        }
+
+        write_fire_terrain_source_policy(
+            fire_terrain_policy,
+            inputs.solver_choices,
+            fire_terrain_source_for_checkpoint);
+
+    } catch (const std::exception& error) {
+        amrex::Error(
+            std::string(
+                "failed to write ERF-Fire checkpoint metadata: ")
+            + error.what());
+    }
+}
 
 namespace
 {
