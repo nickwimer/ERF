@@ -42,6 +42,17 @@ public:
     void advance_level0(
         const ERFFireLevel0AdvanceInputs& inputs);
 
+    /**
+     * Add the prepared Fire atmospheric tendency to ERF conserved sources.
+     *
+     * This is a no-op away from level 0 or when no Fire source is installed.
+     * The source is additive: ordinary ERF source construction remains
+     * authoritative and executes before this hook.
+     */
+    void add_atmospheric_source(
+        int level,
+        amrex::MultiFab& conserved_source) const;
+
     [[nodiscard]] ERFFireRuntimeOptions&
     runtime_options() noexcept
     {
