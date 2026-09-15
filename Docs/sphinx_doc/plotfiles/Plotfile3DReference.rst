@@ -356,6 +356,26 @@ The default subvolume inventory is documented on :ref:`sec:Plotfiles`.
 |                             | ``use_kturb``    |
 |                             | [m]              |
 +-----------------------------+------------------+
+| **Rt**                      | Smoothed         |
+|                             | turbulent        |
+|                             | Richardson       |
+|                             | number of the    |
+|                             | k-eqn RANS       |
+|                             | closure (Axell   |
+|                             | & Liungman       |
+|                             | 2001) [-]        |
++-----------------------------+------------------+
+| **cmu**                     | Momentum         |
+|                             | stability        |
+|                             | function of the  |
+|                             | k-eqn RANS       |
+|                             | closure [-]      |
++-----------------------------+------------------+
+| **cmu_prime**               | Scalar stability |
+|                             | function of the  |
+|                             | k-eqn RANS       |
+|                             | closure [-]      |
++-----------------------------+------------------+
 | **walldist**                | Wall distance    |
 |                             | for RANS models  |
 |                             | only [m]         |
@@ -445,6 +465,52 @@ The default subvolume inventory is documented on :ref:`sec:Plotfiles`.
 |                             | or buildings     |
 |                             | [1]              |
 +-----------------------------+------------------+
+| **ibseb_nfaces**            | Wall faces of the|
+|                             | building balance |
+|                             | touching the     |
+|                             | cell;            |
+|                             | erf.ibseb.enable |
+|                             | [1]              |
++-----------------------------+------------------+
+| **ibseb_tskin**             | Mean skin        |
+|                             | temperature of   |
+|                             | those faces;     |
+|                             | erf.ibseb.enable |
+|                             | [K]              |
++-----------------------------+------------------+
+| **ibseb_sw_abs**            | Mean absorbed    |
+|                             | shortwave of     |
+|                             | those faces;     |
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
+| **ibseb_shadow**            | Mean shadow flag |
+|                             | of those faces;  |
+|                             | erf.ibseb.enable |
+|                             | [1]              |
++-----------------------------+------------------+
+| **ibseb_lw_net**            | Mean net longwave|
+|                             | of those faces;  |
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
+| **ibseb_f_sky**             | Mean sky view    |
+|                             | fraction of those|
+|                             | faces;           |
+|                             | erf.ibseb.enable |
+|                             | [1]              |
++-----------------------------+------------------+
+| **ibseb_H**                 | Mean sensible    |
+|                             | flux out of those|
+|                             | faces;           |
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
+| **ibseb_G**                 | Mean conduction  |
+|                             | into those faces;|
+|                             | erf.ibseb.enable |
+|                             | [W/m2]           |
++-----------------------------+------------------+
 | **volfrac**                 | EB / immersed    |
 |                             | boundary volume  |
 |                             | fraction; unity  |
@@ -472,6 +538,13 @@ The default subvolume inventory is documented on :ref:`sec:Plotfiles`.
 |                             | to be defined    |
 |                             | [count]          |
 +-----------------------------+------------------+
+
+The ``ibseb_*`` fields are selected only when the immersed-boundary surface
+energy balance is on (``erf.ibseb.enable = true``); without it the names are
+dropped from the stream silently. Each is the mean over the wall faces that
+touch the cell (up to three at an outside corner, six in a one-cell slot) and
+zero where the cell touches none, so they are face diagnostics scattered onto
+cells rather than cell-centred fields.
 
 The ``qrain``, ``qsnow``, and ``qgraup`` rows are available when the active
 moisture scheme provides the corresponding rain, snow, or graupel component.
@@ -675,6 +748,13 @@ every AMR level in the plotfile:
 * ``qsrc_sw`` and ``qsrc_lw`` require a non-``None`` radiation choice.
 * ``nut``, ``Kmv``, ``Kmh``, ``Khv``, ``Khh``, and ``Lturb`` require
   ``use_kturb = true`` at every AMR level.
+* ``Rt``, ``cmu``, and ``cmu_prime`` also require ``use_kturb = true`` at every
+  AMR level, because they are stored in the eddy-diffusivity container. They are
+  written only by the one-equation k RANS closure, so they are identically zero
+  unless ``erf.rans_type = kEqn`` is active on the level. ``Rt`` is the smoothed
+  turbulent Richardson number and ``cmu``/``cmu_prime`` are the momentum and
+  scalar stability functions of Axell & Liungman (2001), Eqs. 29-32; all three
+  are dimensionless.
 * ``diss`` requires molecular diffusion or ``use_kturb`` at every level.
 * ``walldist`` requires a non-``None`` RANS choice at every level.
 

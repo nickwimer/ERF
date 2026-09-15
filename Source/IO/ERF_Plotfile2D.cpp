@@ -17,6 +17,7 @@
 #include "ERF_TerrainMetrics.H"
 #include "ERF_Utils.H"
 #include "Diagnostics/ERF_SeaLevelPressure.H"
+#include <cstddef>
 
 #ifdef ERF_USE_FIRE
 #include <ERF_FireContext.H>
@@ -174,9 +175,37 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
                                                            plot2d_file_1, plot2d_file_2,
                                                            file_name_digits);
 
-    const auto output_descriptors =
-        plotfile2d::build_sampled_level_output_descriptors(pp_prefix, which,
-                                                           plot_var_names, solverChoice);
+    Vector<plotfile2d::Plotfile2DOutputDescriptor> output_descriptors;
+
+#ifdef ERF_USE_FIRE
+    const auto fire_descriptor_selection =
+        ERFFire::select_fire_plotfile2d_output_descriptors(
+            plot_var_names);
+
+    output_descriptors =
+        plotfile2d::build_sampled_level_output_descriptors(
+            pp_prefix,
+            which,
+            fire_descriptor_selection.non_fire_plot_var_names,
+            solverChoice);
+
+    const auto fire_insert_position =
+        output_descriptors.begin()
+        + static_cast<std::ptrdiff_t>(
+            fire_descriptor_selection.non_fire_plot_var_names.size());
+
+    output_descriptors.insert(
+        fire_insert_position,
+        fire_descriptor_selection.fire_descriptors.begin(),
+        fire_descriptor_selection.fire_descriptors.end());
+#else
+    output_descriptors =
+        plotfile2d::build_sampled_level_output_descriptors(
+            pp_prefix,
+            which,
+            plot_var_names,
+            solverChoice);
+#endif
 
     Vector<std::string> varnames;
     varnames.reserve(output_descriptors.size());
@@ -433,8 +462,11 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
         } // z0
 
         if (containerHasElement(plot_var_names, "OLR")) {
+            // Outgoing longwave: the upward LW at the top-of-atmosphere
+            // interface, which rad_fluxes keeps in the z-ghost cell above the
+            // top layer (index khi holds the lower interface of the top layer).
             plotfile2d::fill_component_from_klevel_or_value(
-                mf[lev], mf_comp, rad_fluxes[lev].get(), khi, -999, 2);
+                mf[lev], mf_comp, rad_fluxes[lev].get(), khi + 1, -999, 2);
             mf_comp++;
         } // OLR
 

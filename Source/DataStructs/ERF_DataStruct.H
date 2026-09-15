@@ -18,6 +18,7 @@
 #include "ERF_SpongeStruct.H"
 #include "ERF_TurbStruct.H"
 #include "ERF_TurbPertStruct.H"
+#include "ERF_RadStruct.H"
 #include "ERF_ShocTransportStruct.H"
 
 /**
@@ -111,6 +112,19 @@ AMREX_ENUM(MoistureType,
 );
 
 /**
+ * @brief Whether an anelastic SuperDroplets configuration is unsupported.
+ *
+ * The current SuperDroplets implementation diagnoses thermodynamics through
+ * the compressible equation of state and has no BaseState pressure input.
+ */
+inline bool anelastic_superdroplets_configuration_invalid (
+    const MoistureType moisture_type,
+    const bool any_anelastic) noexcept
+{
+    return any_anelastic && moisture_type == MoistureType::SuperDroplets;
+}
+
+/**
  * @brief Wind-farm model.
  */
 AMREX_ENUM(WindFarmType,
@@ -135,7 +149,7 @@ AMREX_ENUM(LandSurfaceType,
  * @brief Radiation model.
  */
 AMREX_ENUM(RadiationType,
-    None, RRTMGP, Simple
+    None, RRTMGP, Simple, TwoStream
 );
 
 /**
@@ -906,6 +920,13 @@ struct SolverChoice {
             }
         }
 
+        if (anelastic_superdroplets_configuration_invalid(moisture_type, any_anelastic)) {
+            amrex::Error("erf.moisture_model = SuperDroplets is not supported with "
+                         "erf.anelastic = 1: the Super-Droplet path currently uses "
+                         "the compressible equation of state. Use compressible "
+                         "dynamics or a supported Eulerian moisture model.");
+        }
+
         // Want to have different immersed forcing defaults depending on anelastic or fully compressible.
         // We should have different starting values because the stability of the method is dependent on dt.
         // dt is coarser for anelastic --> need to loosen stiffness of immersed forcing.
@@ -950,6 +971,13 @@ struct SolverChoice {
         // *******************************************************************************
 
         pp.queryAdd("ncorr", ncorr);
+        // Wall distance on a terrain-fitted mesh (RANS): "poisson" (Tucker 2003
+        // differential-equation distance) or "terrain_height" (height above the
+        // local surface projected on its normal, no linear solve)
+        pp.queryAdd("wall_dist_type", wall_dist_type);
+        if (wall_dist_type != "poisson" && wall_dist_type != "terrain_height") {
+            amrex::Error("erf.wall_dist_type must be poisson or terrain_height");
+        }
         pp.queryAdd("poisson_abstol", poisson_abstol);
         pp.queryAdd("poisson_reltol", poisson_reltol);
 #ifdef AMREX_USE_FLOAT
@@ -1007,6 +1035,15 @@ struct SolverChoice {
 
         pp.queryAdd("if_Olen", if_Olen_in);
         pp.queryAdd("if_use_most",if_use_most);
+        pp.queryAdd("if_snap_partial_cells",if_snap_partial_cells);
+        // The snapped staircase puts full-strength forcing on every wall face,
+        // whose explicit relaxation rate (Cd / dx per substep) sits at the
+        // stability limit and fails where faces stack at rims and corners; the
+        // point-implicit form holds at any rate, so the snap uses it.
+        if (if_snap_partial_cells && !if_implicit_drag) {
+            amrex::Print() << "erf.if_snap_partial_cells: using the point-implicit drag (erf.if_implicit_drag = true)\n";
+            if_implicit_drag = true;
+        }
         pp.queryAdd("if_stability_correction",if_stability_correction);
         pp.queryAdd("if_ws_floor",if_ws_floor);
         pp.queryAdd("if_damp_alpha",if_damp_alpha);
@@ -1131,6 +1168,10 @@ struct SolverChoice {
         for (int lev = 0; lev <= max_level; lev++) {
             turbChoice[lev].init_params(lev,max_level,pp_prefix);
         }
+
+        // erf.radiation_model = TwoStream selects the two-stream model; its
+        // erf.radiation.* sub-options are read only then.
+        radChoice.init_params(rad_type == RadiationType::TwoStream, max_level, pp_prefix);
 
         vert_implicit_fac.resize(max_level+1);
         for (int lev = 0; lev <= max_level; lev++) {
@@ -1733,6 +1774,8 @@ struct SolverChoice {
             amrex::Print() << "Radiation Model: RRTMGP" << std::endl;
         } else if (rad_type == RadiationType::Simple) {
             amrex::Print() << "Radiation Model: Simple" << std::endl;
+        } else if (rad_type == RadiationType::TwoStream) {
+            amrex::Print() << "Radiation Model: TwoStream" << std::endl;
         } else {
             amrex::Print() << "Radiation Model: None" << std::endl;
         }
@@ -1863,6 +1906,7 @@ struct SolverChoice {
     SpongeChoice  spongeChoice;
     amrex::Vector<TurbChoice>  turbChoice;
     EBChoice      ebChoice;
+    RadChoice     radChoice;
 
     int         force_stage1_single_substep = 1;
 
@@ -1894,6 +1938,7 @@ struct SolverChoice {
     bool implicit_before_substep     = true;
 
     int         ncorr               = 1;
+    std::string wall_dist_type      = "poisson";
 #ifdef AMREX_USE_FLOAT
     amrex::Real poisson_abstol      = amrex::Real(1e-6);
     amrex::Real poisson_reltol      = amrex::Real(1e-6);
@@ -1932,6 +1977,7 @@ struct SolverChoice {
     amrex::Real if_surf_heating_rate     = zero;               // [K/hr]
     amrex::Real if_Olen_in               = amrex::Real(1e-8);  // [m]
     bool        if_use_most              = false;
+    bool        if_snap_partial_cells    = false;
     bool        if_stability_correction  = false;
     amrex::Real if_ws_floor              = 0.001;  // [m/s]
     amrex::Real if_damp_alpha            = 0.5;    // [-]
@@ -2126,6 +2172,12 @@ struct SolverChoice {
     LandSurfaceType lsm_type;
     RadiationType rad_type;
 
+    /** @brief True for the models that run through the IRadiation interface
+     *  (RRTMGP, Simple); the two-stream model has its own class. */
+    [[nodiscard]] bool rad_uses_interface () const {
+        return (rad_type == RadiationType::RRTMGP) || (rad_type == RadiationType::Simple);
+    }
+
     // Does an external ocean coupler supply SST? See the query in init_params.
     bool use_coupled_sst = false;
 
@@ -2299,6 +2351,30 @@ struct SolverChoice {
  * @brief Input Obukhov length for immersed-forcing MOST [m].
  * @var SolverChoice::if_use_most
  * @brief Whether immersed-forcing MOST is enabled.
+ * @var SolverChoice::if_snap_partial_cells
+ * When true, the immersed forcing reads the blanking snapped to solid (1) or
+ * fluid (0) at half, so a building from a height map becomes the same
+ * staircase of whole cells an exact box is: the wall law (and the thermal
+ * conditions) sit on the boundary solid cells, roofs included, the drag on
+ * the interior cells, and nothing on the sliver cells of the reader's
+ * one-cell ramp (1-20 percent solid at the corners), on which the raw
+ * fractions make the wall law and the drag disagree and grow a vertical
+ * checkerboard over hours. The staircase puts full-strength forcing on every
+ * wall face, so the switch also selects the point-implicit drag form
+ * (if_implicit_drag), without which the explicit rate at rims and corners
+ * drives the density negative within seconds. The momentum kernels take the
+ * blanking of a face from the two cells it joins (solid if either is), so
+ * the staircase is the same with and without the face-centred blanking of
+ * the build; a face between a solid and a fluid cell is wall-normal and gets
+ * the interior drag toward zero (no penetration) whichever row it lies in,
+ * and a face between two solid cells the roof or wall law of its row (with
+ * the full log-law target; the partial-cell weight of the target is not
+ * applied) or the interior drag. Buildings only (erf.buildings_type = ImmersedForcing): the
+ * terrain kernels keep the raw fractions, whose wall law is weighted by the
+ * fluid fraction of the face. Default false, the raw fractions, for backward
+ * compatibility (on an exact box a boundary cell then carries the wall law
+ * and the interior drag together, and the roof only the drag); set it for
+ * height-map buildings.
  * @var SolverChoice::if_stability_correction
  * @brief Whether immersed-forcing stability corrections are enabled.
  * @var SolverChoice::if_ws_floor

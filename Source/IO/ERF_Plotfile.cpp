@@ -2,6 +2,7 @@
  * \file ERF_Plotfile.cpp
  */
 #include "ERF.H"
+#include "ERF_Constants.H"
 #include "ERF_EpochTime.H"
 #include "ERF_NCPlotFile.H"
 #include "ERF_PlotfileSelection.H"
@@ -61,7 +62,10 @@ ERF::setPlotVariables (const std::string& pp_plot_var_names, Vector<std::string>
                                                 micro->Get_Qstate_Size());
     capabilities.time_average_storage = solverChoice.time_avg_vel;
     capabilities.interval_mean_storage = solverChoice.compute_mean_vars;
-    capabilities.radiation_heating_storage = solverChoice.rad_type != RadiationType::None;
+    // qsrc_sw / qsrc_lw are available whenever qheating_rates is allocated,
+    // i.e. for any erf.radiation_model other than None.
+    capabilities.radiation_heating_storage =
+        erf_plotfile::radiation_heating_storage_available(solverChoice.rad_type);
     capabilities.eddy_diffusivity_storage = true;
     capabilities.dissipation_storage = true;
     capabilities.wall_distance_storage = true;
@@ -112,6 +116,11 @@ ERF::setPlotVariables (const std::string& pp_plot_var_names, Vector<std::string>
         if ( containerHasElement(plot_var_names, derived_names[i]) ) {
             bool ok_to_add = ( (solverChoice.terrain_type == TerrainType::ImmersedForcing || solverChoice.buildings_type == BuildingsType::ImmersedForcing ) ||
                                (derived_names[i] != "terrain_IB_mask") );
+            ok_to_add     &= ( ibseb_params.enable ||
+                               (derived_names[i] != "ibseb_nfaces" && derived_names[i] != "ibseb_tskin" &&
+                                derived_names[i] != "ibseb_sw_abs" && derived_names[i] != "ibseb_shadow" &&
+                                derived_names[i] != "ibseb_lw_net" && derived_names[i] != "ibseb_f_sky" &&
+                                derived_names[i] != "ibseb_H" && derived_names[i] != "ibseb_G") );
             ok_to_add     &= ( (SolverChoice::terrain_type == TerrainType::StaticFittedMesh) ||
                                (SolverChoice::terrain_type == TerrainType::MovingFittedMesh) ||
                                (derived_names[i] != "detJ") );
@@ -1262,6 +1271,22 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             MultiFab::Copy(mf[lev],*shoc_or_host_eddy,EddyDiff::Turb_lengthscale,mf_comp,1,0);
             mf_comp ++;
         }
+        // k-eqn RANS diagnostics (zero unless the closure is running)
+        if (containerHasElement(plot_var_names, "Rt")) {
+            AMREX_ALWAYS_ASSERT(eddyDiffs_lev[lev] != nullptr);
+            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::RANS_Rt,mf_comp,1,0);
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "cmu")) {
+            AMREX_ALWAYS_ASSERT(eddyDiffs_lev[lev] != nullptr);
+            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::RANS_cmu,mf_comp,1,0);
+            mf_comp ++;
+        }
+        if (containerHasElement(plot_var_names, "cmu_prime")) {
+            AMREX_ALWAYS_ASSERT(eddyDiffs_lev[lev] != nullptr);
+            MultiFab::Copy(mf[lev],*eddyDiffs_lev[lev],EddyDiff::RANS_cmu_prime,mf_comp,1,0);
+            mf_comp ++;
+        }
         auto copy_native_shoc_diagnostic = [&](const MultiFab* src) {
             if (src != nullptr) {
                 MultiFab::Copy(mf[lev], *src, 0, mf_comp, 1, 0);
@@ -1535,6 +1560,48 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             MultiFab* terrain_blank = terrain_blanking[lev].get();
             MultiFab::Copy(mf[lev],*terrain_blank,0,mf_comp,1,0);
             mf_comp ++;
+        }
+
+        // Immersed-boundary surface energy balance: faces per cell and their mean skin temperature
+        if (containerHasElement(plot_var_names, "ibseb_nfaces") ||
+            containerHasElement(plot_var_names, "ibseb_tskin"))
+        {
+            MultiFab nfaces(grids[lev], dmap[lev], 1, 0);
+            MultiFab tskin (grids[lev], dmap[lev], 1, 0);
+            if (ibseb_params.enable && lev < static_cast<int>(m_ibseb.size()) && m_ibseb[lev]) {
+                m_ibseb[lev]->scatter_diagnostics(nfaces, tskin);
+            } else {
+                nfaces.setVal(0.0);
+                tskin.setVal(0.0);
+            }
+            if (containerHasElement(plot_var_names, "ibseb_nfaces")) {
+                MultiFab::Copy(mf[lev], nfaces, 0, mf_comp, 1, 0);
+                mf_comp++;
+            }
+            if (containerHasElement(plot_var_names, "ibseb_tskin")) {
+                MultiFab::Copy(mf[lev], tskin, 0, mf_comp, 1, 0);
+                mf_comp++;
+            }
+        }
+        // Radiation on the faces, per-cell means: absorbed shortwave, shadow
+        // flag, net longwave, sky view fraction
+        for (const char* nm : {"ibseb_sw_abs", "ibseb_shadow", "ibseb_lw_net", "ibseb_f_sky", "ibseb_H", "ibseb_G"}) {
+            if (!containerHasElement(plot_var_names, nm)) { continue; }
+            MultiFab tmp(grids[lev], dmap[lev], 1, 0);
+            if (ibseb_params.enable && lev < static_cast<int>(m_ibseb.size()) && m_ibseb[lev]) {
+                const std::string s(nm);
+                const auto& v = (s == "ibseb_sw_abs") ? m_ibseb[lev]->d_SW_abs
+                              : (s == "ibseb_shadow") ? m_ibseb[lev]->d_shadow
+                              : (s == "ibseb_lw_net") ? m_ibseb[lev]->d_LW_net
+                              : (s == "ibseb_H")      ? m_ibseb[lev]->d_H
+                              : (s == "ibseb_G")      ? m_ibseb[lev]->d_G
+                              :                         m_ibseb[lev]->d_f_sky;
+                m_ibseb[lev]->scatter_field(v, tmp);
+            } else {
+                tmp.setVal(0.0);
+            }
+            MultiFab::Copy(mf[lev], tmp, 0, mf_comp, 1, 0);
+            mf_comp++;
         }
 
         if (containerHasElement(plot_var_names, "volfrac")) {

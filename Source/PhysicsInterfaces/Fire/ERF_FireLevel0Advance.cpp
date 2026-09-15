@@ -101,7 +101,7 @@ ERFFireContext::advance_level0(
         // This lookup may trigger collective regular-text terrain loading.
         // It is intentionally performed by all ranks here, at the same point in
         // the coupling sequence as the pre-extraction timestep implementation.
-        const ERFTerrainSource* shared_terrain_source =
+        const ERFFireTerrainSource* shared_terrain_source =
             resolve_terrain_source();
 
         if (shared_terrain_source != nullptr) {

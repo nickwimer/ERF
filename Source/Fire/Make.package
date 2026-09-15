@@ -1,0 +1,62 @@
+CEXE_sources += ERF_FireTerrainSurface.cpp
+
+CEXE_sources += ERF_FirePerimeter.cpp
+CEXE_sources += ERF_FireFrontTopology.cpp
+CEXE_sources += ERF_FireFrontCollision.cpp
+CEXE_sources += ERF_FireFrontPropagator.cpp
+CEXE_sources += ERF_VectorPerimeterPropagator.cpp
+CEXE_sources += ERF_FirePerimeterRemesher.cpp
+CEXE_sources += ERF_FirePerimeterSweep.cpp
+
+CEXE_sources += ERF_RothermelFuel.cpp
+CEXE_sources += ERF_RothermelModel.cpp
+
+CEXE_sources += ERF_RichardsEllipse.cpp
+CEXE_sources += ERF_RichardsDirectionalSpread.cpp
+
+CEXE_sources += ERF_FireCellCoverage.cpp
+CEXE_sources += ERF_FireBurnedFraction.cpp
+CEXE_sources += ERF_FireRasterGeometry.cpp
+CEXE_sources += ERF_FireSurfaceLayout.cpp
+CEXE_sources += ERF_FireBurnedFractionRaster.cpp
+CEXE_sources += ERF_FireCellArrival.cpp
+CEXE_sources += ERF_FireFirstArrivalRaster.cpp
+
+CEXE_sources += ERF_FireCombustion.cpp
+CEXE_sources += ERF_FireCombustionRaster.cpp
+CEXE_sources += ERF_FireSurfaceFeedback.cpp
+
+CEXE_headers += ERF_FireTypes.H
+
+CEXE_headers += ERF_FireEnvironment.H
+CEXE_headers += ERF_FireFlatEnvironmentSampler.H
+CEXE_headers += ERF_FireTerrainSurface.H
+CEXE_headers += ERF_FireWindAdjustment.H
+
+CEXE_headers += ERF_FireFrontCollision.H
+CEXE_headers += ERF_FireFront.H
+CEXE_headers += ERF_FireFrontPropagator.H
+CEXE_headers += ERF_FireFrontTopology.H
+CEXE_headers += ERF_FireGeometry.H
+CEXE_headers += ERF_FirePerimeter.H
+CEXE_headers += ERF_FirePerimeterRemesher.H
+CEXE_headers += ERF_FirePerimeterSweep.H
+CEXE_headers += ERF_VectorPerimeterPropagator.H
+
+CEXE_headers += ERF_RothermelFuel.H
+CEXE_headers += ERF_RothermelModel.H
+
+CEXE_headers += ERF_RichardsDirectionalSpread.H
+CEXE_headers += ERF_RichardsEllipse.H
+
+CEXE_headers += ERF_FireBurnedFraction.H
+CEXE_headers += ERF_FireBurnedFractionRaster.H
+CEXE_headers += ERF_FireCellArrival.H
+CEXE_headers += ERF_FireCellCoverage.H
+CEXE_headers += ERF_FireFirstArrivalRaster.H
+CEXE_headers += ERF_FireRasterGeometry.H
+CEXE_headers += ERF_FireSurfaceLayout.H
+
+CEXE_headers += ERF_FireCombustion.H
+CEXE_headers += ERF_FireCombustionRaster.H
+CEXE_headers += ERF_FireSurfaceFeedback.H

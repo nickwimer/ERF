@@ -6,6 +6,8 @@
 #include <AMReX_REAL.H>
 #include <AMReX_Vector.H>
 
+#include <ERF_Plotfile2DSampledLevel.H>
+
 #include <string>
 
 namespace ERFFire
@@ -15,6 +17,16 @@ struct ERFFirePlotfile2DAvailabilityInputs
 {
     amrex::Vector<std::string>& available_names;
 };
+
+struct ERFFirePlotfile2DDescriptorSelection
+{
+    amrex::Vector<std::string> non_fire_plot_var_names;
+    amrex::Vector<plotfile2d::Plotfile2DOutputDescriptor> fire_descriptors;
+};
+
+[[nodiscard]] ERFFirePlotfile2DDescriptorSelection
+select_fire_plotfile2d_output_descriptors(
+    const amrex::Vector<std::string>& plot_var_names);
 
 struct ERFFirePlotfile2DPrepareInputs
 {

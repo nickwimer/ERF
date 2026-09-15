@@ -4,22 +4,94 @@
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireSpreadOutput.H>
 
-#include <ERF_Plotfile2DCatalog.H>
-
 #include <AMReX.H>
 
+#include <cstddef>
 #include <memory>
+#include <utility>
 
 namespace
 {
 
-bool
-is_fire_diagnostic(
-    const plotfile2d::DiagnosticDescriptor* descriptor) noexcept
+struct FirePlotfile2DDiagnosticSpec
 {
-    return descriptor
-        && descriptor->category
-            == plotfile2d::DiagnosticCategory::Fire;
+    const char* name;
+    const char* long_name;
+    const char* units;
+    int checkpoint_component;
+};
+
+const amrex::Vector<FirePlotfile2DDiagnosticSpec>&
+fire_plotfile2d_catalog()
+{
+    using Components =
+        ERFFire::ERFFireCheckpointRasterComponents;
+
+    static const amrex::Vector<FirePlotfile2DDiagnosticSpec> catalog{
+        {
+            "fire_burned_fraction",
+            "Persistent Fire burned-area fraction",
+            "1",
+            Components::burned_fraction
+        },
+        {
+            "fire_has_arrived",
+            "Fire first-arrival validity mask",
+            "1",
+            Components::arrived
+        },
+        {
+            "fire_first_arrival_time_s",
+            "First positive-area Fire arrival time; valid where fire_has_arrived is 1",
+            "s",
+            Components::first_arrival_time_s
+        },
+        {
+            "fire_ignited_area_fraction",
+            "Fire combustion ignited-area fraction",
+            "1",
+            Components::ignited_area_fraction
+        },
+        {
+            "fire_remaining_dry_fuel_kg_m2",
+            "Remaining oven-dry Fire fuel load",
+            "kg/m^2",
+            Components::remaining_dry_fuel_kg_m2
+        },
+        {
+            "fire_consumed_dry_fuel_kg_m2",
+            "Cumulative consumed oven-dry Fire fuel load",
+            "kg/m^2",
+            Components::consumed_dry_fuel_kg_m2
+        },
+        {
+            "fire_sensible_energy_j_m2",
+            "Cumulative Fire sensible energy released per unit surface area",
+            "J/m^2",
+            Components::sensible_energy_j_m2
+        },
+        {
+            "fire_water_released_kg_m2",
+            "Cumulative Fire combustion water released per unit surface area",
+            "kg/m^2",
+            Components::water_released_kg_m2
+        }
+    };
+
+    return catalog;
+}
+
+const FirePlotfile2DDiagnosticSpec*
+find_fire_plotfile2d_diagnostic(
+    const std::string& name) noexcept
+{
+    for (const auto& descriptor : fire_plotfile2d_catalog()) {
+        if (name == descriptor.name) {
+            return &descriptor;
+        }
+    }
+
+    return nullptr;
 }
 
 bool
@@ -41,39 +113,47 @@ fire_raster_matches_level0_geometry(
         && fire_geometry.dy_m == cell_size[1];
 }
 
-int
-fire_checkpoint_raster_component(
-    plotfile2d::DiagnosticID id) noexcept
-{
-    using Components =
-        ERFFire::ERFFireCheckpointRasterComponents;
-
-    switch (id) {
-    case plotfile2d::DiagnosticID::FireBurnedFraction:
-        return Components::burned_fraction;
-    case plotfile2d::DiagnosticID::FireHasArrived:
-        return Components::arrived;
-    case plotfile2d::DiagnosticID::FireFirstArrivalTime:
-        return Components::first_arrival_time_s;
-    case plotfile2d::DiagnosticID::FireIgnitedAreaFraction:
-        return Components::ignited_area_fraction;
-    case plotfile2d::DiagnosticID::FireRemainingDryFuel:
-        return Components::remaining_dry_fuel_kg_m2;
-    case plotfile2d::DiagnosticID::FireConsumedDryFuel:
-        return Components::consumed_dry_fuel_kg_m2;
-    case plotfile2d::DiagnosticID::FireSensibleEnergy:
-        return Components::sensible_energy_j_m2;
-    case plotfile2d::DiagnosticID::FireWaterReleased:
-        return Components::water_released_kg_m2;
-    default:
-        return -1;
-    }
-}
-
 } // namespace
 
 namespace ERFFire
 {
+
+ERFFirePlotfile2DDescriptorSelection
+select_fire_plotfile2d_output_descriptors(
+    const amrex::Vector<std::string>& plot_var_names)
+{
+    ERFFirePlotfile2DDescriptorSelection result;
+
+    result.non_fire_plot_var_names.reserve(
+        plot_var_names.size());
+
+    result.fire_descriptors.reserve(
+        fire_plotfile2d_catalog().size());
+
+    for (const auto& name : plot_var_names) {
+        const auto* fire_descriptor =
+            find_fire_plotfile2d_diagnostic(name);
+
+        if (fire_descriptor == nullptr) {
+            result.non_fire_plot_var_names.push_back(name);
+            continue;
+        }
+
+        plotfile2d::Plotfile2DOutputDescriptor descriptor;
+        descriptor.name = fire_descriptor->name;
+        descriptor.long_name = fire_descriptor->long_name;
+        descriptor.units = fire_descriptor->units;
+        descriptor.category_name_override = "Fire";
+        descriptor.missing_policy =
+            plotfile2d::MissingPolicy::AlwaysAvailable;
+        descriptor.missing_value = amrex::Real(0.0);
+
+        result.fire_descriptors.push_back(
+            std::move(descriptor));
+    }
+
+    return result;
+}
 
 void
 ERFFireContext::append_available_plotfile2d_diagnostics(
@@ -83,15 +163,12 @@ ERFFireContext::append_available_plotfile2d_diagnostics(
         return;
     }
 
-    // Runtime Fire diagnostics follow dynamic land-surface fields so every
-    // existing non-Fire component index remains unchanged.
+    // Fire fields are appended after all generic ERF diagnostics. This
+    // preserves every existing non-Fire component index.
     for (const auto& descriptor :
-         plotfile2d::diagnostic_catalog()) {
-        if (descriptor.category
-            == plotfile2d::DiagnosticCategory::Fire) {
-            inputs.available_names.push_back(
-                descriptor.name);
-        }
+         fire_plotfile2d_catalog()) {
+        inputs.available_names.push_back(
+            descriptor.name);
     }
 }
 
@@ -104,8 +181,8 @@ ERFFireContext::prepare_plotfile2d_diagnostics(
     for (const auto& name : inputs.plot_var_names) {
         state.requested =
             state.requested
-            || is_fire_diagnostic(
-                plotfile2d::find_diagnostic(name));
+            || find_fire_plotfile2d_diagnostic(name)
+                != nullptr;
     }
 
     if (!state.requested) {
@@ -176,21 +253,20 @@ ERFFireContext::fill_plotfile2d_diagnostics(
 
     for (const auto& name : inputs.plot_var_names) {
         const auto* descriptor =
-            plotfile2d::find_diagnostic(name);
+            find_fire_plotfile2d_diagnostic(name);
 
-        if (!is_fire_diagnostic(descriptor)) {
+        if (descriptor == nullptr) {
             continue;
         }
 
         const int src_comp =
-            fire_checkpoint_raster_component(
-                descriptor->id);
+            descriptor->checkpoint_component;
 
         AMREX_ALWAYS_ASSERT(src_comp >= 0);
         AMREX_ALWAYS_ASSERT(
             src_comp
             < ERFFireCheckpointRasterComponents::
-                component_count);
+              component_count);
 
         inputs.output.ParallelCopy(
             inputs.state.raster,

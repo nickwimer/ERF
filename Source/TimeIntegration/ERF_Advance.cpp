@@ -1,4 +1,5 @@
 #include <ERF.H>
+#include "ERF_Constants.H"
 #include <ERF_Utils.H>
 
 #ifdef ERF_USE_WINDFARM
@@ -23,6 +24,10 @@ ERF::Advance (int lev, double time, double dt_lev, int iteration, int /*ncycle*/
 
     // We must swap the pointers so the previous step's "new" is now this step's "old"
     std::swap(vars_old[lev], vars_new[lev]);
+
+    // Surface energy balance on the building faces, with the state at the start of the step
+    ibseb_advance(lev, time, dt_lev, vars_old[lev][Vars::cons],
+                  vars_old[lev][Vars::xvel], vars_old[lev][Vars::yvel], vars_old[lev][Vars::zvel]);
 
     MultiFab& S_old = vars_old[lev][Vars::cons];
     MultiFab& S_new = vars_new[lev][Vars::cons];
@@ -437,6 +442,26 @@ ERF::Advance (int lev, double time, double dt_lev, int iteration, int /*ncycle*/
         Time_Avg_Vel_atCC(dt[lev], t_avg_cnt[lev], vel_t_avg[lev].get(), U_new, V_new, W_new);
     }
 
+    // ***********************************************************************************************
+    // Two-stream radiation, post-dycore call: reports the cached flux
+    // diagnostics and advances the force-restore surface state by dt_lev.
+    // No column sweep runs here; that happened in advance_radiation above.
+    // ***********************************************************************************************
+    if (solverChoice.rad_type == RadiationType::TwoStream) {
+#ifdef ERF_USE_NETCDF
+        const MultiFab* lat_ptr = lat_m[lev].get();
+        const MultiFab* lon_ptr = lon_m[lev].get();
+#else
+        const MultiFab* lat_ptr = nullptr;
+        const MultiFab* lon_ptr = nullptr;
+#endif
+        const MultiFab* t_surf = (m_SurfaceLayer) ? m_SurfaceLayer->get_t_surf(lev) : nullptr;
+        two_stream_rad.advance(lev, iteration, time + dt_lev, dt_lev, "post_dycore",
+                               vars_old[lev][Vars::cons], z_phys_nd[lev].get(), geom[lev],
+                               lsm, qheating_rates[lev].get(), rad_fluxes[lev].get(),
+                               t_surf, lat_ptr, lon_ptr,
+                               time + dt_lev + start_time, use_datetime);
+    }
     if (solverChoice.compute_mean_vars) {
         // The interval window is shared by all AMR levels.  Reset it before
         // accumulating the first sample whose step starts at or beyond the

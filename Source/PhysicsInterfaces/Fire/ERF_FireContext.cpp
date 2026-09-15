@@ -1,6 +1,6 @@
 #include <ERF.H>
 #include <ERF_FireContext.H>
-#include <ERF_TerrainSource.H>
+#include <ERF_FireTerrainSource.H>
 
 #include <AMReX_ParmParse.H>
 
@@ -17,7 +17,7 @@ ERFFireContext::ERFFireContext() = default;
 
 ERFFireContext::~ERFFireContext() = default;
 
-const ERFTerrainSource*
+const ERFFireTerrainSource*
 ERFFireContext::resolve_terrain_source() const
 {
     amrex::ParmParse pp("erf");
@@ -34,8 +34,8 @@ ERFFireContext::resolve_terrain_source() const
         std::string filename;
         if (pp.query("terrain_file_name", filename)) {
             regular_text_terrain_source_ =
-                std::make_unique<ERFTerrainSource>(
-                    ERFTerrainSource::read_regular_text_file(
+                std::make_unique<ERFFireTerrainSource>(
+                    ERFFireTerrainSource::read_regular_text_file(
                         filename));
         }
     }

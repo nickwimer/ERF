@@ -2,6 +2,7 @@
 
 #include <AMReX.H>
 #include <AMReX_Arena.H>
+#include <AMReX_Gpu.H>
 #include <AMReX_FArrayBox.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_MultiFab.H>
@@ -41,6 +42,32 @@ has_variable(
     const std::string& name)
 {
     return std::find(names.begin(), names.end(), name) != names.end();
+}
+
+
+amrex::MultiFab
+make_pinned_host_copy(const amrex::MultiFab& source)
+{
+    amrex::MFInfo info;
+    info.SetArena(amrex::The_Pinned_Arena());
+
+    amrex::MultiFab host(
+        source.boxArray(),
+        source.DistributionMap(),
+        source.nComp(),
+        0,
+        info);
+
+    amrex::MultiFab::Copy(
+        host,
+        source,
+        0,
+        0,
+        source.nComp(),
+        0);
+
+    amrex::Gpu::streamSynchronize();
+    return host;
 }
 
 amrex::Real
@@ -966,6 +993,11 @@ analyze_pair(
     auto one_w = one_way.get(0, "z_velocity");
     auto two_w = two_way.get(0, "z_velocity");
 
+    auto one_theta_host = make_pinned_host_copy(one_theta);
+    auto two_theta_host = make_pinned_host_copy(two_theta);
+    auto one_w_host = make_pinned_host_copy(one_w);
+    auto two_w_host = make_pinned_host_copy(two_w);
+
     const int klo = domain.smallEnd(2);
     const int nz = domain.length(2);
     const amrex::Real dz = dx[2];
@@ -997,13 +1029,13 @@ analyze_pair(
 
     const amrex::Real source_z95_m = source_z95(metrics.top_m);
 
-    for (amrex::MFIter mfi(one_theta); mfi.isValid(); ++mfi) {
+    for (amrex::MFIter mfi(one_theta_host); mfi.isValid(); ++mfi) {
         const amrex::Box& box = mfi.validbox();
 
-        const auto one_theta_arr = one_theta.const_array(mfi);
-        const auto two_theta_arr = two_theta.const_array(mfi);
-        const auto one_w_arr = one_w.const_array(mfi);
-        const auto two_w_arr = two_w.const_array(mfi);
+        const auto one_theta_arr = one_theta_host.const_array(mfi);
+        const auto two_theta_arr = two_theta_host.const_array(mfi);
+        const auto one_w_arr = one_w_host.const_array(mfi);
+        const auto two_w_arr = two_w_host.const_array(mfi);
 
         for (int k = box.smallEnd(2); k <= box.bigEnd(2); ++k) {
             const amrex::Real z_m =

@@ -141,6 +141,48 @@ include $(ERF_PHYSICS_DIR)/Make.package
 VPATH_LOCATIONS   += $(ERF_PHYSICS_DIR)
 INCLUDE_LOCATIONS += $(ERF_PHYSICS_DIR)
 
+# ERF-Fire is an optional subsystem. Keep all Fire implementation and
+# interface sources out of Fire-OFF builds.
+ifeq ($(USE_FIRE), TRUE)
+    DEFINES += -DERF_USE_FIRE
+
+    ERF_FIRE_DIR             = $(ERF_SOURCE_DIR)/Fire
+    ERF_FIRE_FRONT_DIR       = $(ERF_FIRE_DIR)/Front
+    ERF_FIRE_BEHAVIOR_DIR    = $(ERF_FIRE_DIR)/Behavior
+    ERF_FIRE_SPREAD_DIR      = $(ERF_FIRE_DIR)/Spread
+    ERF_FIRE_RASTER_DIR      = $(ERF_FIRE_DIR)/Raster
+    ERF_FIRE_ENVIRONMENT_DIR = $(ERF_FIRE_DIR)/Environment
+    ERF_FIRE_BURN_DIR        = $(ERF_FIRE_DIR)/Burn
+    ERF_FIRE_IFACE_DIR       = $(ERF_SOURCE_DIR)/PhysicsInterfaces/Fire
+
+    include $(ERF_FIRE_DIR)/Make.package
+    include $(ERF_FIRE_IFACE_DIR)/Make.package
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_DIR)
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_FRONT_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_FRONT_DIR)
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_BEHAVIOR_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_BEHAVIOR_DIR)
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_SPREAD_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_SPREAD_DIR)
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_RASTER_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_RASTER_DIR)
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_ENVIRONMENT_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_ENVIRONMENT_DIR)
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_BURN_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_BURN_DIR)
+
+    VPATH_LOCATIONS   += $(ERF_FIRE_IFACE_DIR)
+    INCLUDE_LOCATIONS += $(ERF_FIRE_IFACE_DIR)
+endif
+
 ERF_UTIL_DIR = $(ERF_SOURCE_DIR)/Utils
 include $(ERF_UTIL_DIR)/Make.package
 VPATH_LOCATIONS   += $(ERF_UTIL_DIR)
@@ -340,10 +382,25 @@ ifeq ($(USE_NOAHMP), TRUE)
   LIBRARIES += -lnoahmp -lgfortran -lquadmath -lnetcdff
 endif
 
-ERF_RAD_DIR = $(ERF_SOURCE_DIR)/PhysicsInterfaces/Radiation
+ERF_RAD_DIR = $(ERF_SOURCE_DIR)/Radiation
 include $(ERF_RAD_DIR)/Make.package
 VPATH_LOCATIONS   += $(ERF_RAD_DIR)
 INCLUDE_LOCATIONS += $(ERF_RAD_DIR)
+
+ERF_RAD_RRTMGP_DIR = $(ERF_SOURCE_DIR)/Radiation/RRTMGP
+include $(ERF_RAD_RRTMGP_DIR)/Make.package
+VPATH_LOCATIONS   += $(ERF_RAD_RRTMGP_DIR)
+INCLUDE_LOCATIONS += $(ERF_RAD_RRTMGP_DIR)
+
+ERF_RAD_SIMPLE_DIR = $(ERF_SOURCE_DIR)/Radiation/Simple
+include $(ERF_RAD_SIMPLE_DIR)/Make.package
+VPATH_LOCATIONS   += $(ERF_RAD_SIMPLE_DIR)
+INCLUDE_LOCATIONS += $(ERF_RAD_SIMPLE_DIR)
+
+ERF_RADIATION_DIR = $(ERF_SOURCE_DIR)/Radiation/TwoStream
+include $(ERF_RADIATION_DIR)/Make.package
+VPATH_LOCATIONS   += $(ERF_RADIATION_DIR)
+INCLUDE_LOCATIONS += $(ERF_RADIATION_DIR)
 
 # If using RRTMGP Radiation, compile relevant source and headers
 ifeq ($(USE_RRTMGP), TRUE)

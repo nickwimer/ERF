@@ -1,4 +1,4 @@
-#include <ERF_TerrainSource.H>
+#include <ERF_FireTerrainSource.H>
 #include <ERF_FireLevel0Environment.H>
 
 #include <AMReX_Arena.H>
@@ -48,7 +48,7 @@ test_tolerance()
 } // namespace
 
 TEST(
-    ERFTerrainSource,
+    ERFFireTerrainSource,
     ReadsRegularTextOrderingAndSamplesClosedDomain)
 {
     const std::string filename =
@@ -97,8 +97,8 @@ TEST(
 
     amrex::ParallelDescriptor::Barrier();
 
-    const ERFTerrainSource source =
-        ERFTerrainSource::read_regular_text_file(
+    const ERFFireTerrainSource source =
+        ERFFireTerrainSource::read_regular_text_file(
             filename);
 
     EXPECT_EQ(source.nx(), 3U);
@@ -141,7 +141,7 @@ TEST(
 }
 
 TEST(
-    ERFTerrainSource,
+    ERFFireTerrainSource,
     FileFingerprintBelongsToLoadedSourceState)
 {
     const std::string filename =
@@ -165,8 +165,8 @@ TEST(
 
     amrex::ParallelDescriptor::Barrier();
 
-    const ERFTerrainSource source =
-        ERFTerrainSource::read_regular_text_file(
+    const ERFFireTerrainSource source =
+        ERFFireTerrainSource::read_regular_text_file(
             filename);
 
     const auto loaded_fingerprint =
@@ -199,10 +199,10 @@ TEST(
 }
 
 TEST(
-    ERFTerrainSource,
+    ERFFireTerrainSource,
     AtmosphericFillExtendsEdgesWhileDirectSamplingRemainsStrict)
 {
-    const ERFTerrainSource source(
+    const ERFFireTerrainSource source(
         std::vector<Real>{
             Real(0),
             Real(1)},
@@ -292,11 +292,11 @@ TEST(
 }
 
 TEST(
-    ERFTerrainSource,
+    ERFFireTerrainSource,
     RejectsMalformedCoordinateTopology)
 {
     EXPECT_THROW(
-        (void)ERFTerrainSource(
+        (void)ERFFireTerrainSource(
             std::vector<Real>{
                 Real(0),
                 Real(0)},
@@ -309,7 +309,7 @@ TEST(
         std::invalid_argument);
 
     EXPECT_THROW(
-        (void)ERFTerrainSource(
+        (void)ERFFireTerrainSource(
             std::vector<Real>{
                 Real(0),
                 Real(1)},
@@ -323,7 +323,7 @@ TEST(
 }
 
 TEST(
-    ERFTerrainSource,
+    ERFFireTerrainSource,
     DirectFireSamplingRetainsTerrainLostOnCoarseGrid)
 {
     std::vector<Real> x;
@@ -360,7 +360,7 @@ TEST(
         }
     }
 
-    const ERFTerrainSource source(
+    const ERFFireTerrainSource source(
         x,
         y,
         elevation);

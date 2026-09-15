@@ -30,6 +30,9 @@ USE_NETCDF = TRUE
 # Enable FFT Poisson solver
 USE_FFT = FALSE
 
+# Enable ERF-Fire
+USE_FIRE = FALSE
+
 # Enable NOAH LSM
 #USE_NOAHMP = TRUE
 

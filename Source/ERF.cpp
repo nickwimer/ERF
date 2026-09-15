@@ -7,6 +7,7 @@
 */
 
 #include <memory>
+#include "ERF_Constants.H"
 
 #include "ERF_EOS.H"
 #include "ERF.H"
@@ -368,6 +369,10 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
 {
     BL_PROFILE("ERF::post_timestep()");
 
+    // nstep is the 0-based index of the step just completed; the balance
+    // reports by the number of completed steps, the plotfiles' numbering.
+    ibseb_report(nstep + 1, time);
+
     if (cloud_chamber_budget) {
         cloud_chamber_budget->report(
             nstep + 1, time, vars_new[0][Vars::cons], geom[0],
@@ -465,7 +470,7 @@ ERF::post_timestep (int nstep, double time, double dt_lev0)
         }
     }
 
-    if (solverChoice.rad_type != RadiationType::None)
+    if (solverChoice.rad_uses_interface())
     {
         if ( rad_datalog_int > 0 &&
              (((nstep+1) % rad_datalog_int == 0) || (nstep==0)) ) {
@@ -655,6 +660,9 @@ ERF::InitData_post ()
     if (!restart_chkfile.empty()) {
         restart();
     }
+
+    // Faces of the resolved buildings, from the blanking both paths have built.
+    init_ibseb();
 
     // Select 2-D variables after the active LSM has initialized its runtime
     // field inventory, including provider-specific soil layers.
@@ -1271,7 +1279,7 @@ ERF::InitData_post ()
         }
 
         m_SurfaceLayer = std::make_unique<SurfaceLayer>(geom, rotate, pp_prefix, Qv_prim,
-                                                        z_phys_nd,
+                                                        z_phys_nd, zlevels_stag,
                                                         solverChoice.mesh_type,
                                                         solverChoice.terrain_type,
                                                         solverChoice.turbChoice[finest_level],
@@ -1545,7 +1553,7 @@ ERF::InitData_post ()
         }
     }
 
-    if (solverChoice.rad_type != RadiationType::None)
+    if (solverChoice.rad_uses_interface())
     {
         // Create data log for radiation model if requested
         rad[0]->setupDataLog();
@@ -2493,6 +2501,7 @@ ERF::ReadParameters ()
     std::string prob_name = "Undefined";
     ParmParse pp_pn("erf");
     pp_pn.queryAdd("prob_name", prob_name);
+    ibseb_params.init_params();
     Print() << "Problem name (from inputs file) is: "
             << " \"" << prob_name << "\" " << std::endl;
 

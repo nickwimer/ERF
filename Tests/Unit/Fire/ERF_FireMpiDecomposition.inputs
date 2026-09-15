@@ -25,6 +25,10 @@ erf.init_type = "uniform"
 erf.moisture_model = "MoistNoCondensation"
 erf.use_gravity = false
 erf.fixed_dt = 0.002
+
+# This regression intentionally uses grids decomposed in z. Disable the
+# vertical implicit solve so the atmospheric update itself remains decomposition-safe.
+erf.vert_implicit_fac = 0 0 0
 erf.molec_diff_type = "None"
 erf.les_type = "None"
 erf.sum_interval = -1

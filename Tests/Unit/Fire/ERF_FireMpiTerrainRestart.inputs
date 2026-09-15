@@ -27,6 +27,10 @@ erf.terrain_smoothing = 0
 erf.moisture_model = "MoistNoCondensation"
 erf.use_gravity = false
 erf.fixed_dt = 0.001
+
+# This MPI regression intentionally decomposes grids in z. Disable the
+# vertical implicit solve so atmospheric evolution is valid on that layout.
+erf.vert_implicit_fac = 0 0 0
 erf.molec_diff_type = "None"
 erf.les_type = "None"
 erf.sum_interval = -1

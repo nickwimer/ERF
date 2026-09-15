@@ -70,7 +70,11 @@ void append_variable_record (std::ostringstream& os,
     append_json_string(os, descriptor.units);
     os << ",\n";
     os << "      \"category\": ";
-    append_json_string(os, diagnostic_category_to_string(descriptor.category));
+    if (descriptor.category_name_override.empty()) {
+        append_json_string(os, diagnostic_category_to_string(descriptor.category));
+    } else {
+        append_json_string(os, descriptor.category_name_override);
+    }
     os << ",\n";
     os << "      \"missing_policy\": ";
     append_json_string(os, missing_policy_to_string(descriptor.missing_policy));
@@ -109,7 +113,6 @@ diagnostic_category_to_string (DiagnosticCategory category) noexcept
     case DiagnosticCategory::Precipitation:    return "Precipitation";
     case DiagnosticCategory::ColumnIntegral:   return "ColumnIntegral";
     case DiagnosticCategory::LandSurface:      return "LandSurface";
-    case DiagnosticCategory::Fire:             return "Fire";
     case DiagnosticCategory::SampledLevel:     return "SampledLevel";
     }
 

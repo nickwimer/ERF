@@ -10,7 +10,7 @@
 
 #include <vector>
 
-class ERFTerrainSource;
+class ERFFireTerrainSource;
 
 namespace ERFFire
 {
@@ -128,7 +128,7 @@ make_erf_level0_terrain_surface_on_geometry (
  */
 [[nodiscard]] FireTerrainSurface
 make_erf_terrain_source_surface_on_geometry (
-    const ERFTerrainSource& source,
+    const ERFFireTerrainSource& source,
     FireCartesianRasterGeometry2D target_geometry);
 
 /**

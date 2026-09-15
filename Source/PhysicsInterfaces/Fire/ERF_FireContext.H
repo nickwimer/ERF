@@ -10,7 +10,7 @@
 #include <limits>
 #include <memory>
 
-class ERFTerrainSource;
+class ERFFireTerrainSource;
 
 namespace ERFFire
 {
@@ -113,12 +113,12 @@ public:
     }
 
 private:
-    [[nodiscard]] const ERFTerrainSource*
+    [[nodiscard]] const ERFFireTerrainSource*
     resolve_terrain_source() const;
 
     ERFFireRuntimeOptions runtime_options_{};
 
-    mutable std::unique_ptr<ERFTerrainSource>
+    mutable std::unique_ptr<ERFFireTerrainSource>
         regular_text_terrain_source_;
 
     double environment_snapshot_time_ =

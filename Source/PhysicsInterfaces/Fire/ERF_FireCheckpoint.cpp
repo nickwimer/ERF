@@ -2,7 +2,7 @@
 
 #include <ERF_FireContext.H>
 #include <ERF_FireRuntimeInit.H>
-#include <ERF_TerrainSource.H>
+#include <ERF_FireTerrainSource.H>
 
 #include <AMReX.H>
 #include <AMReX_ParmParse.H>
@@ -66,7 +66,7 @@ ERFFireContext::write_checkpoint(
     // This lookup may perform collective regular-text terrain I/O and
     // broadcasts. It must remain on all ranks and must occur before the
     // IO-rank-only metadata block below.
-    const ERFTerrainSource*
+    const ERFFireTerrainSource*
         fire_terrain_source_for_checkpoint = nullptr;
 
     if (inputs.solver_choices.mesh_type
@@ -215,7 +215,7 @@ ERFFireContext::restore_checkpoint(
         // IO-rank file I/O followed by MPI broadcasts, so this resolution is
         // performed on every rank before entering the metadata IO-rank block.
 
-        const ERFTerrainSource* current_terrain_source =
+        const ERFFireTerrainSource* current_terrain_source =
             resolve_terrain_source();
 
         int fire_state_read_failed = 0;
@@ -448,7 +448,7 @@ expect_fire_terrain_source_policy_token(
 FireTerrainSourcePolicy
 current_fire_terrain_source_policy(
     const SolverChoice& choices,
-    const ERFTerrainSource* terrain_source)
+    const ERFFireTerrainSource* terrain_source)
 {
     if (choices.mesh_type != MeshType::VariableDz
         || choices.terrain_type
@@ -462,7 +462,7 @@ current_fire_terrain_source_policy(
 
     // Match ProblemBase::init_terrain_surface() and terrain_source()
     // precedence. NetCDF/WPS terrain is consumed by Fire through the
-    // authoritative level-0 terrain surface rather than ERFTerrainSource.
+    // authoritative level-0 terrain surface rather than ERFFireTerrainSource.
     std::string filename_nc;
     if (pp.query("terrain_file_name_nc", filename_nc)) {
         return {
@@ -569,7 +569,7 @@ void
 write_fire_terrain_source_policy(
     std::ostream& stream,
     const SolverChoice& choices,
-    const ERFTerrainSource* terrain_source)
+    const ERFFireTerrainSource* terrain_source)
 {
     if (!stream.good()) {
         throw std::runtime_error(
@@ -609,7 +609,7 @@ void
 validate_fire_terrain_source_restart_policy(
     const std::string& checkpoint_directory,
     const SolverChoice& choices,
-    const ERFTerrainSource* terrain_source)
+    const ERFFireTerrainSource* terrain_source)
 {
     const FireTerrainSourcePolicy current =
         current_fire_terrain_source_policy(

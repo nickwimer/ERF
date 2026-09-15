@@ -12,7 +12,7 @@
 #include <iosfwd>
 #include <string>
 
-class ERFTerrainSource;
+class ERFFireTerrainSource;
 
 namespace ERFFire
 {
@@ -60,7 +60,7 @@ struct ERFFireCheckpointRestoreInputs
 void write_fire_terrain_source_policy(
     std::ostream& stream,
     const SolverChoice& choices,
-    const ERFTerrainSource* terrain_source);
+    const ERFFireTerrainSource* terrain_source);
 
 /**
  * Validate the current terrain-source selection against a checkpoint policy.
@@ -71,7 +71,7 @@ void write_fire_terrain_source_policy(
 void validate_fire_terrain_source_restart_policy(
     const std::string& checkpoint_directory,
     const SolverChoice& choices,
-    const ERFTerrainSource* terrain_source);
+    const ERFFireTerrainSource* terrain_source);
 
 [[nodiscard]] bool same_fire_spread_config(
     const ERFFireSpreadConfig& lhs,

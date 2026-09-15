@@ -1,6 +1,6 @@
 #include "ERF_FireLevel0Environment.H"
 
-#include <ERF_TerrainSource.H>
+#include <ERF_FireTerrainSource.H>
 
 #include <AMReX_Arena.H>
 #include <AMReX_Box.H>
@@ -878,7 +878,7 @@ make_erf_level0_terrain_surface_on_geometry (
 
 FireTerrainSurface
 make_erf_terrain_source_surface_on_geometry (
-    const ERFTerrainSource& source,
+    const ERFFireTerrainSource& source,
     FireCartesianRasterGeometry2D target_geometry)
 {
     (void)detail::validate_fire_cartesian_raster_geometry(
