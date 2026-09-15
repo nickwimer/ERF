@@ -6,23 +6,10 @@
 #include <AMReX_MultiFab.H>
 #include <AMReX_REAL.H>
 
-#include <functional>
 
-class ERFTerrainSource;
 
 namespace ERFFire
 {
-
-/**
- * Lazy terrain-source lookup used by the level-0 Fire coupling driver.
- *
- * The provider is invoked collectively only when a VariableDz Fire terrain
- * surface must be constructed or reconstructed. Keeping the lookup lazy
- * preserves the existing collective-I/O ordering while avoiding any ERF or
- * ProblemBase backpointer in the Fire context.
- */
-using ERFFireTerrainSourceProvider =
-    std::function<const ERFTerrainSource*()>;
 
 /**
  * Read-only ERF level-0 inputs required for one explicit Fire coupling step.
@@ -42,7 +29,6 @@ struct ERFFireLevel0AdvanceInputs
 
     MoistureType moisture_type{MoistureType::None};
 
-    ERFFireTerrainSourceProvider terrain_source_provider{};
 
     double time_s{};
     amrex::Real dt_s{};

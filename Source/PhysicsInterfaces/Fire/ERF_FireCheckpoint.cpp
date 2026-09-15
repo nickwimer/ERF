@@ -73,13 +73,9 @@ ERFFireContext::write_checkpoint(
             == MeshType::VariableDz
         && inputs.solver_choices.terrain_type
             == TerrainType::StaticFittedMesh) {
-        if (!inputs.terrain_source_provider) {
-            amrex::Error(
-                "ERF-Fire checkpoint terrain source provider is unavailable");
-        }
 
         fire_terrain_source_for_checkpoint =
-            inputs.terrain_source_provider();
+            resolve_terrain_source();
     }
 
     if (!amrex::ParallelDescriptor::IOProcessor()) {
@@ -215,16 +211,12 @@ ERFFireContext::restore_checkpoint(
         ERFFireCheckpointV3Metadata v3_metadata;
 
         // Preserve the existing collective restart ordering exactly.
-        // terrain_source() may load a regular-text terrain source using
-        // IO-rank file I/O followed by MPI broadcasts, so this provider is
-        // invoked on every rank before entering the metadata IO-rank block.
-        if (!inputs.terrain_source_provider) {
-            throw std::runtime_error(
-                "ERF-Fire checkpoint terrain source provider is unavailable");
-        }
+        // resolve_terrain_source() may load a regular-text terrain source using
+        // IO-rank file I/O followed by MPI broadcasts, so this resolution is
+        // performed on every rank before entering the metadata IO-rank block.
 
         const ERFTerrainSource* current_terrain_source =
-            inputs.terrain_source_provider();
+            resolve_terrain_source();
 
         int fire_state_read_failed = 0;
 

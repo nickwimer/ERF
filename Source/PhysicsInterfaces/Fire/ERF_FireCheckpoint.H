@@ -9,7 +9,6 @@
 #include <AMReX_Geometry.H>
 #include <AMReX_REAL.H>
 
-#include <functional>
 #include <iosfwd>
 #include <string>
 
@@ -18,23 +17,19 @@ class ERFTerrainSource;
 namespace ERFFire
 {
 
-using ERFFireCheckpointTerrainSourceProvider =
-    std::function<const ERFTerrainSource*()>;
 
 /**
  * ERF-owned inputs required to write persistent Fire checkpoint state.
  *
- * terrain_source_provider is invoked collectively, if needed, only after the
- * distributed Fire raster has been written and before IO-rank-only metadata
- * serialization. This preserves the existing checkpoint ordering while
- * avoiding an ERF or ProblemBase backpointer in Fire.
+ * Any regular-text terrain source is resolved collectively by the
+ * Fire context after the distributed raster write and before IO-rank-only
+ * metadata serialization.
  */
 struct ERFFireCheckpointWriteInputs
 {
     const std::string& checkpoint_directory;
     const amrex::Geometry& level0_geometry;
     const SolverChoice& solver_choices;
-    ERFFireCheckpointTerrainSourceProvider terrain_source_provider{};
     int level0_step{};
     amrex::Real level0_time_s{};
 };
@@ -42,17 +37,15 @@ struct ERFFireCheckpointWriteInputs
 /**
  * ERF-owned inputs required to restore persistent Fire checkpoint state.
  *
- * terrain_source_provider is invoked collectively after checkpoint-version
- * discovery and before IO-rank-only metadata validation. This preserves the
- * existing restart collective-I/O ordering while avoiding any ERF or
- * ProblemBase backpointer in Fire.
+ * Any regular-text terrain source is resolved collectively by the
+ * Fire context after checkpoint-version discovery and before IO-rank-only
+ * metadata validation.
  */
 struct ERFFireCheckpointRestoreInputs
 {
     const std::string& checkpoint_directory;
     const amrex::Geometry& level0_geometry;
     const SolverChoice& solver_choices;
-    ERFFireCheckpointTerrainSourceProvider terrain_source_provider{};
     int level0_step{};
     amrex::Real level0_time_s{};
 };
@@ -60,9 +53,9 @@ struct ERFFireCheckpointRestoreInputs
 /**
  * Write the Fire terrain-source restart policy.
  *
- * terrain_source must already have been prepared collectively by the ERF
- * caller when a regular text terrain source is active. This routine performs
- * no collective terrain loading.
+ * terrain_source must already have been resolved collectively when a
+ * regular-text terrain source is active. This routine performs no collective
+ * terrain loading.
  */
 void write_fire_terrain_source_policy(
     std::ostream& stream,
@@ -72,7 +65,7 @@ void write_fire_terrain_source_policy(
 /**
  * Validate the current terrain-source selection against a checkpoint policy.
  *
- * terrain_source must already have been prepared collectively by the ERF
+ * terrain_source must already have been resolved collectively by the
  * caller. This routine performs only metadata/file validation.
  */
 void validate_fire_terrain_source_restart_policy(

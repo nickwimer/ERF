@@ -620,9 +620,6 @@ ERF::WriteCheckpointFile () const
             checkpointname,
             geom[0],
             solverChoice,
-            [this]() -> const ERFTerrainSource* {
-                return prob->terrain_source();
-            },
             istep[0],
             static_cast<Real>(t_new[0])
         };
@@ -1581,9 +1578,6 @@ ERF::ReadCheckpointFile ()
             restart_chkfile,
             geom[0],
             solverChoice,
-            [this]() -> const ERFTerrainSource* {
-                return prob->terrain_source();
-            },
             istep[0],
             static_cast<Real>(t_new[0])
         };

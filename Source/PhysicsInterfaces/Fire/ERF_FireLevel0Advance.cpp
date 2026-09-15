@@ -91,11 +91,6 @@ ERFFireContext::advance_level0(
 
     if (next_terrain_sampler
         && !terrain_surface_) {
-        if (!inputs.terrain_source_provider) {
-            Error(
-                "ERF-Fire VariableDz terrain initialization requires "
-                "a terrain source provider");
-        }
 
         const FireCartesianRasterGeometry2D
             fire_terrain_geometry =
@@ -103,11 +98,11 @@ ERFFireContext::advance_level0(
                     ->config()
                     .raster_geometry;
 
-        // This callback may trigger collective regular-text terrain loading.
-        // It is intentionally invoked by all ranks here, at the same point in
+        // This lookup may trigger collective regular-text terrain loading.
+        // It is intentionally performed by all ranks here, at the same point in
         // the coupling sequence as the pre-extraction timestep implementation.
         const ERFTerrainSource* shared_terrain_source =
-            inputs.terrain_source_provider();
+            resolve_terrain_source();
 
         if (shared_terrain_source != nullptr) {
             terrain_surface_ =

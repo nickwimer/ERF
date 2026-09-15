@@ -10,6 +10,8 @@
 #include <limits>
 #include <memory>
 
+class ERFTerrainSource;
+
 namespace ERFFire
 {
 
@@ -33,7 +35,8 @@ struct ERFFirePlotfile2DState;
 class ERFFireContext
 {
 public:
-    ERFFireContext() = default;
+    ERFFireContext();
+    ~ERFFireContext();
 
     ERFFireContext(const ERFFireContext&) = delete;
     ERFFireContext& operator=(const ERFFireContext&) = delete;
@@ -170,7 +173,13 @@ public:
     }
 
 private:
+    [[nodiscard]] const ERFTerrainSource*
+    resolve_terrain_source() const;
+
     ERFFireRuntimeOptions runtime_options_{};
+
+    mutable std::unique_ptr<ERFTerrainSource>
+        regular_text_terrain_source_;
 
     double environment_snapshot_time_ =
         std::numeric_limits<double>::quiet_NaN();

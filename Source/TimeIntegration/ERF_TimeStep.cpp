@@ -186,9 +186,6 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                 ? detJ_cc[0].get()
                 : nullptr,
             solverChoice.moisture_type,
-            [this]() -> const ERFTerrainSource* {
-                return prob->terrain_source();
-            },
             time,
             static_cast<Real>(dt[0])
         };
