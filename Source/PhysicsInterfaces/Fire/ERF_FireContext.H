@@ -29,8 +29,8 @@ struct ERFFirePlotfile2DState;
  * ERFFireSpreadRuntime remains coupling-neutral. This context owns the
  * adapter state needed to connect that runtime to ERF.
  *
- * The low-level accessors below are transitional and remain only for
- * callers not yet moved behind subsystem-level Fire interface methods.
+ * Read-only accessors below support ERF's Fire observation API.
+ * Mutation remains internal to subsystem-level Fire interface methods.
  */
 class ERFFireContext
 {
@@ -76,22 +76,10 @@ public:
     void fill_plotfile2d_diagnostics(
         const ERFFirePlotfile2DFillInputs& inputs) const;
 
-    [[nodiscard]] ERFFireRuntimeOptions&
-    runtime_options() noexcept
-    {
-        return runtime_options_;
-    }
-
     [[nodiscard]] const ERFFireRuntimeOptions&
     runtime_options() const noexcept
     {
         return runtime_options_;
-    }
-
-    [[nodiscard]] double&
-    environment_snapshot_time() noexcept
-    {
-        return environment_snapshot_time_;
     }
 
     [[nodiscard]] double
@@ -100,22 +88,10 @@ public:
         return environment_snapshot_time_;
     }
 
-    [[nodiscard]] double&
-    environment_reference_height_agl_m() noexcept
-    {
-        return environment_reference_height_agl_m_;
-    }
-
     [[nodiscard]] double
     environment_reference_height_agl_m() const noexcept
     {
         return environment_reference_height_agl_m_;
-    }
-
-    [[nodiscard]] std::unique_ptr<ERFFireSpreadRuntime>&
-    spread_runtime() noexcept
-    {
-        return spread_runtime_;
     }
 
     [[nodiscard]] const std::unique_ptr<ERFFireSpreadRuntime>&
@@ -124,52 +100,16 @@ public:
         return spread_runtime_;
     }
 
-    [[nodiscard]] std::unique_ptr<FireTerrainSurface>&
-    terrain_surface() noexcept
-    {
-        return terrain_surface_;
-    }
-
-    [[nodiscard]] const std::unique_ptr<FireTerrainSurface>&
-    terrain_surface() const noexcept
-    {
-        return terrain_surface_;
-    }
-
-    [[nodiscard]] std::unique_ptr<amrex::MultiFab>&
-    atmospheric_source_tendency() noexcept
-    {
-        return atmospheric_source_tendency_;
-    }
-
     [[nodiscard]] const std::unique_ptr<amrex::MultiFab>&
     atmospheric_source_tendency() const noexcept
     {
         return atmospheric_source_tendency_;
     }
 
-    [[nodiscard]] double&
-    atmospheric_source_time() noexcept
-    {
-        return atmospheric_source_time_;
-    }
-
     [[nodiscard]] double
     atmospheric_source_time() const noexcept
     {
         return atmospheric_source_time_;
-    }
-
-    [[nodiscard]] int&
-    step_index() noexcept
-    {
-        return step_index_;
-    }
-
-    [[nodiscard]] int
-    step_index() const noexcept
-    {
-        return step_index_;
     }
 
 private:
