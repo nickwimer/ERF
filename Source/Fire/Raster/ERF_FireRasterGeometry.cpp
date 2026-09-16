@@ -19,6 +19,29 @@ axis_boundary_m (
         + static_cast<amrex::Real>(index) * spacing_m;
 }
 
+std::size_t
+locate_axis (
+    amrex::Real coordinate_m,
+    amrex::Real origin_m,
+    amrex::Real spacing_m,
+    std::size_t count) noexcept
+{
+    // Find the greatest lower face no larger than the point. The search
+    // excludes the final upper face, making the physical upper boundary
+    // belong to the last cell without nudging any interior/exterior point.
+    std::size_t lower = 0;
+    std::size_t upper = count;
+    while (upper - lower > 1) {
+        const std::size_t middle = lower + (upper - lower) / 2;
+        if (coordinate_m < axis_boundary_m(origin_m, spacing_m, middle)) {
+            upper = middle;
+        } else {
+            lower = middle;
+        }
+    }
+    return lower;
+}
+
 } // namespace
 
 namespace detail
@@ -138,6 +161,32 @@ fire_cartesian_raster_cell_bounds (
         axis_boundary_m(geometry.xlo_m, geometry.dx_m, i + 1),
         axis_boundary_m(geometry.ylo_m, geometry.dy_m, j),
         axis_boundary_m(geometry.ylo_m, geometry.dy_m, j + 1)
+    };
+}
+
+FireCartesianRasterIndex2D
+fire_cartesian_raster_locate_cell (
+    const FireCartesianRasterGeometry2D& geometry,
+    amrex::Real x_m,
+    amrex::Real y_m)
+{
+    if (geometry.nx == 0 || geometry.ny == 0) {
+        throw std::invalid_argument("Fire raster lookup requires nonempty geometry");
+    }
+    if (!std::isfinite(x_m) || !std::isfinite(y_m)) {
+        throw std::invalid_argument("Fire raster lookup coordinates must be finite");
+    }
+    const amrex::Real xhi_m =
+        axis_boundary_m(geometry.xlo_m, geometry.dx_m, geometry.nx);
+    const amrex::Real yhi_m =
+        axis_boundary_m(geometry.ylo_m, geometry.dy_m, geometry.ny);
+    if (x_m < geometry.xlo_m || x_m > xhi_m
+        || y_m < geometry.ylo_m || y_m > yhi_m) {
+        throw std::out_of_range("Fire raster lookup point is outside the raster");
+    }
+    return {
+        locate_axis(x_m, geometry.xlo_m, geometry.dx_m, geometry.nx),
+        locate_axis(y_m, geometry.ylo_m, geometry.dy_m, geometry.ny)
     };
 }
 

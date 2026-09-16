@@ -41,6 +41,13 @@ struct FireCartesianCell2D
     amrex::Real yhi_m{};
 };
 
+/** Logical cell containing a map-plane point. */
+struct FireCartesianRasterIndex2D
+{
+    std::size_t i{};
+    std::size_t j{};
+};
+
 namespace detail
 {
 
@@ -68,6 +75,19 @@ namespace detail
     const FireCartesianRasterGeometry2D& geometry,
     std::size_t i,
     std::size_t j);
+
+/**
+ * Host lookup on an already validated raster. At an internal represented
+ * face the positive-index cell owns the point; the upper physical boundary
+ * belongs to the last cell. Nonfinite or out-of-domain points are rejected.
+ * Uses the same represented faces as cell_bounds, not a rounded coordinate
+ * quotient, so nextafter(face, -infinity) does not move to the next cell.
+ * No clamping of exterior points, interpolation, allocation or communication.
+ */
+[[nodiscard]] FireCartesianRasterIndex2D fire_cartesian_raster_locate_cell(
+    const FireCartesianRasterGeometry2D& geometry,
+    amrex::Real x_m,
+    amrex::Real y_m);
 
 /**
  * Area of one already validated physical Cartesian cell.

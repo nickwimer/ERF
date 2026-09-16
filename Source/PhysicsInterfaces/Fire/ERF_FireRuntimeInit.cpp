@@ -1,6 +1,7 @@
 #include "ERF_FireRuntimeInit.H"
 
 #include <ERF_FireCombustion.H>
+#include <ERF_FireFuelField.H>
 #include <ERF_FirePerimeter.H>
 #include <ERF_FireSpreadRuntime.H>
 #include <ERF_RothermelFuel.H>
@@ -192,6 +193,15 @@ make_erf_fire_spread_config(
             options.remesh_max_chord_error_m},
         raster_geometry,
         options.arrival_time_tolerance_s};
+}
+
+FireFuelField
+make_erf_fire_uniform_fuel_field(const ERFFireSpreadConfig& config)
+{
+    return FireFuelField(
+        config.raster_geometry,
+        config.fuel,
+        config.dead_fuel_moisture_fraction);
 }
 
 std::unique_ptr<ERFFireSpreadRuntime>

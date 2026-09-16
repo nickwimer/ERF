@@ -11,12 +11,21 @@ namespace ERFFire
 {
 
 class ERFFireSpreadRuntime;
+class FireFuelField;
 struct ERFFireSpreadConfig;
 
 [[nodiscard]] ERFFireSpreadConfig
 make_erf_fire_spread_config(
     const ERFFireRuntimeOptions& options,
     const amrex::Geometry& geometry);
+
+/**
+ * Materialize the exact legacy uniform fuel/geometry as a field. This adapter
+ * does not mutate the config, reconstruct catalog constants, or change the
+ * existing scalar spread/combustion/checkpoint path.
+ */
+[[nodiscard]] FireFuelField
+make_erf_fire_uniform_fuel_field(const ERFFireSpreadConfig& config);
 
 /**
  * Build the initial map-plane Fire state from ERF runtime options.
