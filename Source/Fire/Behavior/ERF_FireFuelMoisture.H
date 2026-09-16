@@ -2,9 +2,9 @@
 #define ERF_FIRE_FUEL_MOISTURE_H_
 
 #include <AMReX_GpuQualifiers.H>
+#include <AMReX_Math.H>
 #include <AMReX_REAL.H>
 
-#include <cmath>
 #include <stdexcept>
 #include <type_traits>
 
@@ -66,15 +66,12 @@ public:
         amrex::Real value) noexcept
     {
         const int index = static_cast<int>(component);
-        // Match AMReX's finite classification for SYCL as well as CUDA/CPU.
+        // AMReX supplies a backend-safe finite predicate for CPU/CUDA/HIP/SYCL.
         // Check finiteness before ordering comparisons (including with FPE
         // traps enabled). There is deliberately no upper bound of one.
-#ifdef AMREX_USE_SYCL
-        const bool finite = sycl::isfinite(value);
-#else
-        const bool finite = std::isfinite(value);
-#endif
-        if (!valid_index(index) || !finite || value < amrex::Real(0)) {
+        if (!valid_index(index)
+            || !amrex::Math::isfinite(value)
+            || value < amrex::Real(0)) {
             return false;
         }
         values_[index] = value;
