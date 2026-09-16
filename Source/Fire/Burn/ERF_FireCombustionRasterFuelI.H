@@ -58,29 +58,30 @@ fire_spatial_combustion_water_increment(
         : increment;
 }
 
-} // namespace detail
-
 inline void
-FireCombustionRaster::validate_spatial_fuel(
+validate_spatial_fuel_impl(
+    const FireCartesianRasterGeometry2D& geometry,
+    const FireCombustionParameters& base,
+    const amrex::MultiFab& states,
     const FireFuelRaster& fuel_raster,
-    bool validate_state) const
+    bool validate_state)
 {
     const auto& fuel_geometry = fuel_raster.geometry();
-    if (geometry_.nx != fuel_geometry.nx
-        || geometry_.ny != fuel_geometry.ny
-        || geometry_.xlo_m != fuel_geometry.xlo_m
-        || geometry_.ylo_m != fuel_geometry.ylo_m
-        || geometry_.dx_m != fuel_geometry.dx_m
-        || geometry_.dy_m != fuel_geometry.dy_m) {
+    if (geometry.nx != fuel_geometry.nx
+        || geometry.ny != fuel_geometry.ny
+        || geometry.xlo_m != fuel_geometry.xlo_m
+        || geometry.ylo_m != fuel_geometry.ylo_m
+        || geometry.dx_m != fuel_geometry.dx_m
+        || geometry.dy_m != fuel_geometry.dy_m) {
         throw std::invalid_argument(
             "Fire spatial combustion fuel geometry must match combustion geometry");
     }
 
     const amrex::MultiFab& fuel_values =
         fuel_raster.distributed_values();
-    if (fuel_values.boxArray() != states_mf_.boxArray()
+    if (fuel_values.boxArray() != states.boxArray()
         || fuel_values.DistributionMap()
-            != states_mf_.DistributionMap()
+            != states.DistributionMap()
         || fuel_values.nComp()
             != FireFuelRasterComponents::component_count
         || fuel_values.nGrow() != 0) {
@@ -88,9 +89,8 @@ FireCombustionRaster::validate_spatial_fuel(
             "Fire spatial combustion fuel raster must be co-located with combustion state");
     }
 
-    const auto state_arrays = states_mf_.const_arrays();
+    const auto state_arrays = states.const_arrays();
     const auto fuel_arrays = fuel_values.const_arrays();
-    const FireCombustionParameters base = parameters_;
     const int check_state = validate_state ? 1 : 0;
 
     const auto failures =
@@ -99,7 +99,7 @@ FireCombustionRaster::validate_spatial_fuel(
                 amrex::ReduceOpMax,
                 amrex::ReduceOpMax>{},
             amrex::TypeList<int, int>{},
-            states_mf_,
+            states,
             [=] AMREX_GPU_DEVICE (
                 int box_no,
                 int i,
@@ -108,7 +108,7 @@ FireCombustionRaster::validate_spatial_fuel(
                 -> amrex::GpuTuple<int, int>
             {
                 FireFuelRasterCell fuel_cell;
-                if (!detail::try_decode_fire_fuel_raster_cell(
+                if (!try_decode_fire_fuel_raster_cell(
                         fuel_arrays[box_no],
                         i,
                         j,
@@ -131,15 +131,35 @@ FireCombustionRaster::validate_spatial_fuel(
 
                 const auto values = state_arrays[box_no];
                 const FireCombustionState state{
-                    values(i, j, k, ignited_area_fraction_comp),
-                    values(i, j, k, remaining_dry_fuel_comp),
-                    values(i, j, k, consumed_dry_fuel_comp),
-                    values(i, j, k, sensible_energy_comp),
-                    values(i, j, k, water_released_comp)};
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::ignited_area_fraction_comp),
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::remaining_dry_fuel_comp),
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::consumed_dry_fuel_comp),
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::sensible_energy_comp),
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::water_released_comp)};
 
                 return {
                     0,
-                    detail::combustion_state_valid(state, local)
+                    combustion_state_valid(state, local)
                         ? 0
                         : 1};
             });
@@ -159,18 +179,21 @@ FireCombustionRaster::validate_spatial_fuel(
     }
 }
 
-inline void
-FireCombustionRaster::rewrite_water_for_base_parameters()
+inline amrex::Real
+rewrite_water_for_base_parameters_impl(
+    const FireCombustionParameters& parameters,
+    const FireCartesianRasterGeometry2D& geometry,
+    amrex::MultiFab& states)
 {
     const amrex::Real water_per_kg_dry =
-        parameters_.fuel_moisture_fraction
-        + parameters_.combustion_water_yield_kg_per_kg_dry;
+        parameters.fuel_moisture_fraction
+        + parameters.combustion_water_yield_kg_per_kg_dry;
 
-    for (amrex::MFIter mfi(states_mf_);
+    for (amrex::MFIter mfi(states);
          mfi.isValid();
          ++mfi) {
         const amrex::Box box = mfi.validbox();
-        const auto values = states_mf_.array(mfi);
+        const auto values = states.array(mfi);
 
         amrex::ParallelFor(
             box,
@@ -179,17 +202,27 @@ FireCombustionRaster::rewrite_water_for_base_parameters()
                 int j,
                 int k) noexcept
             {
-                values(i, j, k, water_released_comp) =
-                    values(i, j, k, consumed_dry_fuel_comp)
+                values(
+                    i,
+                    j,
+                    k,
+                    FireCombustionRaster::water_released_comp) =
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::consumed_dry_fuel_comp)
                     * water_per_kg_dry;
             });
     }
     amrex::Gpu::streamSynchronize();
 
     amrex::Real local_water =
-        states_mf_.sum(water_released_comp, true)
-        * geometry_.dx_m
-        * geometry_.dy_m;
+        states.sum(
+            FireCombustionRaster::water_released_comp,
+            true)
+        * geometry.dx_m
+        * geometry.dy_m;
     amrex::ParallelDescriptor::ReduceRealSum(local_water);
 
     if (!std::isfinite(local_water)
@@ -197,24 +230,31 @@ FireCombustionRaster::rewrite_water_for_base_parameters()
         throw std::overflow_error(
             "Fire base combustion water accounting is not finite and nonnegative");
     }
-    totals_.water_released_kg = local_water;
+    return local_water;
 }
 
-inline void
-FireCombustionRaster::rewrite_water_for_spatial_fuel(
+inline amrex::Real
+rewrite_water_for_spatial_fuel_impl(
+    const FireCombustionParameters& base,
+    const FireCartesianRasterGeometry2D& geometry,
+    amrex::MultiFab& states,
     const FireFuelRaster& fuel_raster)
 {
-    validate_spatial_fuel(fuel_raster, false);
+    validate_spatial_fuel_impl(
+        geometry,
+        base,
+        states,
+        fuel_raster,
+        false);
 
     const amrex::MultiFab& fuel_values =
         fuel_raster.distributed_values();
-    const FireCombustionParameters base = parameters_;
 
-    for (amrex::MFIter mfi(states_mf_);
+    for (amrex::MFIter mfi(states);
          mfi.isValid();
          ++mfi) {
         const amrex::Box box = mfi.validbox();
-        const auto values = states_mf_.array(mfi);
+        const auto values = states.array(mfi);
         const auto fuel = fuel_values.const_array(mfi);
 
         amrex::ParallelFor(
@@ -227,7 +267,7 @@ FireCombustionRaster::rewrite_water_for_spatial_fuel(
                 FireFuelRasterCell fuel_cell;
                 FireCombustionParameters local{};
                 const bool decoded =
-                    detail::try_decode_fire_fuel_raster_cell(
+                    try_decode_fire_fuel_raster_cell(
                         fuel,
                         i,
                         j,
@@ -242,25 +282,44 @@ FireCombustionRaster::rewrite_water_for_spatial_fuel(
 
                 if (status
                     != FireFuelCombustionParameterStatus::success) {
-                    values(i, j, k, water_released_comp) =
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::water_released_comp) =
                         amrex::Real(-1);
                     return;
                 }
 
-                values(i, j, k, water_released_comp) =
-                    values(i, j, k, consumed_dry_fuel_comp)
+                values(
+                    i,
+                    j,
+                    k,
+                    FireCombustionRaster::water_released_comp) =
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::consumed_dry_fuel_comp)
                     * (local.fuel_moisture_fraction
                        + local.combustion_water_yield_kg_per_kg_dry);
             });
     }
     amrex::Gpu::streamSynchronize();
 
-    validate_spatial_fuel(fuel_raster, true);
+    validate_spatial_fuel_impl(
+        geometry,
+        base,
+        states,
+        fuel_raster,
+        true);
 
     amrex::Real local_water =
-        states_mf_.sum(water_released_comp, true)
-        * geometry_.dx_m
-        * geometry_.dy_m;
+        states.sum(
+            FireCombustionRaster::water_released_comp,
+            true)
+        * geometry.dx_m
+        * geometry.dy_m;
     amrex::ParallelDescriptor::ReduceRealSum(local_water);
 
     if (!std::isfinite(local_water)
@@ -268,7 +327,44 @@ FireCombustionRaster::rewrite_water_for_spatial_fuel(
         throw std::overflow_error(
             "Fire spatial combustion water accounting is not finite and nonnegative");
     }
-    totals_.water_released_kg = local_water;
+    return local_water;
+}
+
+} // namespace detail
+
+inline void
+FireCombustionRaster::validate_spatial_fuel(
+    const FireFuelRaster& fuel_raster,
+    bool validate_state) const
+{
+    detail::validate_spatial_fuel_impl(
+        geometry_,
+        parameters_,
+        states_mf_,
+        fuel_raster,
+        validate_state);
+}
+
+inline void
+FireCombustionRaster::rewrite_water_for_base_parameters()
+{
+    totals_.water_released_kg =
+        detail::rewrite_water_for_base_parameters_impl(
+            parameters_,
+            geometry_,
+            states_mf_);
+}
+
+inline void
+FireCombustionRaster::rewrite_water_for_spatial_fuel(
+    const FireFuelRaster& fuel_raster)
+{
+    totals_.water_released_kg =
+        detail::rewrite_water_for_spatial_fuel_impl(
+            parameters_,
+            geometry_,
+            states_mf_,
+            fuel_raster);
 }
 
 inline FireCombustionRasterTotals
