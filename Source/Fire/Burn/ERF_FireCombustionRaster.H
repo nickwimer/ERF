@@ -52,6 +52,7 @@ struct FireCombustionRasterState
 };
 
 class FireFront;
+class FireFuelRaster;
 class FireCombustionRaster;
 
 namespace detail
@@ -228,6 +229,20 @@ public:
         const FireBurnedFractionRaster& burned_fraction);
 
     /**
+     * Spatial-FM1 initialization using the immutable distributed fuel raster.
+     *
+     * Every represented cell must currently be FM1 with prescribed dead 1-h
+     * moisture. NonBurnable is rejected until front/barrier dynamics can
+     * guarantee such cells never ignite. Dry loading, heat release, burn time,
+     * and combustion-water yield remain the validated base parameters(); only
+     * local fuel moisture changes cell water accounting.
+     */
+    [[nodiscard]] FireCombustionRasterTotals
+    initialize_from_burned_fraction(
+        const FireBurnedFractionRaster& burned_fraction,
+        const FireFuelRaster& fuel_raster);
+
+    /**
      * Advance combustion across one pre-remesh physical sweep.
      *
      * burned_before and burned_after are the persistent area histories at the
@@ -247,12 +262,32 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
+    /** Spatial-FM1 form of advance_from_linear_sweep(). */
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_linear_sweep(
+        const FirePerimeter& start_perimeter,
+        const FirePerimeter& end_perimeter,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        const FireFuelRaster& fuel_raster,
+        amrex::Real dt_s);
+
     [[nodiscard]] FireCombustionRasterAdvance
     advance_from_front_linear_sweep(
         const FireFront& start_front,
         const FireFront& end_front,
         const FireBurnedFractionRaster& burned_before,
         const FireBurnedFractionRaster& burned_after,
+        amrex::Real dt_s);
+
+    /** Spatial-FM1 form of advance_from_front_linear_sweep(). */
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_front_linear_sweep(
+        const FireFront& start_front,
+        const FireFront& end_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        const FireFuelRaster& fuel_raster,
         amrex::Real dt_s);
 
     [[nodiscard]] FireCombustionRasterAdvance
@@ -264,6 +299,17 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
+    /** Spatial-FM1 form of advance_from_front_topology_event_sweep(). */
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_front_topology_event_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& event_vertices_m,
+        const FireFront& event_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        const FireFuelRaster& fuel_raster,
+        amrex::Real dt_s);
+
     [[nodiscard]] FireCombustionRasterAdvance
     advance_from_topology_event_sweep(
         const FirePerimeter& start_perimeter,
@@ -271,6 +317,17 @@ public:
         const FireFront& event_front,
         const FireBurnedFractionRaster& burned_before,
         const FireBurnedFractionRaster& burned_after,
+        amrex::Real dt_s);
+
+    /** Spatial-FM1 form of advance_from_topology_event_sweep(). */
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_topology_event_sweep(
+        const FirePerimeter& start_perimeter,
+        const std::vector<FireVec2>& event_vertices_m,
+        const FireFront& event_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        const FireFuelRaster& fuel_raster,
         amrex::Real dt_s);
 
 private:
@@ -308,6 +365,15 @@ private:
     totals_for(
         const std::vector<FireCombustionState>& states) const noexcept;
 
+    void validate_spatial_fuel(
+        const FireFuelRaster& fuel_raster,
+        bool validate_state) const;
+
+    void rewrite_water_for_base_parameters();
+
+    void rewrite_water_for_spatial_fuel(
+        const FireFuelRaster& fuel_raster);
+
     FireCartesianRasterGeometry2D geometry_{};
     FireCombustionParameters parameters_{};
     FireCombustionRasterOptions options_{};
@@ -318,5 +384,7 @@ private:
 };
 
 } // namespace ERFFire
+
+#include <ERF_FireCombustionRasterFuelI.H>
 
 #endif
