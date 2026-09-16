@@ -1,24 +1,35 @@
+#include <ERF_FireBurnedFractionRaster.H>
+#include <ERF_FireCombustionRaster.H>
 #include <ERF_FireFuelCombustion.H>
 #include <ERF_FireFuelRaster.H>
+#include <ERF_FirePerimeter.H>
 
 #include <AMReX_ParallelDescriptor.H>
 #include <gtest/gtest.h>
 
 #include <cstddef>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace
 {
 
 using amrex::Real;
+using ERFFire::FireBurnedFractionRaster;
 using ERFFire::FireCartesianRasterGeometry2D;
 using ERFFire::FireCombustionParameters;
+using ERFFire::FireCombustionRaster;
+using ERFFire::FireCombustionRasterOptions;
+using ERFFire::FireCombustionState;
 using ERFFire::FireFuelCombustionParameterStatus;
 using ERFFire::FireFuelModelId;
 using ERFFire::FireFuelMoisture;
 using ERFFire::FireFuelRaster;
 using ERFFire::FireFuelRasterCell;
 using ERFFire::FireFuelRasterState;
+using ERFFire::FirePerimeter;
+using ERFFire::FireVec2;
 using MoistureClass = ERFFire::FireFuelMoistureClass;
 
 FireCartesianRasterGeometry2D
@@ -31,6 +42,18 @@ fuel_raster_geometry()
         Real(-50),
         Real(2),
         Real(4)};
+}
+
+FireCartesianRasterGeometry2D
+combustion_geometry()
+{
+    return {
+        2,
+        1,
+        Real(0),
+        Real(0),
+        Real(1),
+        Real(1)};
 }
 
 FireCombustionParameters
@@ -107,6 +130,74 @@ make_io_rank_state(const FireCartesianRasterGeometry2D& geometry)
     return state;
 }
 
+FireFuelRaster
+make_combustion_fuel_raster(
+    Real first_moisture,
+    Real second_moisture)
+{
+    const auto geometry = combustion_geometry();
+    FireFuelRasterState state;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        state.cells.resize(2);
+        state.cells[0].model_id = FireFuelModelId::FM1;
+        state.cells[0].moisture.set(
+            MoistureClass::Dead1h,
+            first_moisture);
+        state.cells[1].model_id = FireFuelModelId::FM1;
+        state.cells[1].moisture.set(
+            MoistureClass::Dead1h,
+            second_moisture);
+    }
+    return FireFuelRaster::collective_from_io_rank_state(
+        geometry,
+        state);
+}
+
+FireFuelRaster
+make_invalid_combustion_fuel_raster(bool nonburnable)
+{
+    const auto geometry = combustion_geometry();
+    FireFuelRasterState state;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        state.cells.resize(2);
+        for (auto& cell : state.cells) {
+            cell.model_id = FireFuelModelId::FM1;
+            cell.moisture.set(
+                MoistureClass::Dead1h,
+                Real(0.08));
+        }
+        if (nonburnable) {
+            state.cells[1].model_id = FireFuelModelId::NonBurnable;
+            state.cells[1].moisture = {};
+        } else {
+            state.cells[1].moisture = {};
+        }
+    }
+    return FireFuelRaster::collective_from_io_rank_state(
+        geometry,
+        state);
+}
+
+FirePerimeter
+full_combustion_perimeter()
+{
+    return FirePerimeter(
+        std::vector<FireVec2>{
+            {Real(0), Real(0)},
+            {Real(2), Real(0)},
+            {Real(2), Real(1)},
+            {Real(0), Real(1)}});
+}
+
+FireBurnedFractionRaster
+fully_burned_combustion_raster()
+{
+    FireBurnedFractionRaster burned(combustion_geometry());
+    (void)burned.update_from_perimeter(
+        full_combustion_perimeter());
+    return burned;
+}
+
 void
 expect_same_moisture(
     const FireFuelMoisture& actual,
@@ -132,6 +223,47 @@ expect_same_moisture(
             EXPECT_EQ(actual_value, expected_value);
         }
     }
+}
+
+void
+expect_same_combustion_state(
+    const FireCombustionState& actual,
+    const FireCombustionState& expected)
+{
+    EXPECT_EQ(
+        actual.ignited_area_fraction,
+        expected.ignited_area_fraction);
+    EXPECT_EQ(
+        actual.remaining_dry_fuel_kg_m2,
+        expected.remaining_dry_fuel_kg_m2);
+    EXPECT_EQ(
+        actual.consumed_dry_fuel_kg_m2,
+        expected.consumed_dry_fuel_kg_m2);
+    EXPECT_EQ(
+        actual.sensible_energy_j_m2,
+        expected.sensible_energy_j_m2);
+    EXPECT_EQ(
+        actual.water_released_kg_m2,
+        expected.water_released_kg_m2);
+}
+
+void
+expect_same_totals(
+    const ERFFire::FireCombustionRasterTotals& actual,
+    const ERFFire::FireCombustionRasterTotals& expected)
+{
+    EXPECT_EQ(
+        actual.remaining_dry_fuel_kg,
+        expected.remaining_dry_fuel_kg);
+    EXPECT_EQ(
+        actual.consumed_dry_fuel_kg,
+        expected.consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        actual.sensible_energy_j,
+        expected.sensible_energy_j);
+    EXPECT_EQ(
+        actual.water_released_kg,
+        expected.water_released_kg);
 }
 
 #ifdef AMREX_USE_GPU
@@ -499,4 +631,238 @@ TEST(FireFuelCombustion, InvalidBaseAndUnknownModelAreExplicit)
             cell,
             local),
         FireFuelCombustionParameterStatus::unsupported_model);
+}
+
+TEST(FireFuelCombustionRaster, UniformSpatialFm1MatchesLegacyAccounting)
+{
+    const auto geometry = combustion_geometry();
+    const auto base = fuel_combustion_base_parameters();
+    const auto fuel =
+        make_combustion_fuel_raster(
+            base.fuel_moisture_fraction,
+            base.fuel_moisture_fraction);
+    const auto perimeter = full_combustion_perimeter();
+    const auto burned = fully_burned_combustion_raster();
+
+    FireCombustionRaster legacy(
+        geometry,
+        base,
+        FireCombustionRasterOptions{4});
+    FireCombustionRaster spatial(
+        geometry,
+        base,
+        FireCombustionRasterOptions{4});
+
+    const auto legacy_initial =
+        legacy.initialize_from_burned_fraction(burned);
+    const auto spatial_initial =
+        spatial.initialize_from_burned_fraction(
+            burned,
+            fuel);
+    expect_same_totals(spatial_initial, legacy_initial);
+
+    const auto legacy_update =
+        legacy.advance_from_linear_sweep(
+            perimeter,
+            perimeter,
+            burned,
+            burned,
+            Real(2));
+    const auto spatial_update =
+        spatial.advance_from_linear_sweep(
+            perimeter,
+            perimeter,
+            burned,
+            burned,
+            fuel,
+            Real(2));
+
+    expect_same_totals(
+        spatial_update.totals,
+        legacy_update.totals);
+    EXPECT_EQ(
+        spatial_update.newly_consumed_dry_fuel_kg,
+        legacy_update.newly_consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        spatial_update.sensible_energy_increment_j,
+        legacy_update.sensible_energy_increment_j);
+    EXPECT_EQ(
+        spatial_update.water_released_increment_kg,
+        legacy_update.water_released_increment_kg);
+
+    const auto legacy_state =
+        legacy.collective_snapshot_state_to_io_rank();
+    const auto spatial_state =
+        spatial.collective_snapshot_state_to_io_rank();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        ASSERT_EQ(
+            spatial_state.cells.size(),
+            legacy_state.cells.size());
+        for (std::size_t index = 0;
+             index < spatial_state.cells.size();
+             ++index) {
+            expect_same_combustion_state(
+                spatial_state.cells[index],
+                legacy_state.cells[index]);
+        }
+    }
+}
+
+TEST(FireFuelCombustionRaster, SpatialMoistureChangesOnlyWaterAccounting)
+{
+    const auto geometry = combustion_geometry();
+    const auto base = fuel_combustion_base_parameters();
+    const Real moisture[2]{Real(0.05), Real(0.45)};
+    const auto fuel =
+        make_combustion_fuel_raster(
+            moisture[0],
+            moisture[1]);
+    const auto perimeter = full_combustion_perimeter();
+    const auto burned = fully_burned_combustion_raster();
+
+    FireCombustionRaster spatial(
+        geometry,
+        base,
+        FireCombustionRasterOptions{4});
+    (void)spatial.initialize_from_burned_fraction(
+        burned,
+        fuel);
+    const auto update =
+        spatial.advance_from_linear_sweep(
+            perimeter,
+            perimeter,
+            burned,
+            burned,
+            fuel,
+            Real(2));
+
+    const auto state =
+        spatial.collective_snapshot_state_to_io_rank();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        ASSERT_EQ(state.cells.size(), 2u);
+        for (std::size_t index = 0; index < 2; ++index) {
+            FireFuelRasterCell material;
+            material.model_id = FireFuelModelId::FM1;
+            material.moisture.set(
+                MoistureClass::Dead1h,
+                moisture[index]);
+            const auto local =
+                ERFFire::make_fire_combustion_parameters_for_fuel_cell(
+                    base,
+                    material);
+            const FireCombustionState initial{
+                Real(1),
+                base.dry_fuel_load_kg_m2,
+                Real(0),
+                Real(0),
+                Real(0)};
+            const auto expected =
+                ERFFire::advance_fire_combustion(
+                    initial,
+                    local,
+                    Real(2));
+            expect_same_combustion_state(
+                state.cells[index],
+                expected.state);
+        }
+        EXPECT_EQ(
+            state.cells[0].remaining_dry_fuel_kg_m2,
+            state.cells[1].remaining_dry_fuel_kg_m2);
+        EXPECT_EQ(
+            state.cells[0].consumed_dry_fuel_kg_m2,
+            state.cells[1].consumed_dry_fuel_kg_m2);
+        EXPECT_EQ(
+            state.cells[0].sensible_energy_j_m2,
+            state.cells[1].sensible_energy_j_m2);
+        EXPECT_NE(
+            state.cells[0].water_released_kg_m2,
+            state.cells[1].water_released_kg_m2);
+    }
+
+    EXPECT_GT(update.water_released_increment_kg, Real(0));
+}
+
+TEST(FireFuelCombustionRaster, RejectsNonburnableAndMissingMoistureBeforeMutation)
+{
+    const auto geometry = combustion_geometry();
+    const auto base = fuel_combustion_base_parameters();
+    const auto burned = fully_burned_combustion_raster();
+
+    for (bool nonburnable : {true, false}) {
+        const auto fuel =
+            make_invalid_combustion_fuel_raster(nonburnable);
+        FireCombustionRaster combustion(
+            geometry,
+            base,
+            FireCombustionRasterOptions{4});
+
+        EXPECT_THROW(
+            (void)combustion.initialize_from_burned_fraction(
+                burned,
+                fuel),
+            std::invalid_argument);
+        EXPECT_FALSE(combustion.initialized());
+        expect_same_totals(
+            combustion.totals(),
+            ERFFire::FireCombustionRasterTotals{});
+    }
+}
+
+TEST(FireFuelCombustionRaster, ChangingSpatialFuelAfterConsumptionIsRejected)
+{
+    const auto geometry = combustion_geometry();
+    const auto base = fuel_combustion_base_parameters();
+    const auto first_fuel =
+        make_combustion_fuel_raster(
+            Real(0.05),
+            Real(0.45));
+    const auto changed_fuel =
+        make_combustion_fuel_raster(
+            Real(0.45),
+            Real(0.05));
+    const auto perimeter = full_combustion_perimeter();
+    const auto burned = fully_burned_combustion_raster();
+
+    FireCombustionRaster combustion(
+        geometry,
+        base,
+        FireCombustionRasterOptions{4});
+    (void)combustion.initialize_from_burned_fraction(
+        burned,
+        first_fuel);
+    (void)combustion.advance_from_linear_sweep(
+        perimeter,
+        perimeter,
+        burned,
+        burned,
+        first_fuel,
+        Real(2));
+
+    const auto before =
+        combustion.collective_snapshot_state_to_io_rank();
+    const auto before_totals = combustion.totals();
+
+    EXPECT_THROW(
+        (void)combustion.advance_from_linear_sweep(
+            perimeter,
+            perimeter,
+            burned,
+            burned,
+            changed_fuel,
+            Real(1)),
+        std::invalid_argument);
+
+    expect_same_totals(combustion.totals(), before_totals);
+    const auto after =
+        combustion.collective_snapshot_state_to_io_rank();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        ASSERT_EQ(after.cells.size(), before.cells.size());
+        for (std::size_t index = 0;
+             index < after.cells.size();
+             ++index) {
+            expect_same_combustion_state(
+                after.cells[index],
+                before.cells[index]);
+        }
+    }
 }
