@@ -1,3 +1,4 @@
+#include <ERF_FireFuelCombustion.H>
 #include <ERF_FireFuelRaster.H>
 
 #include <AMReX_ParallelDescriptor.H>
@@ -11,6 +12,8 @@ namespace
 
 using amrex::Real;
 using ERFFire::FireCartesianRasterGeometry2D;
+using ERFFire::FireCombustionParameters;
+using ERFFire::FireFuelCombustionParameterStatus;
 using ERFFire::FireFuelModelId;
 using ERFFire::FireFuelMoisture;
 using ERFFire::FireFuelRaster;
@@ -28,6 +31,17 @@ fuel_raster_geometry()
         Real(-50),
         Real(2),
         Real(4)};
+}
+
+FireCombustionParameters
+fuel_combustion_base_parameters()
+{
+    return {
+        Real(2.0),
+        Real(10.0),
+        Real(0.25),
+        Real(4.0),
+        Real(0.5)};
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -126,6 +140,8 @@ device_decode_mismatch_count(const FireFuelRaster& raster)
 {
     const auto arrays =
         raster.distributed_values().const_arrays();
+    const FireCombustionParameters base =
+        fuel_combustion_base_parameters();
 
     const auto reduced =
         amrex::ParReduce(
@@ -144,18 +160,29 @@ device_decode_mismatch_count(const FireFuelRaster& raster)
                     return {1};
                 }
 
+                FireCombustionParameters local{};
+                const auto combustion_status =
+                    ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+                        base,
+                        cell,
+                        local);
+
                 if (expected_nonburnable(i, j)) {
                     if (cell.model_id
                             != FireFuelModelId::NonBurnable
                         || cell.moisture.has(MoistureClass::Dead1h)
                         || cell.moisture.has(MoistureClass::Dead10h)
-                        || cell.moisture.has(MoistureClass::LiveHerbaceous)) {
+                        || cell.moisture.has(MoistureClass::LiveHerbaceous)
+                        || combustion_status
+                            != FireFuelCombustionParameterStatus::nonburnable) {
                         return {1};
                     }
                     return {0};
                 }
 
-                if (cell.model_id != FireFuelModelId::FM1) {
+                if (cell.model_id != FireFuelModelId::FM1
+                    || combustion_status
+                        != FireFuelCombustionParameterStatus::success) {
                     return {1};
                 }
 
@@ -164,7 +191,16 @@ device_decode_mismatch_count(const FireFuelRaster& raster)
                         MoistureClass::Dead1h,
                         dead_1h)
                     || dead_1h
-                        != expected_dead_1h_moisture(i, j)) {
+                        != expected_dead_1h_moisture(i, j)
+                    || local.fuel_moisture_fraction != dead_1h
+                    || local.dry_fuel_load_kg_m2
+                        != base.dry_fuel_load_kg_m2
+                    || local.sensible_heat_release_j_kg_dry
+                        != base.sensible_heat_release_j_kg_dry
+                    || local.burn_time_constant_s
+                        != base.burn_time_constant_s
+                    || local.combustion_water_yield_kg_per_kg_dry
+                        != base.combustion_water_yield_kg_per_kg_dry) {
                     return {1};
                 }
 
@@ -320,3 +356,147 @@ TEST(FireFuelRaster, DeviceDecoderMatchesCanonicalMaterial)
     EXPECT_EQ(device_decode_mismatch_count(raster), 0);
 }
 #endif
+
+TEST(FireFuelCombustion, Fm1OverridesOnlyDead1hMoisture)
+{
+    const auto base = fuel_combustion_base_parameters();
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM1;
+    cell.moisture.set(MoistureClass::Dead1h, Real(0.08));
+    cell.moisture.set(MoistureClass::Dead10h, Real(0.12));
+    cell.moisture.set(MoistureClass::Dead100h, Real(0.17));
+
+    FireCombustionParameters local{};
+    EXPECT_EQ(
+        ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell,
+            local),
+        FireFuelCombustionParameterStatus::success);
+
+    EXPECT_EQ(local.dry_fuel_load_kg_m2, base.dry_fuel_load_kg_m2);
+    EXPECT_EQ(
+        local.sensible_heat_release_j_kg_dry,
+        base.sensible_heat_release_j_kg_dry);
+    EXPECT_EQ(local.fuel_moisture_fraction, Real(0.08));
+    EXPECT_EQ(local.burn_time_constant_s, base.burn_time_constant_s);
+    EXPECT_EQ(
+        local.combustion_water_yield_kg_per_kg_dry,
+        base.combustion_water_yield_kg_per_kg_dry);
+}
+
+TEST(FireFuelCombustion, LiveMoistureDoesNotChangeFm1Policy)
+{
+    const auto base = fuel_combustion_base_parameters();
+    FireFuelRasterCell without_live;
+    without_live.model_id = FireFuelModelId::FM1;
+    without_live.moisture.set(MoistureClass::Dead1h, Real(0.08));
+
+    FireFuelRasterCell with_live = without_live;
+    with_live.moisture.set(MoistureClass::LiveHerbaceous, Real(1.20));
+    with_live.moisture.set(MoistureClass::LiveWoody, Real(2.10));
+
+    const auto first =
+        ERFFire::make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            without_live);
+    const auto second =
+        ERFFire::make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            with_live);
+
+    EXPECT_EQ(first.dry_fuel_load_kg_m2, second.dry_fuel_load_kg_m2);
+    EXPECT_EQ(
+        first.sensible_heat_release_j_kg_dry,
+        second.sensible_heat_release_j_kg_dry);
+    EXPECT_EQ(first.fuel_moisture_fraction, second.fuel_moisture_fraction);
+    EXPECT_EQ(first.burn_time_constant_s, second.burn_time_constant_s);
+    EXPECT_EQ(
+        first.combustion_water_yield_kg_per_kg_dry,
+        second.combustion_water_yield_kg_per_kg_dry);
+}
+
+TEST(FireFuelCombustion, MoistureAboveOneRemainsValidMassRatio)
+{
+    const auto base = fuel_combustion_base_parameters();
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM1;
+    cell.moisture.set(MoistureClass::Dead1h, Real(1.25));
+
+    const auto local =
+        ERFFire::make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell);
+
+    EXPECT_EQ(local.fuel_moisture_fraction, Real(1.25));
+}
+
+TEST(FireFuelCombustion, MissingDead1hMoistureIsNotDryFuel)
+{
+    const auto base = fuel_combustion_base_parameters();
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM1;
+    cell.moisture.set(MoistureClass::Dead10h, Real(0.08));
+
+    FireCombustionParameters local = base;
+    EXPECT_EQ(
+        ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell,
+            local),
+        FireFuelCombustionParameterStatus::missing_dead_1h_moisture);
+    EXPECT_EQ(local.dry_fuel_load_kg_m2, Real(0));
+    EXPECT_EQ(local.fuel_moisture_fraction, Real(0));
+    EXPECT_THROW(
+        (void)ERFFire::make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell),
+        std::invalid_argument);
+}
+
+TEST(FireFuelCombustion, NonburnableRejectedUntilBarrierDynamicsExist)
+{
+    const auto base = fuel_combustion_base_parameters();
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::NonBurnable;
+    cell.moisture.set(MoistureClass::Dead1h, Real(0.08));
+
+    FireCombustionParameters local = base;
+    EXPECT_EQ(
+        ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell,
+            local),
+        FireFuelCombustionParameterStatus::nonburnable);
+    EXPECT_EQ(local.dry_fuel_load_kg_m2, Real(0));
+    EXPECT_THROW(
+        (void)ERFFire::make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell),
+        std::invalid_argument);
+}
+
+TEST(FireFuelCombustion, InvalidBaseAndUnknownModelAreExplicit)
+{
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM1;
+    cell.moisture.set(MoistureClass::Dead1h, Real(0.08));
+
+    auto invalid_base = fuel_combustion_base_parameters();
+    invalid_base.dry_fuel_load_kg_m2 = Real(0);
+    FireCombustionParameters local{};
+    EXPECT_EQ(
+        ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+            invalid_base,
+            cell,
+            local),
+        FireFuelCombustionParameterStatus::invalid_base_parameters);
+
+    cell.model_id = static_cast<FireFuelModelId>(13);
+    EXPECT_EQ(
+        ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+            fuel_combustion_base_parameters(),
+            cell,
+            local),
+        FireFuelCombustionParameterStatus::unsupported_model);
+}
