@@ -9,10 +9,10 @@
 #include <ERF_FireFuelRaster.H>
 
 #include <AMReX_Gpu.H>
+#include <AMReX_GpuLaunch.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_ParReduce.H>
 #include <AMReX_ParallelDescriptor.H>
-#include <AMReX_ParallelFor.H>
 
 #include <algorithm>
 #include <cmath>
