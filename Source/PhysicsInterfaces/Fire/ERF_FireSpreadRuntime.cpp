@@ -729,6 +729,10 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     amrex::Real initial_time_s,
     ERFFireSpreadConfig config)
     : config_(std::move(config)),
+      fuel_field_(
+          config_.raster_geometry,
+          config_.fuel,
+          config_.dead_fuel_moisture_fraction),
       front_(
           std::vector<FireFrontComponent>{
               {
@@ -764,6 +768,10 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     amrex::Real initial_time_s,
     ERFFireSpreadConfig config)
     : config_(std::move(config)),
+      fuel_field_(
+          config_.raster_geometry,
+          config_.fuel,
+          config_.dead_fuel_moisture_fraction),
       front_(std::move(initial_front)),
       burned_fraction_(config_.raster_geometry),
       first_arrival_(config_.raster_geometry),
@@ -802,6 +810,10 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     ERFFireSpreadRuntimeState state,
     RestoreStateTag)
     : config_(std::move(state.config)),
+      fuel_field_(
+          config_.raster_geometry,
+          config_.fuel,
+          config_.dead_fuel_moisture_fraction),
       front_(restore_front_from_state(state)),
       burned_fraction_(
           config_.raster_geometry,
@@ -881,6 +893,10 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     amrex::Real current_time_s,
     CollectiveRestoreStateTag)
     : config_(std::move(config)),
+      fuel_field_(
+          config_.raster_geometry,
+          config_.fuel,
+          config_.dead_fuel_moisture_fraction),
       front_(std::move(front)),
       burned_fraction_(std::move(burned_fraction)),
       first_arrival_(std::move(first_arrival)),
@@ -1580,11 +1596,14 @@ ERFFireSpreadRuntime::advance_wind_impl(
                 terrain_gradient_m_per_m,
                 slope_tangent);
 
+        const FireFuelProperties& material =
+            fuel_field_.sample(position_m.x, position_m.y);
+
         const RothermelResult behavior =
             evaluate_rothermel(
-                config_.fuel,
+                material.single_dead_class,
                 RothermelInputs{
-                    config_.dead_fuel_moisture_fraction,
+                    material.moisture.get(FireFuelMoistureClass::Dead1h),
                     speed_mps,
                     slope_tangent});
 
@@ -1843,11 +1862,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     terrain_gradient_m_per_m,
                     slope_tangent);
 
+            const FireFuelProperties& material =
+                fuel_field_.sample(positions_m[index].x, positions_m[index].y);
+
             const RothermelResult behavior =
                 evaluate_rothermel(
-                    config_.fuel,
+                    material.single_dead_class,
                     RothermelInputs{
-                        config_.dead_fuel_moisture_fraction,
+                        material.moisture.get(FireFuelMoistureClass::Dead1h),
                         speed_mps,
                         slope_tangent});
 

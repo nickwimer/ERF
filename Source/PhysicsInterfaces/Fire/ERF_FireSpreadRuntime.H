@@ -5,6 +5,7 @@
 #include <ERF_FireCombustionRaster.H>
 #include <ERF_FireFirstArrivalRaster.H>
 #include <ERF_FireFront.H>
+#include <ERF_FireFuelField.H>
 #include <ERF_FireFlatEnvironmentSampler.H>
 #include <ERF_FireTerrainSurface.H>
 #include <ERF_FirePerimeterRemesher.H>
@@ -158,6 +159,17 @@ public:
     config() const noexcept
     {
         return config_;
+    }
+
+    /**
+     * Read-only uniform material derived from config(), including on restore.
+     * No independent material state is serialized or mutable through this view.
+     * Spatial fuel and live-fuel spread physics are not enabled by this adapter.
+     */
+    [[nodiscard]] const FireFuelField&
+    fuel_field() const noexcept
+    {
+        return fuel_field_;
     }
 
     /**
@@ -330,6 +342,9 @@ private:
         amrex::Real dt_s);
 
     ERFFireSpreadConfig config_;
+    // Value-owned and read-only to callers; ordinary runtime copies/moves do
+    // not retain references into another runtime or allocate material rasters.
+    FireFuelField fuel_field_;
     FireFront front_;
     FireBurnedFractionRaster burned_fraction_;
     FireFirstArrivalRaster first_arrival_;
