@@ -4,6 +4,7 @@
 #include <string>
 #include <limits>
 #include <memory>
+#include <set>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -825,6 +826,14 @@ public:
 
     std::string pp_prefix {"erf"};
 
+    // The inputs table as the user wrote it, captured at the top of
+    // ReadParameters before anything in ERF can add to it.  ParmParse::queryAdd
+    // inserts the default it was handed whenever a key is absent, so by the time
+    // initialization is under way the table no longer distinguishes a key the
+    // user typed from a key some other query defaulted (see
+    // has_surface_layer_inputs).
+    std::set<std::string> user_specified_inputs;
+
     void fill_from_bndryregs (const amrex::Vector<amrex::MultiFab*>& mfs,
                               double time);
 
@@ -932,6 +941,8 @@ private:
     // read in some parameters from inputs file
     void ReadParameters ();
     void ParameterSanityChecks ();
+
+    [[nodiscard]] bool has_surface_layer_inputs (const std::string& prefix) const;
 
     // set covered coarse cells/faces to be the average of overlying fine cells/faces
     void AverageDown ();
@@ -1564,7 +1575,9 @@ private:
                                                     // error vars
                                                     ,"xvel_err", "yvel_err", "zvel_err", "pp_err"
 #endif
-                                                    ,"qsrc_sw", "qsrc_lw"
+                                                    ,"qsrc_sw", "qsrc_lw",
+                                                    "Tau11", "Tau12", "Tau13", "Tau21", "Tau22", "Tau23", "Tau31", "Tau32", "Tau33",
+                                                    "hfx1", "hfx2", "hfx3", "q1fx1", "q1fx2", "q1fx3", "q2fx3"
                                                    };
 
     // **************************************************************************************
@@ -1777,7 +1790,7 @@ private:
 
     std::unique_ptr<WriteBndryPlanes> m_w2d  = nullptr;
     std::unique_ptr<ReadBndryPlanes>  m_r2d  = nullptr;
-    std::unique_ptr<SurfaceLayer>     m_SurfaceLayer = nullptr;
+    amrex::Vector<std::unique_ptr<SurfaceLayer>>     m_SurfaceLayer;
     amrex::Vector<std::unique_ptr<ForestDrag>> m_forest_drag;
 
     //

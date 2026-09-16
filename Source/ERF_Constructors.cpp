@@ -122,6 +122,9 @@ ERF::ERF_shared ()
     m_forest_drag.resize(nlevs_max);
     for (int lev = 0; lev <= max_level; ++lev) { m_forest_drag[lev] = nullptr;}
 
+    // Surface layer object for each possible face
+    m_SurfaceLayer.resize(AMREX_SPACEDIM*2);
+
     ReadParameters();
 
 #ifdef ERF_USE_FIRE
