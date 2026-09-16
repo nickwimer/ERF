@@ -61,5 +61,6 @@ CEXE_headers += ERF_FireRasterGeometry.H
 CEXE_headers += ERF_FireSurfaceLayout.H
 
 CEXE_headers += ERF_FireCombustion.H
+CEXE_headers += ERF_FireFuelCombustion.H
 CEXE_headers += ERF_FireCombustionRaster.H
 CEXE_headers += ERF_FireSurfaceFeedback.H
