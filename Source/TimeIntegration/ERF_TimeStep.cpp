@@ -4,6 +4,11 @@
 #include <ERF_ReadFromERFBdy.H>
 #include <ERF_LagrangianMicrophysics.H>
 
+#ifdef ERF_USE_FIRE
+#include <ERF_FireContext.H>
+#include <ERF_FireLevel0Advance.H>
+#endif
+
 using namespace amrex;
 
 /**
@@ -157,6 +162,37 @@ ERF::timeStep (int lev, double time, int /*iteration*/)
                            {&S_new, &rU_new[lev], &rV_new[lev], &rW_new[lev]},
                            base_state[lev], base_state[lev]);
     }
+
+#ifdef ERF_USE_FIRE
+    // Fire remains sequenced strictly between the t^n atmospheric FillPatch
+    // above and the ordinary ERF advance below. The Fire-owned context
+    // performs sampling, spread/combustion, optional two-way source
+    // construction, and atomic commit of the candidate Fire state.
+    if (lev == 0 && FireEnabled()) {
+        ERFFire::ERFFireLevel0AdvanceInputs fire_inputs{
+            {
+                geom[0],
+                U_new,
+                V_new,
+                *z_phys_cc[0],
+                *z_phys_nd[0],
+                solverChoice.mesh_type,
+                solverChoice.terrain_type,
+                solverChoice.buildings_type,
+                max_level
+            },
+            S_new,
+            solverChoice.mesh_type == MeshType::VariableDz
+                ? detJ_cc[0].get()
+                : nullptr,
+            solverChoice.moisture_type,
+            time,
+            static_cast<Real>(dt[0])
+        };
+
+        m_fire->advance_level0(fire_inputs);
+    }
+#endif
 
     if (regrid_int > 0)  // We may need to regrid
     {

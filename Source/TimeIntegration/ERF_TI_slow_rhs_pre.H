@@ -138,6 +138,10 @@
                                                     solverChoice.c_p, solverChoice.rdOcp);
         }
 
+#ifdef ERF_USE_FIRE
+        m_fire->add_atmospheric_source(level, cc_src);
+#endif
+
         // *****************************************************************************
         // Add nudging terms on moist variables if we have a non-zero relaxation region
         // *****************************************************************************

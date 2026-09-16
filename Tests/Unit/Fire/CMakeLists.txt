@@ -1,0 +1,690 @@
+if(NOT TARGET GTest::gtest)
+  message(FATAL_ERROR
+    "erf_fire_unit_tests expects the vendored googletest target from "
+    "Tests/Unit/CMakeLists.txt. Configure unit tests through the top-level "
+    "ERF test build so Submodules/googletest is added first.")
+endif()
+
+include(${PROJECT_SOURCE_DIR}/CMake/BuildERFExe.cmake)
+include(${PROJECT_SOURCE_DIR}/CMake/SetERFCompileFlags.cmake)
+
+if(ERF_ENABLE_CUDA)
+  set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseSensitivityAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericVerticalSensitivityAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireDevelopedBuoyancyAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWindAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecompositionAnalysis.cpp
+    PROPERTIES LANGUAGE CUDA
+  )
+endif()
+
+add_executable(erf_fire_unit_tests
+  ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+  ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestMain.cpp
+  ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestRuntimeStubs.cpp
+  ERF_GTestFireTypes.cpp
+  ERF_GTestFirePerimeter.cpp
+  ERF_GTestFireFront.cpp
+  ERF_GTestFirePalisadesTopology.cpp
+  ERF_GTestFirePropagation.cpp
+  ERF_GTestFirePropagationBatch.cpp
+  ERF_GTestFireRemeshing.cpp
+  ERF_GTestRothermel.cpp
+  ERF_GTestRichardsEllipse.cpp
+  ERF_GTestRichardsDirectionalSpread.cpp
+  ERF_GTestFireStandaloneGrowth.cpp
+  ERF_GTestFireCellCoverage.cpp
+  ERF_GTestFireBurnedFraction.cpp
+  ERF_GTestFireBurnedFractionRaster.cpp
+  ERF_GTestFireCellArrival.cpp
+  ERF_GTestFireFirstArrivalRaster.cpp
+)
+
+build_erf_exe(erf_fire_unit_tests NO_ERF_MAIN)
+
+target_link_libraries(erf_fire_unit_tests PRIVATE GTest::gtest)
+
+erf_register_gtest_suite(erf_fire_unit_tests
+  LABELS unit
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  DISCOVERY_TIMEOUT 60
+  EXECUTION_TIMEOUT 900
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireEnvironment.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireWindAdjustment.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireLevel0Environment.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireTerrainReferenceWind.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireTerrainSurface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestTerrainSource.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFirePlotfile2D.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireSpreadRuntime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireRuntimeInit.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireWindScience.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireCombustion.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireCombustionRaster.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireSurfaceFeedback.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireAtmosphericSource.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireFeedbackProfileSensitivity.cpp
+)
+target_sources(erf_fire_unit_tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireLevel0SourceCoupling.cpp
+)
+
+add_executable(erf_fire_timestep_identity
+  ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+  ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestRuntimeStubs.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.cpp
+)
+
+build_erf_exe(erf_fire_timestep_identity NO_ERF_MAIN)
+add_dependencies(erf_fire_unit_tests erf_fire_timestep_identity)
+
+add_test(
+  NAME FireTimeStepIntegration.OneWaySpreadPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWaySpreadPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.OneWayIndependentFireGridPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIndependentGrid.inputs
+    -DIDENTITY_CASE_PREFIX=fire_independent_grid_identity
+    -DIDENTITY_EXPECTED_RASTER_CELLS=256
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayIndependentFireGridPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedback.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayFineFireGridFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackFineFire.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_fine_fire
+    -DTWO_WAY_EXPECTED_RASTER_CELLS=256
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayFineFireGridFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayCoarseFireGridFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackCoarseFire.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_coarse_fire
+    -DTWO_WAY_EXPECTED_RASTER_CELLS=16
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayCoarseFireGridFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.OneWayTerrainSpreadPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
+    -DIDENTITY_CASE_PREFIX=fire_terrain_identity
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayTerrainSpreadPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayTerrainFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrain.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayTerrainFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayTerrainIndependentFireGridFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrainIndependentGrid.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain_independent_grid
+    -DTWO_WAY_EXPECTED_RASTER_CELLS=256
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayTerrainIndependentFireGridFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+add_test(
+  NAME FireTimeStepIntegration.IndependentTerrainSourceChangesFireOnly
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceResolution.inputs
+    -DFLAT_TERRAIN=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFlat.txt
+    -DFINE_TERRAIN=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFine.txt
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTerrainSourceResolution.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.IndependentTerrainSourceChangesFireOnly
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+add_test(
+  NAME FireTimeStepIntegration.OneWayExplicitWafPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
+    -DIDENTITY_CASE_PREFIX=fire_waf_identity
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayExplicitWafPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayExplicitWafFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackWaf.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_waf
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayExplicitWafFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.OneWayTerrainExplicitWafPreservesPrognosticBits
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrainWaf.inputs
+    -DIDENTITY_CASE_PREFIX=fire_terrain_waf_identity
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.OneWayTerrainExplicitWafPreservesPrognosticBits
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.TwoWayTerrainExplicitWafFeedbackChangesAtmosphere
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrainWaf.inputs
+    -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain_waf
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.TwoWayTerrainExplicitWafFeedbackChangesAtmosphere
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireWindModeIntegration.FlatIdentityAndReduction
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
+    -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
+    -DWIND_MODE_CASE_PREFIX=fire_wind_mode_flat
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireWindModeComparison.cmake
+)
+set_tests_properties(
+  FireWindModeIntegration.FlatIdentityAndReduction
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireWindModeIntegration.TerrainIdentityAndReduction
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
+    -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrainWaf.inputs
+    -DWIND_MODE_CASE_PREFIX=fire_wind_mode_terrain
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireWindModeComparison.cmake
+)
+set_tests_properties(
+  FireWindModeIntegration.TerrainIdentityAndReduction
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireWindModeIntegration.RuntimeInputValidation
+  COMMAND ${CMAKE_COMMAND}
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
+    -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
+    -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireWindModeValidation.cmake
+)
+set_tests_properties(
+  FireWindModeIntegration.RuntimeInputValidation
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 300
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+
+# FIRE_ATMOSPHERIC_RESPONSE_BEGIN
+add_executable(erf_fire_atmospheric_response
+  ${PROJECT_SOURCE_DIR}/Exec/ERF_Prob.cpp
+)
+build_erf_exe(erf_fire_atmospheric_response)
+add_dependencies(erf_fire_unit_tests erf_fire_atmospheric_response)
+
+add_executable(erf_fire_atmospheric_response_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_atmospheric_response_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(erf_fire_atmospheric_response_analysis)
+add_dependencies(erf_fire_unit_tests erf_fire_atmospheric_response_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.FlatGravityOnCheckpoint
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_response_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericResponse.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.FlatGravityOnCheckpoint
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+# FIRE_ATMOSPHERIC_RESPONSE_END
+
+
+# FIRE_ATMOSPHERIC_RESPONSE_SENSITIVITY_BEGIN
+add_executable(erf_fire_atmospheric_response_sensitivity_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseSensitivityAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_atmospheric_response_sensitivity_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(
+  erf_fire_atmospheric_response_sensitivity_analysis)
+add_dependencies(
+  erf_fire_unit_tests
+  erf_fire_atmospheric_response_sensitivity_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.ExtinctionDepthSensitivity
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_response_sensitivity_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericResponseSensitivity.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.ExtinctionDepthSensitivity
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+# FIRE_ATMOSPHERIC_RESPONSE_SENSITIVITY_END
+
+
+# FIRE_ATMOSPHERIC_VERTICAL_SENSITIVITY_BEGIN
+add_executable(erf_fire_atmospheric_vertical_sensitivity_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericVerticalSensitivityAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_atmospheric_vertical_sensitivity_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(
+  erf_fire_atmospheric_vertical_sensitivity_analysis)
+add_dependencies(
+  erf_fire_unit_tests
+  erf_fire_atmospheric_vertical_sensitivity_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.VerticalResolutionSensitivity
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_vertical_sensitivity_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericVerticalSensitivity.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.VerticalResolutionSensitivity
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+# FIRE_ATMOSPHERIC_VERTICAL_SENSITIVITY_END
+
+
+# FIRE_DEVELOPED_BUOYANCY_BEGIN
+add_executable(erf_fire_developed_buoyancy_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireDevelopedBuoyancyAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_developed_buoyancy_analysis
+  PRIVATE
+    AMReX::amrex
+)
+target_include_directories(
+  erf_fire_developed_buoyancy_analysis
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/Source/Fire
+    ${PROJECT_SOURCE_DIR}/Source/Fire/Environment
+)
+set_erf_compile_flags(erf_fire_developed_buoyancy_analysis)
+add_dependencies(
+  erf_fire_unit_tests
+  erf_fire_developed_buoyancy_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.DevelopedBuoyantAcceleration
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_developed_buoyancy_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireDevelopedBuoyancy.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireDevelopedBuoyancy.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.DevelopedBuoyantAcceleration
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+# FIRE_DEVELOPED_BUOYANCY_END
+
+add_executable(erf_fire_background_wind_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWindAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_background_wind_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(erf_fire_background_wind_analysis)
+add_dependencies(
+  erf_fire_unit_tests
+  erf_fire_background_wind_analysis)
+
+add_test(
+  NAME FireAtmosphericResponse.BackgroundWindClosedLoop
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_background_wind_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWind.inputs
+    -DCASE_PREFIX=fire_background_wind
+    -DIGNITION_X_M=32.0
+    -DIGNITION_Y_M=32.0
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireBackgroundWind.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.BackgroundWindClosedLoop
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireAtmosphericResponse.TerrainBackgroundWindClosedLoop
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_background_wind_analysis>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainBackgroundWind.inputs
+    -DCASE_PREFIX=fire_terrain_background_wind
+    -DIGNITION_X_M=20.0
+    -DIGNITION_Y_M=32.0
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireBackgroundWind.cmake
+)
+set_tests_properties(
+  FireAtmosphericResponse.TerrainBackgroundWindClosedLoop
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 900
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireRestartIntegration.TerrainSourcePolicy
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceResolution.inputs
+    -DTERRAIN_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFine.txt
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTerrainSourceRestartPolicy.cmake
+)
+set_tests_properties(
+  FireRestartIntegration.TerrainSourcePolicy
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 180
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+add_test(
+  NAME FireTimeStepIntegration.RestartPreservesCoupledState
+  COMMAND ${CMAKE_COMMAND}
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireRestart.inputs
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireRestart.cmake
+)
+set_tests_properties(
+  FireTimeStepIntegration.RestartPreservesCoupledState
+  PROPERTIES
+    LABELS unit
+    TIMEOUT 180
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+if(ERF_ENABLE_MPI)
+  if(NOT TARGET MPI::MPI_CXX)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+  endif()
+  if(NOT MPIEXEC_EXECUTABLE)
+    message(FATAL_ERROR
+      "MPIEXEC_EXECUTABLE is required for the ERF-Fire decomposition test")
+  endif()
+
+  add_executable(erf_fire_mpi_decomposition_analysis
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecompositionAnalysis.cpp
+  )
+  target_link_libraries(
+    erf_fire_mpi_decomposition_analysis
+    PRIVATE
+      AMReX::amrex
+  )
+  set_erf_compile_flags(erf_fire_mpi_decomposition_analysis)
+  add_dependencies(
+    erf_fire_unit_tests
+    erf_fire_mpi_decomposition_analysis
+  )
+
+  string(REPLACE ";" "," fire_mpi_preflags_csv
+    "${MPIEXEC_PREFLAGS}")
+  string(REPLACE ";" "," fire_mpi_postflags_csv
+    "${MPIEXEC_POSTFLAGS}")
+
+  add_test(
+    NAME FireTimeStepIntegration.MpiDecompositionInvariant
+    COMMAND ${CMAKE_COMMAND}
+      -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+      -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_mpi_decomposition_analysis>
+      -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecomposition.inputs
+      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+      -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+      -DMPIEXEC_PREFLAGS_CSV=${fire_mpi_preflags_csv}
+      -DMPIEXEC_POSTFLAGS_CSV=${fire_mpi_postflags_csv}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireMpiDecomposition.cmake
+  )
+  set_tests_properties(
+    FireTimeStepIntegration.MpiDecompositionInvariant
+    PROPERTIES
+      LABELS "unit;parallel"
+      PROCESSORS 2
+      TIMEOUT 180
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+
+  add_test(
+    NAME FireTimeStepIntegration.MpiTerrainRestartInvariant
+    COMMAND ${CMAKE_COMMAND}
+      -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+      -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_mpi_decomposition_analysis>
+      -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiTerrainRestart.inputs
+      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+      -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+      -DMPIEXEC_PREFLAGS_CSV=${fire_mpi_preflags_csv}
+      -DMPIEXEC_POSTFLAGS_CSV=${fire_mpi_postflags_csv}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireMpiTerrainRestart.cmake
+  )
+  set_tests_properties(
+    FireTimeStepIntegration.MpiTerrainRestartInvariant
+    PROPERTIES
+      LABELS "unit;parallel"
+      PROCESSORS 2
+      TIMEOUT 180
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+
+  if(ERF_ENABLE_CUDA)
+    # Known upstream ERF CUDA nondeterminism in terrain-fitted atmospheric
+    # evolution. This reproduces after one timestep with fire.enabled=false
+    # on one MPI rank / one H100, from bitwise-identical initial plotfields,
+    # and persists with CUDA_LAUNCH_BLOCKING=1. Keep the CPU regression active
+    # and re-enable this CUDA test when upstream ERF terrain evolution is
+    # deterministic.
+    set_property(
+      TEST FireTimeStepIntegration.MpiTerrainRestartInvariant
+      PROPERTY DISABLED TRUE
+    )
+  endif()
+endif()
+
+# CUDA builds require every Fire unit-test translation unit to use nvcc.
+if(ERF_ENABLE_CUDA)
+  get_target_property(_erf_fire_unit_sources erf_fire_unit_tests SOURCES)
+  list(FILTER _erf_fire_unit_sources INCLUDE REGEX "[.]cpp$")
+  set_source_files_properties(${_erf_fire_unit_sources} PROPERTIES LANGUAGE CUDA)
+endif()

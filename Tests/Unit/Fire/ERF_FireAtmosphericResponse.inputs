@@ -1,0 +1,66 @@
+erf.prob_name = "userdefined"
+
+erf.init_type = "Isentropic"
+
+max_step = 100
+stop_time = 0.20
+
+amrex.fpe_trap_invalid = 1
+erf.fix_random_seed = 1
+
+geometry.prob_lo = 0.0 0.0 0.0
+geometry.prob_hi = 16.0 16.0 240.0
+geometry.is_periodic = 1 1 0
+
+amr.n_cell = 16 16 48
+amr.max_level = 0
+amr.max_grid_size = 48
+amr.blocking_factor = 4
+amr.v = 0
+
+zlo.type = "SlipWall"
+zhi.type = "SlipWall"
+zlo.theta = 300.0
+zhi.theta = 300.0
+
+erf.moisture_model = "MoistNoCondensation"
+erf.use_gravity = true
+erf.fixed_dt = 0.002
+erf.molec_diff_type = "None"
+erf.les_type = "None"
+erf.sum_interval = -1
+erf.v = 0
+
+erf.plot_file_1 = plt
+erf.plot_int_1 = 100
+erf.plot_vars_1 = density rhotheta rhoQ1 z_velocity theta
+erf.plot_int_2 = -1
+erf.check_int = -1
+
+prob.rho_0 = 1.0
+prob.T_0 = 300.0
+prob.U_0 = 1.0
+prob.V_0 = 0.0
+prob.W_0 = 0.0
+
+fire.enabled = true
+fire.coupling_mode = "two_way"
+fire.wind_mode = "direct_reference"
+fire.reference_height_agl_m = 2.75
+
+fire.fuel_model = "FM1"
+fire.dead_fuel_moisture_fraction = 0.08
+
+fire.ignition_center_m = 8.0 8.0
+fire.ignition_radius_m = 2.0
+fire.ignition_vertex_count = 96
+
+fire.remesh_min_edge_length_m = 0.05
+fire.remesh_max_edge_length_m = 0.25
+fire.remesh_max_chord_error_m = 0.002
+fire.arrival_time_tolerance_s = 1.0e-7
+fire.combustion_temporal_substeps = 16
+fire.feedback_extinction_depth_m = 50.0
+
+fire.output_dir = "fire_output"
+fire.output_interval_steps = 1

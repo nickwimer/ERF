@@ -1,0 +1,187 @@
+if(NOT DEFINED RESPONSE_EXE OR "${RESPONSE_EXE}" STREQUAL "")
+  message(FATAL_ERROR "RESPONSE_EXE is required")
+endif()
+if(NOT DEFINED ANALYSIS_EXE OR "${ANALYSIS_EXE}" STREQUAL "")
+  message(FATAL_ERROR "ANALYSIS_EXE is required")
+endif()
+if(NOT DEFINED RESPONSE_INPUT OR "${RESPONSE_INPUT}" STREQUAL "")
+  message(FATAL_ERROR "RESPONSE_INPUT is required")
+endif()
+
+file(REAL_PATH "." test_root)
+
+function(run_case mode label early_plot_var late_plot_var)
+  set(case_dir
+      "${test_root}/fire_developed_buoyancy_${label}")
+  file(REMOVE_RECURSE "${case_dir}")
+  file(MAKE_DIRECTORY "${case_dir}")
+
+  set(output_dir "fire_output_${label}")
+
+  execute_process(
+    COMMAND "${RESPONSE_EXE}"
+            "${RESPONSE_INPUT}"
+            "fire.coupling_mode=${mode}"
+            "fire.output_dir=${output_dir}"
+            "erf.plot_file_1=plt"
+    WORKING_DIRECTORY "${case_dir}"
+    RESULT_VARIABLE run_result
+    OUTPUT_VARIABLE run_output
+    ERROR_VARIABLE run_error
+  )
+
+  if(NOT run_result EQUAL 0)
+    message(FATAL_ERROR
+      "ERF Fire ${mode} child failed\n"
+      "stdout:\n${run_output}\n"
+      "stderr:\n${run_error}")
+  endif()
+
+  set(early_plot "${case_dir}/plt00100")
+  if(NOT EXISTS "${early_plot}/Header")
+    message(FATAL_ERROR
+      "${mode} run did not produce the 1 s plt00100 checkpoint")
+  endif()
+
+  file(GLOB plot_dirs
+    LIST_DIRECTORIES true
+    "${case_dir}/plt*")
+  list(FILTER plot_dirs INCLUDE REGEX "/plt[0-9]+$")
+  list(SORT plot_dirs)
+  list(LENGTH plot_dirs plot_count)
+  if(plot_count LESS 2)
+    message(FATAL_ERROR
+      "${mode} run produced fewer than two plot checkpoints")
+  endif()
+  list(GET plot_dirs -1 late_plot)
+
+  set(${early_plot_var} "${early_plot}" PARENT_SCOPE)
+  set(${late_plot_var} "${late_plot}" PARENT_SCOPE)
+endfunction()
+
+run_case(one_way one_way early_one_way late_one_way)
+run_case(two_way two_way early_two_way late_two_way)
+
+set(one_way_case_dir
+    "${test_root}/fire_developed_buoyancy_one_way")
+set(two_way_case_dir
+    "${test_root}/fire_developed_buoyancy_two_way")
+
+set(early_one_way_u "${one_way_case_dir}/pltU00100")
+set(early_one_way_v "${one_way_case_dir}/pltV00100")
+set(early_two_way_u "${two_way_case_dir}/pltU00100")
+set(early_two_way_v "${two_way_case_dir}/pltV00100")
+set(late_one_way_u "${one_way_case_dir}/pltU00500")
+set(late_one_way_v "${one_way_case_dir}/pltV00500")
+set(late_two_way_u "${two_way_case_dir}/pltU00500")
+set(late_two_way_v "${two_way_case_dir}/pltV00500")
+
+foreach(face_plot IN ITEMS
+    "${early_one_way_u}"
+    "${early_one_way_v}"
+    "${early_two_way_u}"
+    "${early_two_way_v}"
+    "${late_one_way_u}"
+    "${late_one_way_v}"
+    "${late_two_way_u}"
+    "${late_two_way_v}")
+  if(NOT EXISTS "${face_plot}/Header")
+    message(FATAL_ERROR
+      "Developed-buoyancy run is missing staggered plotfile ${face_plot}")
+  endif()
+endforeach()
+
+set(one_way_fire_output
+    "${test_root}/fire_developed_buoyancy_one_way/fire_output_one_way")
+set(two_way_fire_output
+    "${test_root}/fire_developed_buoyancy_two_way/fire_output_two_way")
+
+foreach(required_name IN ITEMS
+    perimeter_000000.csv
+    raster_000000.csv
+    perimeter_000100.csv
+    raster_000100.csv
+    perimeter_000500.csv
+    raster_000500.csv)
+  if(NOT EXISTS "${one_way_fire_output}/${required_name}")
+    message(FATAL_ERROR
+      "one-way developed-buoyancy run is missing ${required_name}")
+  endif()
+  if(NOT EXISTS "${two_way_fire_output}/${required_name}")
+    message(FATAL_ERROR
+      "two-way developed-buoyancy run is missing ${required_name}")
+  endif()
+endforeach()
+
+foreach(initial_name IN ITEMS
+    perimeter_000000.csv
+    raster_000000.csv)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+            "${one_way_fire_output}/${initial_name}"
+            "${two_way_fire_output}/${initial_name}"
+    RESULT_VARIABLE initial_compare)
+  if(NOT initial_compare EQUAL 0)
+    message(FATAL_ERROR
+      "initial one-way/two-way Fire ${initial_name} differs")
+  endif()
+endforeach()
+
+foreach(diverged_name IN ITEMS
+    perimeter_000100.csv
+    raster_000100.csv
+    perimeter_000500.csv
+    raster_000500.csv)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+            "${one_way_fire_output}/${diverged_name}"
+            "${two_way_fire_output}/${diverged_name}"
+    RESULT_VARIABLE diverged_compare)
+  if(diverged_compare EQUAL 0)
+    message(FATAL_ERROR
+      "one-way/two-way Fire ${diverged_name} did not diverge")
+  endif()
+endforeach()
+
+execute_process(
+  COMMAND "${ANALYSIS_EXE}"
+          "analysis.early_one_way=${early_one_way}"
+          "analysis.early_two_way=${early_two_way}"
+          "analysis.late_one_way=${late_one_way}"
+          "analysis.late_two_way=${late_two_way}"
+          "analysis.one_way_final_perimeter=${one_way_fire_output}/perimeter_000500.csv"
+          "analysis.two_way_final_perimeter=${two_way_fire_output}/perimeter_000500.csv"
+          "analysis.early_reference_perimeter=${two_way_fire_output}/perimeter_000100.csv"
+          "analysis.late_reference_perimeter=${two_way_fire_output}/perimeter_000500.csv"
+          "analysis.early_one_way_u=${early_one_way_u}"
+          "analysis.early_one_way_v=${early_one_way_v}"
+          "analysis.early_two_way_u=${early_two_way_u}"
+          "analysis.early_two_way_v=${early_two_way_v}"
+          "analysis.late_one_way_u=${late_one_way_u}"
+          "analysis.late_one_way_v=${late_one_way_v}"
+          "analysis.late_two_way_u=${late_two_way_u}"
+          "analysis.late_two_way_v=${late_two_way_v}"
+  WORKING_DIRECTORY "${test_root}"
+  RESULT_VARIABLE analysis_result
+  OUTPUT_VARIABLE analysis_output
+  ERROR_VARIABLE analysis_error
+)
+
+if(NOT analysis_result EQUAL 0)
+  message(FATAL_ERROR
+    "Developed-buoyancy analyzer failed\n"
+    "stdout:\n${analysis_output}\n"
+    "stderr:\n${analysis_error}")
+endif()
+
+
+
+
+
+
+string(STRIP "${analysis_output}" analysis_output_stripped)
+message(STATUS "${analysis_output_stripped}")
+message(STATUS
+  "Developed buoyancy / Fire loop closure: "
+  "the production flat Fire sampler sees an early outward and later inward "
+  "radially dominant two-way horizontal-flow response")

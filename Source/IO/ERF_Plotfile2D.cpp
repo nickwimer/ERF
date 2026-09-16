@@ -17,6 +17,12 @@
 #include "ERF_TerrainMetrics.H"
 #include "ERF_Utils.H"
 #include "Diagnostics/ERF_SeaLevelPressure.H"
+#include <cstddef>
+
+#ifdef ERF_USE_FIRE
+#include <ERF_FireContext.H>
+#include <ERF_FirePlotfile2D.H>
+#endif
 
 using namespace amrex;
 
@@ -133,9 +139,19 @@ ERF::setPlotVariables2D (const std::string& pp_plot_var_names, Vector<std::strin
     const bool has_surface_layer =
         phys_bc_type[Orientation(Direction::z, Orientation::low)] == ERF_BC::surface_layer;
     const auto active_lsm_names = lsm.Get_DataNames();
-    const auto available_names = plotfile2d::available_diagnostic_names(solverChoice,
-                                                                         has_surface_layer,
-                                                                         active_lsm_names);
+    auto available_names = plotfile2d::available_diagnostic_names(solverChoice,
+                                                                   has_surface_layer,
+                                                                   active_lsm_names);
+
+#ifdef ERF_USE_FIRE
+    const ERFFire::ERFFirePlotfile2DAvailabilityInputs
+        fire_diagnostic_availability{
+            available_names
+        };
+
+    m_fire->append_available_plotfile2d_diagnostics(
+        fire_diagnostic_availability);
+#endif
 
     // Keep the canonical built-in 2D ordering so the plotfile component layout
     // stays stable even if the input request order changes.
@@ -159,9 +175,37 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
                                                            plot2d_file_1, plot2d_file_2,
                                                            file_name_digits);
 
-    const auto output_descriptors =
-        plotfile2d::build_sampled_level_output_descriptors(pp_prefix, which,
-                                                           plot_var_names, solverChoice);
+    Vector<plotfile2d::Plotfile2DOutputDescriptor> output_descriptors;
+
+#ifdef ERF_USE_FIRE
+    const auto fire_descriptor_selection =
+        ERFFire::select_fire_plotfile2d_output_descriptors(
+            plot_var_names);
+
+    output_descriptors =
+        plotfile2d::build_sampled_level_output_descriptors(
+            pp_prefix,
+            which,
+            fire_descriptor_selection.non_fire_plot_var_names,
+            solverChoice);
+
+    const auto fire_insert_position =
+        output_descriptors.begin()
+        + static_cast<std::ptrdiff_t>(
+            fire_descriptor_selection.non_fire_plot_var_names.size());
+
+    output_descriptors.insert(
+        fire_insert_position,
+        fire_descriptor_selection.fire_descriptors.begin(),
+        fire_descriptor_selection.fire_descriptors.end());
+#else
+    output_descriptors =
+        plotfile2d::build_sampled_level_output_descriptors(
+            pp_prefix,
+            which,
+            plot_var_names,
+            solverChoice);
+#endif
 
     Vector<std::string> varnames;
     varnames.reserve(output_descriptors.size());
@@ -177,6 +221,20 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
     for (int lev = 0; lev <= finest_level; ++lev) {
         mf[lev].define(ba2d[lev], dmap[lev], ncomp_mf, 0);
     }
+
+#ifdef ERF_USE_FIRE
+    const ERFFire::ERFFirePlotfile2DPrepareInputs
+        fire_plot_prepare_inputs{
+            plot_var_names,
+            geom[0],
+            istep[0],
+            static_cast<Real>(t_new[0])
+        };
+
+    const auto fire_plot_state =
+        m_fire->prepare_plotfile2d_diagnostics(
+            fire_plot_prepare_inputs);
+#endif
 
 
     // **********************************************************************************************
@@ -621,6 +679,20 @@ ERF::Write2DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
                                            near_surface_source_comp,
                                            near_surface_sources);
         }
+
+#ifdef ERF_USE_FIRE
+        const ERFFire::ERFFirePlotfile2DFillInputs
+            fire_plot_fill_inputs{
+                plot_var_names,
+                fire_plot_state,
+                lev,
+                mf[lev],
+                mf_comp
+            };
+
+        m_fire->fill_plotfile2d_diagnostics(
+            fire_plot_fill_inputs);
+#endif
 
         const int static_output_count = static_cast<int>(plot_var_names.size());
         // If this level is anelastic then the base state pressure -- not the compressible

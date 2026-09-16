@@ -19,6 +19,63 @@ function(target_link_libraries_includes_only target visibility lib)
   endif()
 endfunction()
 
+function(erf_add_fire_sources target)
+  set(FIRE_SRC_DIR ${PROJECT_SOURCE_DIR}/Source/Fire)
+  set(FIRE_IFACE_DIR ${PROJECT_SOURCE_DIR}/Source/PhysicsInterfaces/Fire)
+
+  target_sources(${target} PRIVATE
+    ${FIRE_IFACE_DIR}/ERF_FireCheckpoint.cpp
+    ${FIRE_IFACE_DIR}/ERF_FirePlotfile2D.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireContext.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireTerrainSource.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireLevel0Advance.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireRuntimeConfig.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireSourceApply.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireLevel0Environment.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireLevel0TerrainWindSampler.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireRuntimeInit.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireSpreadOutput.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireSpreadRuntime.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireAtmosphericSource.cpp
+    ${FIRE_IFACE_DIR}/ERF_FireLevel0SourceCoupling.cpp
+    ${FIRE_SRC_DIR}/Environment/ERF_FireTerrainSurface.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FirePerimeter.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FireFrontTopology.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FireFrontCollision.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FireFrontPropagator.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_VectorPerimeterPropagator.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterRemesher.cpp
+    ${FIRE_SRC_DIR}/Front/ERF_FirePerimeterSweep.cpp
+    ${FIRE_SRC_DIR}/Behavior/ERF_RothermelFuel.cpp
+    ${FIRE_SRC_DIR}/Behavior/ERF_RothermelModel.cpp
+    ${FIRE_SRC_DIR}/Spread/ERF_RichardsEllipse.cpp
+    ${FIRE_SRC_DIR}/Spread/ERF_RichardsDirectionalSpread.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireCellCoverage.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireBurnedFraction.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireRasterGeometry.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireSurfaceLayout.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireBurnedFractionRaster.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireCellArrival.cpp
+    ${FIRE_SRC_DIR}/Raster/ERF_FireFirstArrivalRaster.cpp
+    ${FIRE_SRC_DIR}/Burn/ERF_FireCombustion.cpp
+    ${FIRE_SRC_DIR}/Burn/ERF_FireCombustionRaster.cpp
+    ${FIRE_SRC_DIR}/Burn/ERF_FireSurfaceFeedback.cpp
+  )
+
+  target_include_directories(${target} PUBLIC
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Front>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Behavior>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Spread>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Raster>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Environment>
+    $<BUILD_INTERFACE:${FIRE_SRC_DIR}/Burn>
+    $<BUILD_INTERFACE:${FIRE_IFACE_DIR}>
+  )
+
+  target_compile_definitions(${target} PUBLIC ERF_USE_FIRE)
+endfunction()
+
 function(erf_add_native_shoc_sources target)
   set(SRC_DIR ${PROJECT_SOURCE_DIR}/Source)
 
@@ -356,6 +413,10 @@ function(build_erf_lib erf_lib_name)
       ${SRC_DIR}/WindFarmParametrization/GeneralActuatorDisk/ERF_AdvanceGeneralAD.cpp
     )
     target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_WINDFARM)
+  endif()
+
+  if(ERF_ENABLE_FIRE)
+    erf_add_fire_sources(${erf_lib_name})
   endif()
 
   if(ERF_BUILD_LIBRARY_ONLY)
