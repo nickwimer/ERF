@@ -26,6 +26,7 @@ add_executable(erf_fire_unit_tests
   ${PROJECT_SOURCE_DIR}/Tests/Unit/ERF_GTestRuntimeStubs.cpp
   ERF_GTestFireTypes.cpp
   ERF_GTestFireFuelField.cpp
+  ERF_GTestFireFuelRaster.cpp
   ERF_GTestFirePerimeter.cpp
   ERF_GTestFireFront.cpp
   ERF_GTestFirePalisadesTopology.cpp
