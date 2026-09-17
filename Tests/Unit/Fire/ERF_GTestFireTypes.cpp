@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -35,7 +36,7 @@ barrier_geometry()
 {
     return {
         4,
-        2,
+        4,
         Real(0),
         Real(0),
         Real(1),
@@ -78,6 +79,16 @@ make_barrier_raster(
         state);
 }
 
+std::vector<std::pair<std::size_t, std::size_t>>
+full_height_barrier()
+{
+    return {
+        {2U, 0U},
+        {2U, 1U},
+        {2U, 2U},
+        {2U, 3U}};
+}
+
 FireFront
 make_barrier_test_front(Real right_x)
 {
@@ -87,10 +98,10 @@ make_barrier_test_front(Real right_x)
                 FireFrontRole::Outer,
                 FirePerimeter(
                     std::vector<FireVec2>{
-                        {Real(0.5), Real(0.75)},
-                        {right_x, Real(0.75)},
-                        {right_x, Real(1.25)},
-                        {Real(0.5), Real(1.25)}
+                        {Real(0.5), Real(1.5)},
+                        {right_x, Real(1.5)},
+                        {right_x, Real(2.5)},
+                        {Real(0.5), Real(2.5)}
                     })
             }
         });
@@ -355,9 +366,7 @@ TEST(FireFuelBarrier, Rk2NoContactMatchesUnconstrainedBitwise)
 TEST(FireFuelBarrier, Rk2ClipsFinalTrajectoriesAtBarrier)
 {
     const FireFuelRaster raster =
-        make_barrier_raster({
-            {2U, 0U},
-            {2U, 1U}});
+        make_barrier_raster(full_height_barrier());
     const FireFront initial =
         make_barrier_test_front(Real(1.5));
 
@@ -376,15 +385,13 @@ TEST(FireFuelBarrier, Rk2ClipsFinalTrajectoriesAtBarrier)
     EXPECT_EQ(vertices[1].x, Real(2));
     EXPECT_EQ(vertices[2].x, Real(2));
     EXPECT_GE(vertices[1].y, Real(0));
-    EXPECT_LE(vertices[2].y, Real(2));
+    EXPECT_LE(vertices[2].y, Real(4));
 }
 
 TEST(FireFuelBarrier, Rk2ClipsMidpointAndSticksOnRepeatedContact)
 {
     const FireFuelRaster raster =
-        make_barrier_raster({
-            {2U, 0U},
-            {2U, 1U}});
+        make_barrier_raster(full_height_barrier());
     const FireFront initial =
         make_barrier_test_front(Real(1.5));
 
