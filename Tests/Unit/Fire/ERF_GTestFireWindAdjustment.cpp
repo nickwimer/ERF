@@ -191,3 +191,5 @@ TEST(FireWindAdjustment, UnityWafMatchesUnadjustedRothermelRichardsPath)
 }
 
 } // namespace
+
+#include "ERF_GTestFireFuelBarrierTopologyI.H"
