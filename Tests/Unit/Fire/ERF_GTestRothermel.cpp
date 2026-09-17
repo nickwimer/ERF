@@ -392,7 +392,7 @@ TEST(FireRothermelMulticlass, Model11AreaWeightsDeadMoistureClasses)
                 0.016469572220237216, 1.0e-14);
 }
 
-TEST(FireRothermelMulticlass, DeadExtinctionPreventsLiveOnlyReaction)
+TEST(FireRothermelMulticlass, DeadExtinctionDoesNotSuppressLiveReaction)
 {
     const auto result = ERFFire::evaluate_rothermel_multiclass(
         ERFFire::make_anderson13_fuel_parameters(4),
@@ -400,19 +400,36 @@ TEST(FireRothermelMulticlass, DeadExtinctionPreventsLiveOnlyReaction)
             0.20, 0.20, 0.20, 0.05,
             4.0, 0.30});
 
+    // The characteristic dead moisture is mathematically the 0.20 input for
+    // all three dead classes. Roundoff in surface-area weighting must not
+    // leave a residual dead reaction at the exact dead extinction boundary.
+    EXPECT_NEAR(
+        static_cast<double>(result.characteristic_dead_moisture_fraction),
+        0.20, 1.0e-15);
     EXPECT_DOUBLE_EQ(
         static_cast<double>(result.dead_moisture_damping), 0.0);
     EXPECT_DOUBLE_EQ(
-        static_cast<double>(result.live_moisture_damping), 0.0);
-    EXPECT_DOUBLE_EQ(
         static_cast<double>(result.dead_reaction_intensity_w_m2), 0.0);
-    EXPECT_DOUBLE_EQ(
-        static_cast<double>(result.live_reaction_intensity_w_m2), 0.0);
-    EXPECT_DOUBLE_EQ(
-        static_cast<double>(result.reaction_intensity_w_m2), 0.0);
-    EXPECT_DOUBLE_EQ(
-        static_cast<double>(result.no_wind_no_slope_ros_mps), 0.0);
-    EXPECT_DOUBLE_EQ(
+
+    // Rothermel/Albini damp live and dead reaction intensity separately.
+    // With live moisture 0.05 and live extinction limited to at least the
+    // dead extinction value 0.20, the live term remains active.
+    EXPECT_NEAR(
+        static_cast<double>(result.live_moisture_of_extinction),
+        0.20, 1.0e-15);
+    EXPECT_NEAR(
+        static_cast<double>(result.live_moisture_damping),
+        0.616875, 1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(result.live_reaction_intensity_w_m2),
+        1198914.2533346876, 1.0e-6);
+    EXPECT_EQ(
+        result.reaction_intensity_w_m2,
+        result.live_reaction_intensity_w_m2);
+    EXPECT_NEAR(
+        static_cast<double>(result.no_wind_no_slope_ros_mps),
+        0.02315414913343321, 1.0e-14);
+    EXPECT_GT(
         static_cast<double>(result.aligned_heading_ros_mps), 0.0);
     EXPECT_GT(
         static_cast<double>(result.heat_sink_j_m3), 0.0);

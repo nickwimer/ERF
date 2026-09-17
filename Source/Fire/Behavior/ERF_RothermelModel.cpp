@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -233,6 +234,32 @@ validate_inputs (const RothermelInputs& inputs)
         throw std::invalid_argument(
             "Rothermel slope tangent magnitude must be finite and non-negative");
     }
+}
+
+bool
+moisture_at_or_above_extinction (
+    amrex::Real moisture,
+    amrex::Real moisture_of_extinction) noexcept
+{
+    if (moisture >= moisture_of_extinction) {
+        return true;
+    }
+
+    // Multi-class surface-area weighting can place a mathematically identical
+    // characteristic moisture a few ulps below the input extinction value.
+    // Treat only roundoff-scale differences as equality; this does not create
+    // a physically meaningful sub-extinction dead-moisture deadband.
+    const amrex::Real scale = std::max(
+        amrex::Real(1.0),
+        std::max(
+            std::abs(moisture),
+            std::abs(moisture_of_extinction)));
+    const amrex::Real tolerance =
+        amrex::Real(128.0)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * scale;
+
+    return moisture_of_extinction - moisture <= tolerance;
 }
 
 amrex::Real
@@ -606,18 +633,23 @@ evaluate_rothermel_multiclass (
                     fuel.effective_mineral_fraction,
                     amrex::Real(-0.19)));
 
-    const amrex::Real eta_dead =
-        moisture_damping(
+    const bool dead_at_extinction =
+        moisture_at_or_above_extinction(
             characteristic_dead_moisture,
             fuel.dead_moisture_of_extinction);
 
-    // Albini's description of the computer formulation requires live fuel to
-    // remain a heat sink when the characteristic dead fuel is at or above its
-    // extinction moisture; it must not contribute reaction intensity alone.
+    const amrex::Real eta_dead =
+        dead_at_extinction
+        ? amrex::Real(0.0)
+        : moisture_damping(
+            characteristic_dead_moisture,
+            fuel.dead_moisture_of_extinction);
+
+    // Dead and live reaction-intensity terms are damped independently. Dead
+    // moisture influences the calculated live moisture of extinction above,
+    // but reaching dead extinction is not an additional live-reaction gate.
     const amrex::Real eta_live =
         has_live
-        && characteristic_dead_moisture
-            < fuel.dead_moisture_of_extinction
         ? moisture_damping(
             characteristic_live_moisture,
             live_moisture_of_extinction)
