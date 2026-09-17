@@ -650,6 +650,27 @@ if(ERF_ENABLE_MPI)
   )
 
   add_test(
+    NAME FireTimeStepIntegration.NonBurnableV4RankChangeInvariant
+    COMMAND ${CMAKE_COMMAND}
+      -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+      -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_mpi_decomposition_analysis>
+      -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecomposition.inputs
+      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+      -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
+      -DMPIEXEC_PREFLAGS_CSV=${fire_mpi_preflags_csv}
+      -DMPIEXEC_POSTFLAGS_CSV=${fire_mpi_postflags_csv}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireNonBurnableV4RankChange.cmake
+  )
+  set_tests_properties(
+    FireTimeStepIntegration.NonBurnableV4RankChangeInvariant
+    PROPERTIES
+      LABELS "unit;parallel"
+      PROCESSORS 2
+      TIMEOUT 300
+      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+
+  add_test(
     NAME FireTimeStepIntegration.MpiTerrainRestartInvariant
     COMMAND ${CMAKE_COMMAND}
       -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
