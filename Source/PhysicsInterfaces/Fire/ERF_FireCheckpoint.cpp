@@ -1,5 +1,6 @@
 #include <ERF_FireCheckpoint.H>
 #include <ERF_FireCheckpointV4.H>
+#include <ERF_FireFuelSource.H>
 
 #include <ERF_FireContext.H>
 #include <ERF_FireRuntimeInit.H>
@@ -232,6 +233,12 @@ ERFFireContext::restore_checkpoint(
                 "unsupported ERF-Fire checkpoint format version");
         }
 
+        if (checkpoint_version != 4
+            && !runtime_options_.fuel_raster_file.empty()) {
+            throw std::runtime_error(
+                "fire.fuel_raster_file cannot be applied to ERF-Fire checkpoint formats v1-v3; restart without the spatial fuel file or use a v4 checkpoint");
+        }
+
         ERFFireSpreadRuntimeState restore_state;
         restore_state.config = expected_config;
         restore_state.current_time_s =
@@ -366,6 +373,24 @@ ERFFireContext::restore_checkpoint(
                 &v4_spatial_fuel_fingerprint_fnv1a64,
                 1,
                 amrex::ParallelDescriptor::IOProcessorNumber());
+
+            if (!runtime_options_.fuel_raster_file.empty()) {
+                const FireFuelRaster current_spatial_fuel =
+                    read_erf_fire_aligned_fuel_raster_text_file(
+                        runtime_options_.fuel_raster_file,
+                        expected_config.raster_geometry);
+
+                const std::uint64_t current_fingerprint =
+                    collective_fire_fuel_raster_fingerprint_fnv1a64(
+                        current_spatial_fuel);
+
+                if (current_fingerprint
+                    != static_cast<std::uint64_t>(
+                        v4_spatial_fuel_fingerprint_fnv1a64)) {
+                    throw std::runtime_error(
+                        "ERF-Fire v4 checkpoint spatial fuel fingerprint does not match current fire.fuel_raster_file");
+                }
+            }
         }
 
         if (checkpoint_version == 1) {
