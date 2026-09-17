@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace ERFFire
@@ -220,21 +221,20 @@ public:
      *
      * This accessor is noncollective. Parallel checkpoint/output code must use
      * collective_snapshot_state_to_io_rank() so ordinary runtime access never
-     * hides full-domain communication. Spatial-fuel runtimes reject snapshot
-     * serialization until material provenance/persistence is added.
+     * hides full-domain communication. Spatial-fuel runtimes reject this legacy
+     * canonical snapshot because v4 persists material in a distributed raster.
      */
     [[nodiscard]] ERFFireSpreadRuntimeState
     snapshot_state() const;
 
     /**
-     * Collectively pack distributed raster state onto the AMReX IO rank.
+     * Collectively pack legacy canonical raster state onto the AMReX IO rank.
      *
      * Every rank must call this method in the same collective order. The
      * returned perimeter/configuration/scalars are valid on every rank, while
      * full canonical raster vectors are populated only on IOProcessor().
-     * Ordinary snapshot_state() remains deliberately noncollective. Spatial-
-     * fuel runtimes reject checkpoint packing until material persistence is
-     * implemented rather than silently producing an incomplete restart.
+     * Spatial-fuel runtimes reject this legacy packing path; v4 checkpointing
+     * preserves spatial material in its distributed checkpoint raster instead.
      */
     [[nodiscard]] ERFFireSpreadRuntimeState
     collective_snapshot_state_to_io_rank() const;
@@ -252,14 +252,90 @@ public:
         ERFFireSpreadRuntimeState state);
 
     /**
-     * Collectively restore version-2 state from a distributed checkpoint
-     * MultiFab. Config/current_time_s must already be identical on every rank;
-     * perimeter and scalar raster metadata may be populated only on IOProcessor().
+     * Collectively restore version-2/3 dynamic state from a distributed
+     * checkpoint MultiFab. Config/current_time_s must already be identical on
+     * every rank; perimeter and scalar raster metadata may be populated only on
+     * IOProcessor(). Spatial v4 material is attached only after its independent
+     * schema/fingerprint validation succeeds.
      */
     [[nodiscard]] static ERFFireSpreadRuntime
     collective_restore_from_checkpoint_raster(
         ERFFireSpreadRuntimeState state,
         const amrex::MultiFab& checkpoint_raster);
+
+    /**
+     * Attach already validated spatial material to a restored dynamic state.
+     *
+     * This is the v4 checkpoint adapter boundary. It performs no MPI
+     * communication and refuses geometry or FM1 base-physics mismatches.
+     */
+    [[nodiscard]] static ERFFireSpreadRuntime
+    attach_spatial_fuel_after_checkpoint_restore(
+        ERFFireSpreadRuntime restored_runtime,
+        FireFuelRaster spatial_fuel_raster)
+    {
+        if (restored_runtime.spatial_fuel_raster_) {
+            throw std::logic_error(
+                "restored Fire runtime already owns spatial fuel");
+        }
+
+        const auto& runtime_geometry =
+            restored_runtime.config_.raster_geometry;
+        const auto& fuel_geometry =
+            spatial_fuel_raster.geometry();
+        if (runtime_geometry.nx != fuel_geometry.nx
+            || runtime_geometry.ny != fuel_geometry.ny
+            || runtime_geometry.xlo_m != fuel_geometry.xlo_m
+            || runtime_geometry.ylo_m != fuel_geometry.ylo_m
+            || runtime_geometry.dx_m != fuel_geometry.dx_m
+            || runtime_geometry.dy_m != fuel_geometry.dy_m) {
+            throw std::invalid_argument(
+                "restored spatial Fire fuel geometry does not match runtime geometry");
+        }
+
+        const RothermelFuelParameters expected_fuel =
+            make_fm1_fuel_parameters();
+        const auto& fuel = restored_runtime.config_.fuel;
+        const bool same_fuel =
+            fuel.dead_1h_load_kg_m2 == expected_fuel.dead_1h_load_kg_m2
+            && fuel.dead_1h_sav_m_inv == expected_fuel.dead_1h_sav_m_inv
+            && fuel.fuel_bed_depth_m == expected_fuel.fuel_bed_depth_m
+            && fuel.dead_heat_content_j_kg == expected_fuel.dead_heat_content_j_kg
+            && fuel.particle_density_kg_m3 == expected_fuel.particle_density_kg_m3
+            && fuel.total_mineral_fraction == expected_fuel.total_mineral_fraction
+            && fuel.effective_mineral_fraction == expected_fuel.effective_mineral_fraction
+            && fuel.dead_moisture_of_extinction == expected_fuel.dead_moisture_of_extinction;
+        if (!same_fuel) {
+            throw std::invalid_argument(
+                "restored spatial Fire runtime requires canonical FM1 spread parameters");
+        }
+
+        const FireCombustionParameters expected_combustion =
+            make_fm1_combustion_parameters(
+                restored_runtime.config_
+                    .dead_fuel_moisture_fraction);
+        const auto& combustion =
+            restored_runtime.config_.combustion_parameters;
+        const bool same_combustion =
+            combustion.dry_fuel_load_kg_m2
+                == expected_combustion.dry_fuel_load_kg_m2
+            && combustion.sensible_heat_release_j_kg_dry
+                == expected_combustion.sensible_heat_release_j_kg_dry
+            && combustion.fuel_moisture_fraction
+                == expected_combustion.fuel_moisture_fraction
+            && combustion.burn_time_constant_s
+                == expected_combustion.burn_time_constant_s
+            && combustion.combustion_water_yield_kg_per_kg_dry
+                == expected_combustion.combustion_water_yield_kg_per_kg_dry;
+        if (!same_combustion) {
+            throw std::invalid_argument(
+                "restored spatial Fire runtime requires canonical FM1 combustion parameters");
+        }
+
+        restored_runtime.spatial_fuel_raster_.emplace(
+            std::move(spatial_fuel_raster));
+        return restored_runtime;
+    }
 
     /**
      * Advance one fire step using sampled reference wind directly as the
@@ -394,7 +470,7 @@ private:
     // retain no references into another runtime.
     FireFuelField fuel_field_;
     // Static distributed material is immutable/shareable. Optional keeps the
-    // existing uniform runtime O(1) and checkpoint schema unchanged.
+    // existing uniform runtime O(1) and legacy checkpoint schema unchanged.
     std::optional<FireFuelRaster> spatial_fuel_raster_;
     FireFront front_;
     FireBurnedFractionRaster burned_fraction_;
