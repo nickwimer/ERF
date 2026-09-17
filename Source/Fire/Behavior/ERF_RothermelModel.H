@@ -30,13 +30,6 @@ struct RothermelInputs
 };
 
 /**
- * Audit-oriented diagnostics from the Rothermel calculation.
- *
- * Public dimensional quantities are converted back to SI even though the
- * published Rothermel/Albini correlations are evaluated internally in their
- * native English-unit basis.
- */
-/**
  * Environmental inputs for the original-13 multi-class Rothermel calculation.
  *
  * Moistures are kg water per kg oven-dry fuel. Values for absent particle
@@ -90,6 +83,13 @@ struct RothermelMulticlassResult
     amrex::Real aligned_heading_ros_mps{};
 };
 
+/**
+ * Audit-oriented diagnostics from the single-class Rothermel calculation.
+ *
+ * Public dimensional quantities are converted back to SI even though the
+ * published Rothermel/Albini correlations are evaluated internally in their
+ * native English-unit basis.
+ */
 struct RothermelResult
 {
     amrex::Real net_fuel_loading_kg_m2{};
