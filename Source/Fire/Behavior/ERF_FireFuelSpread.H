@@ -63,30 +63,30 @@ try_make_fire_fuel_spread_inputs(
         return FireFuelSpreadInputStatus::missing_required_moisture;
     }
 
-    const auto read_if_required =
-        [&moisture, &contract] AMREX_GPU_HOST_DEVICE (
+    const auto required_value =
+        [&moisture, required_mask = contract.required_mask]
+        AMREX_GPU_HOST_DEVICE (
             FireFuelMoistureClass component) noexcept
         {
             const unsigned int bit =
                 fire_fuel_moisture_component_bit(component);
-            if ((contract.required_mask & bit) == 0u) {
+            if ((required_mask & bit) == 0u) {
                 return amrex::Real(0);
             }
 
             amrex::Real value{};
-            return moisture.try_get(component, value)
-                ? value
-                : amrex::Real(0);
+            (void)moisture.try_get(component, value);
+            return value;
         };
 
     result.anderson13_model_number =
         fire_fuel_model_number(model_id);
     result.rothermel = {
-        read_if_required(FireFuelMoistureClass::Dead1h),
-        read_if_required(FireFuelMoistureClass::Dead10h),
-        read_if_required(FireFuelMoistureClass::Dead100h),
-        read_if_required(FireFuelMoistureClass::LiveHerbaceous)
-            + read_if_required(FireFuelMoistureClass::LiveWoody),
+        required_value(FireFuelMoistureClass::Dead1h),
+        required_value(FireFuelMoistureClass::Dead10h),
+        required_value(FireFuelMoistureClass::Dead100h),
+        required_value(FireFuelMoistureClass::LiveHerbaceous)
+            + required_value(FireFuelMoistureClass::LiveWoody),
         model_wind_speed_mps,
         slope_tangent_magnitude
     };
