@@ -1,5 +1,6 @@
 #include <ERF_FireFuelBarrier.H>
 #include <ERF_FireFuelBarrierAdvance.H>
+#include <ERF_FireFuelBarrierRemesher.H>
 #include <ERF_FireTypes.H>
 
 #include <AMReX_ParallelDescriptor.H>
@@ -616,6 +617,126 @@ TEST(FireFuelBarrier, Rk2RejectsFinalEdgePenetrationAfterLegalMidpoint)
             raster),
         std::runtime_error);
     EXPECT_EQ(calls, 2);
+}
+
+TEST(FireFuelBarrier, BarrierSafeRemeshMatchesOrdinaryWithoutContacts)
+{
+    const FireFuelRaster raster = make_barrier_raster({});
+    const FireFront front = make_barrier_test_front(Real(1.5));
+    const ERFFire::FirePerimeterRemeshOptions options{
+        Real(0.25), Real(0.75), Real(0)};
+
+    const auto ordinary = ERFFire::remesh_front(front, options);
+    const auto guarded =
+        ERFFire::collective_remesh_fire_front_avoiding_nonburnable(
+            front,
+            options,
+            raster);
+
+    EXPECT_EQ(
+        guarded.stats.vertices_removed,
+        ordinary.stats.vertices_removed);
+    EXPECT_EQ(
+        guarded.stats.vertices_added,
+        ordinary.stats.vertices_added);
+    ASSERT_EQ(
+        guarded.front.components().size(),
+        ordinary.front.components().size());
+
+    for (std::size_t component = 0;
+         component < ordinary.front.components().size();
+         ++component) {
+        const auto& expected =
+            ordinary.front.components()[component]
+                .perimeter.vertices_m();
+        const auto& actual =
+            guarded.front.components()[component]
+                .perimeter.vertices_m();
+        ASSERT_EQ(actual.size(), expected.size());
+        for (std::size_t vertex = 0;
+             vertex < expected.size();
+             ++vertex) {
+            EXPECT_EQ(actual[vertex].x, expected[vertex].x);
+            EXPECT_EQ(actual[vertex].y, expected[vertex].y);
+        }
+    }
+}
+
+TEST(FireFuelBarrier, BarrierSafeRemeshRejectsCoarseningChordThroughBarrier)
+{
+    const FireFuelRaster raster =
+        make_barrier_raster({{2U, 1U}});
+    const FireFront front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                FirePerimeter(
+                    std::vector<FireVec2>{
+                        {Real(1.0), Real(1.6)},
+                        {Real(2.0), Real(1.6)},
+                        {Real(2.0), Real(2.0)},
+                        {Real(2.4), Real(2.0)},
+                        {Real(2.4), Real(3.5)},
+                        {Real(1.0), Real(3.5)}
+                    })
+            }
+        });
+    const ERFFire::FirePerimeterRemeshOptions options{
+        Real(0.5), Real(1.2), Real(0.3)};
+
+    ASSERT_TRUE(
+        ERFFire::collective_nonburnable_front_edge_contacts(
+            front,
+            raster).empty());
+
+    const auto ordinary = ERFFire::remesh_front(front, options);
+    EXPECT_FALSE(
+        ERFFire::collective_nonburnable_front_edge_contacts(
+            ordinary.front,
+            raster).empty());
+
+    EXPECT_THROW(
+        (void)ERFFire::collective_remesh_fire_front_avoiding_nonburnable(
+            front,
+            options,
+            raster),
+        std::runtime_error);
+}
+
+TEST(FireFuelBarrier, BarrierSafeRemeshAllowsBoundaryRefinement)
+{
+    const FireFuelRaster raster =
+        make_barrier_raster(full_height_barrier());
+    const FireFront front(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                FirePerimeter(
+                    std::vector<FireVec2>{
+                        {Real(0.5), Real(0.5)},
+                        {Real(2.0), Real(0.5)},
+                        {Real(2.0), Real(3.5)},
+                        {Real(0.5), Real(3.5)}
+                    })
+            }
+        });
+    const ERFFire::FirePerimeterRemeshOptions options{
+        Real(0.25), Real(1.0), Real(0)};
+
+    const auto result =
+        ERFFire::collective_remesh_fire_front_avoiding_nonburnable(
+            front,
+            options,
+            raster);
+
+    EXPECT_EQ(result.stats.vertices_removed, 0U);
+    EXPECT_EQ(result.stats.vertices_added, 6U);
+    ASSERT_EQ(result.front.components().size(), 1U);
+    EXPECT_EQ(result.front.components()[0].perimeter.size(), 10U);
+    EXPECT_TRUE(
+        ERFFire::collective_nonburnable_front_edge_contacts(
+            result.front,
+            raster).empty());
 }
 
 } // namespace
