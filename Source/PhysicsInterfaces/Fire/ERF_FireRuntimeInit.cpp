@@ -2,6 +2,7 @@
 
 #include <ERF_FireCombustion.H>
 #include <ERF_FireFuelField.H>
+#include <ERF_FireFuelSource.H>
 #include <ERF_FirePerimeter.H>
 #include <ERF_FireSpreadRuntime.H>
 #include <ERF_RothermelFuel.H>
@@ -212,11 +213,26 @@ make_erf_fire_spread_runtime(
 {
     ERFFireSpreadConfig config =
         make_erf_fire_spread_config(options, geometry);
+    FirePerimeter ignition =
+        make_circular_ignition(options, geometry);
+
+    if (options.fuel_raster_file.empty()) {
+        return std::make_unique<ERFFireSpreadRuntime>(
+            std::move(ignition),
+            initial_time_s,
+            std::move(config));
+    }
+
+    FireFuelRaster spatial_fuel =
+        read_erf_fire_aligned_fuel_raster_text_file(
+            options.fuel_raster_file,
+            config.raster_geometry);
 
     return std::make_unique<ERFFireSpreadRuntime>(
-        make_circular_ignition(options, geometry),
+        std::move(ignition),
         initial_time_s,
-        std::move(config));
+        std::move(config),
+        std::move(spatial_fuel));
 }
 
 } // namespace ERFFire
