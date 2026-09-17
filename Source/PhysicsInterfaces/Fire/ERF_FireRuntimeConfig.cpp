@@ -149,6 +149,16 @@ read_erf_fire_runtime_options(
             "Supports only fire.fuel_model = FM1");
     }
 
+    if (pp_fire.contains("fuel_raster_file")) {
+        if (!pp_fire.query(
+                "fuel_raster_file",
+                options.fuel_raster_file)
+            || options.fuel_raster_file.empty()) {
+            Error(
+                "fire.fuel_raster_file must name a nonempty aligned ERF-Fire fuel raster file");
+        }
+    }
+
     if (!pp_fire.query(
             "dead_fuel_moisture_fraction",
             options.dead_fuel_moisture_fraction)) {
