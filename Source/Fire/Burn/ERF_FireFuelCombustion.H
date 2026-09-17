@@ -3,6 +3,7 @@
 
 #include <ERF_FireCombustion.H>
 #include <ERF_FireFuelRaster.H>
+#include <ERF_RothermelFuel.H>
 
 #include <AMReX_Extension.H>
 #include <AMReX_GpuQualifiers.H>
@@ -16,9 +17,9 @@ namespace ERFFire
  * Result of resolving one spatial fuel cell into the current semi-empirical
  * combustion parameterization.
  *
- * NonBurnable is deliberately rejected here until front/barrier evolution can
- * guarantee that such cells are never ignited. UnsupportedModel is reserved
- * for future catalog identifiers whose combustion policy has not been defined.
+ * NonBurnable remains a distinct no-combustion material. UnsupportedModel
+ * keeps this production resolver fail-closed for FM2-FM13 until the runtime
+ * explicitly adopts the separate Anderson-13 accounting policy above.
  */
 enum class FireFuelCombustionParameterStatus : int
 {
@@ -28,6 +29,208 @@ enum class FireFuelCombustionParameterStatus : int
     unsupported_model = 3,
     missing_dead_1h_moisture = 4
 };
+
+/**
+ * Status for resolving an original-13 cell into the scalar semi-empirical
+ * combustion reservoir. This API is intentionally separate from the current
+ * production FM1-only resolver below.
+ */
+enum class FireFuelCombustionAccountingStatus : int
+{
+    success = 0,
+    invalid_base_parameters = 1,
+    nonburnable = 2,
+    invalid_model = 3,
+    missing_required_moisture = 4,
+    overflow_error = 5
+};
+
+struct FireFuelCombustionAccounting
+{
+    FireCombustionParameters parameters{};
+    amrex::Real prescribed_water_load_kg_m2{};
+};
+
+namespace detail
+{
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real
+fire_combustion_required_moisture_or_zero(
+    const FireFuelMoisture& moisture,
+    unsigned int required_mask,
+    FireFuelMoistureClass component) noexcept
+{
+    const unsigned int bit =
+        fire_fuel_moisture_component_bit(component);
+    if ((required_mask & bit) == 0u) {
+        return amrex::Real(0);
+    }
+
+    amrex::Real value{};
+    (void)moisture.try_get(component, value);
+    return value;
+}
+
+} // namespace detail
+
+/**
+ * Resolve an Anderson/Albini material cell into conservative scalar combustion
+ * accounting without enabling it in the production runtime.
+ *
+ * The scalar reservoir cannot retain separate particle classes. Therefore its
+ * dry load is the sum of the published 1-h, 10-h, 100-h, and live dry loads,
+ * while fuel_moisture_fraction is the dry-mass-weighted prescribed water/dry
+ * mass ratio. This preserves both total oven-dry fuel and prescribed initial
+ * water exactly at ignition. Sensible heat release per kg dry fuel, exponential
+ * burn time, and combustion-water yield are inherited from base; those remain
+ * the documented semi-empirical combustion policy rather than being inferred
+ * from the Rothermel spread catalog.
+ */
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+FireFuelCombustionAccountingStatus
+try_make_anderson13_fire_combustion_accounting(
+    const FireCombustionParameters& base,
+    const FireFuelRasterCell& fuel_cell,
+    FireFuelCombustionAccounting& result) noexcept
+{
+    result = {};
+
+    if (!detail::combustion_parameters_valid(base)) {
+        return FireFuelCombustionAccountingStatus::
+            invalid_base_parameters;
+    }
+
+    const auto contract =
+        fire_fuel_model_moisture_contract(
+            fuel_cell.model_id);
+    if (!contract.valid_model) {
+        return FireFuelCombustionAccountingStatus::
+            invalid_model;
+    }
+    if (!contract.burnable) {
+        return FireFuelCombustionAccountingStatus::
+            nonburnable;
+    }
+    if (!fire_fuel_model_moisture_complete(
+            fuel_cell.model_id,
+            fuel_cell.moisture)) {
+        return FireFuelCombustionAccountingStatus::
+            missing_required_moisture;
+    }
+
+    Anderson13FuelParameters fuel{};
+    const int model_number =
+        fire_fuel_model_number(fuel_cell.model_id);
+    if (!try_make_anderson13_fuel_parameters(
+            model_number,
+            fuel)) {
+        return FireFuelCombustionAccountingStatus::
+            invalid_model;
+    }
+
+    const amrex::Real dead_1h_moisture =
+        detail::fire_combustion_required_moisture_or_zero(
+            fuel_cell.moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::Dead1h);
+    const amrex::Real dead_10h_moisture =
+        detail::fire_combustion_required_moisture_or_zero(
+            fuel_cell.moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::Dead10h);
+    const amrex::Real dead_100h_moisture =
+        detail::fire_combustion_required_moisture_or_zero(
+            fuel_cell.moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::Dead100h);
+    const amrex::Real live_moisture =
+        detail::fire_combustion_required_moisture_or_zero(
+            fuel_cell.moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::LiveHerbaceous)
+        + detail::fire_combustion_required_moisture_or_zero(
+            fuel_cell.moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::LiveWoody);
+
+    const amrex::Real total_dry_load =
+        fuel.dead_1h.dry_load_kg_m2
+        + fuel.dead_10h.dry_load_kg_m2
+        + fuel.dead_100h.dry_load_kg_m2
+        + fuel.live_foliage.dry_load_kg_m2;
+
+    const amrex::Real prescribed_water_load =
+        fuel.dead_1h.dry_load_kg_m2
+            * dead_1h_moisture
+        + fuel.dead_10h.dry_load_kg_m2
+            * dead_10h_moisture
+        + fuel.dead_100h.dry_load_kg_m2
+            * dead_100h_moisture
+        + fuel.live_foliage.dry_load_kg_m2
+            * live_moisture;
+
+    if (!amrex::Math::isfinite(total_dry_load)
+        || !(total_dry_load > amrex::Real(0))
+        || !amrex::Math::isfinite(prescribed_water_load)
+        || prescribed_water_load < amrex::Real(0)) {
+        return FireFuelCombustionAccountingStatus::
+            overflow_error;
+    }
+
+    result.parameters = base;
+    result.parameters.dry_fuel_load_kg_m2 =
+        total_dry_load;
+    result.parameters.fuel_moisture_fraction =
+        prescribed_water_load / total_dry_load;
+    result.prescribed_water_load_kg_m2 =
+        prescribed_water_load;
+
+    if (!amrex::Math::isfinite(
+            result.parameters.fuel_moisture_fraction)
+        || !detail::combustion_parameters_valid(
+            result.parameters)) {
+        result = {};
+        return FireFuelCombustionAccountingStatus::
+            overflow_error;
+    }
+
+    return FireFuelCombustionAccountingStatus::success;
+}
+
+/** Host convenience wrapper for the conservative original-13 accounting API. */
+[[nodiscard]] inline FireFuelCombustionAccounting
+make_anderson13_fire_combustion_accounting(
+    const FireCombustionParameters& base,
+    const FireFuelRasterCell& fuel_cell)
+{
+    FireFuelCombustionAccounting result{};
+    switch (try_make_anderson13_fire_combustion_accounting(
+                base,
+                fuel_cell,
+                result)) {
+    case FireFuelCombustionAccountingStatus::success:
+        return result;
+    case FireFuelCombustionAccountingStatus::invalid_base_parameters:
+        throw std::invalid_argument(
+            "Fire Anderson-13 combustion base parameters are invalid");
+    case FireFuelCombustionAccountingStatus::nonburnable:
+        throw std::invalid_argument(
+            "Fire Anderson-13 combustion accounting does not apply to NonBurnable material");
+    case FireFuelCombustionAccountingStatus::invalid_model:
+        throw std::invalid_argument(
+            "Fire Anderson-13 combustion accounting has an invalid fuel model");
+    case FireFuelCombustionAccountingStatus::missing_required_moisture:
+        throw std::invalid_argument(
+            "Fire Anderson-13 combustion accounting is missing required prescribed moisture");
+    case FireFuelCombustionAccountingStatus::overflow_error:
+        throw std::overflow_error(
+            "Fire Anderson-13 combustion accounting is not finite");
+    }
+
+    throw std::logic_error(
+        "Fire Anderson-13 combustion accounting status is invalid");
+}
 
 /**
  * Resolve local combustion parameters for one material cell without throwing.
@@ -101,7 +304,7 @@ make_fire_combustion_parameters_for_fuel_cell(
             "Fire local combustion base parameters are invalid");
     case FireFuelCombustionParameterStatus::nonburnable:
         throw std::invalid_argument(
-            "Fire local combustion cannot ignite NonBurnable material before barrier dynamics are enabled");
+            "Fire local combustion parameters do not apply to NonBurnable material");
     case FireFuelCombustionParameterStatus::unsupported_model:
         throw std::invalid_argument(
             "Fire local combustion fuel model is not implemented");

@@ -6,6 +6,7 @@
 #include <ERF_FireFuelSpread.H>
 #include <ERF_FirePerimeter.H>
 
+#include <AMReX_Gpu.H>
 #include <AMReX_ParallelDescriptor.H>
 #include <gtest/gtest.h>
 
@@ -28,6 +29,8 @@ using ERFFire::FireCombustionParameters;
 using ERFFire::FireCombustionRaster;
 using ERFFire::FireCombustionRasterOptions;
 using ERFFire::FireCombustionState;
+using ERFFire::FireFuelCombustionAccounting;
+using ERFFire::FireFuelCombustionAccountingStatus;
 using ERFFire::FireFuelCombustionParameterStatus;
 using ERFFire::FireFuelModelId;
 using ERFFire::FireFuelModelMoistureContract;
@@ -826,6 +829,298 @@ TEST(FireFuelRaster, Anderson13ModelIdsRoundTripCollectively)
                 cell.moisture));
     }
 }
+
+TEST(FireFuelCombustionAccounting, AllModelsConserveDryFuelAndPrescribedWater)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+
+    for (int raw = 1; raw <= 13; ++raw) {
+        FireFuelRasterCell cell;
+        cell.model_id =
+            static_cast<FireFuelModelId>(raw);
+        cell.moisture =
+            complete_model_moisture(cell.model_id);
+
+        const FireFuelCombustionAccounting accounting =
+            ERFFire::make_anderson13_fire_combustion_accounting(
+                base,
+                cell);
+        const auto fuel =
+            ERFFire::make_anderson13_fuel_parameters(raw);
+
+        const Real expected_dry =
+            fuel.dead_1h.dry_load_kg_m2
+            + fuel.dead_10h.dry_load_kg_m2
+            + fuel.dead_100h.dry_load_kg_m2
+            + fuel.live_foliage.dry_load_kg_m2;
+
+        const auto required_moisture =
+            [&cell](MoistureClass component) {
+                const auto contract =
+                    ERFFire::fire_fuel_model_moisture_contract(
+                        cell.model_id);
+                const unsigned int bit =
+                    ERFFire::fire_fuel_moisture_component_bit(
+                        component);
+                if ((contract.required_mask & bit) == 0u) {
+                    return Real(0);
+                }
+                return cell.moisture.get(component);
+            };
+
+        const Real expected_live_moisture =
+            required_moisture(
+                MoistureClass::LiveHerbaceous)
+            + required_moisture(
+                MoistureClass::LiveWoody);
+        const Real expected_water =
+            fuel.dead_1h.dry_load_kg_m2
+                * required_moisture(
+                    MoistureClass::Dead1h)
+            + fuel.dead_10h.dry_load_kg_m2
+                * required_moisture(
+                    MoistureClass::Dead10h)
+            + fuel.dead_100h.dry_load_kg_m2
+                * required_moisture(
+                    MoistureClass::Dead100h)
+            + fuel.live_foliage.dry_load_kg_m2
+                * expected_live_moisture;
+
+        EXPECT_EQ(
+            accounting.parameters.dry_fuel_load_kg_m2,
+            expected_dry)
+            << "fuel model " << raw;
+        EXPECT_EQ(
+            accounting.prescribed_water_load_kg_m2,
+            expected_water)
+            << "fuel model " << raw;
+        EXPECT_EQ(
+            accounting.parameters.fuel_moisture_fraction,
+            expected_water / expected_dry)
+            << "fuel model " << raw;
+
+        EXPECT_EQ(
+            accounting.parameters
+                .sensible_heat_release_j_kg_dry,
+            base.sensible_heat_release_j_kg_dry);
+        EXPECT_EQ(
+            accounting.parameters.burn_time_constant_s,
+            base.burn_time_constant_s);
+        EXPECT_EQ(
+            accounting.parameters
+                .combustion_water_yield_kg_per_kg_dry,
+            base.combustion_water_yield_kg_per_kg_dry);
+
+        EXPECT_EQ(
+            accounting.parameters.dry_fuel_load_kg_m2
+                * accounting.parameters
+                    .fuel_moisture_fraction,
+            accounting.prescribed_water_load_kg_m2);
+    }
+}
+
+TEST(FireFuelCombustionAccounting, FM1IsExactLegacyLocalParameterProjection)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM1;
+    cell.moisture.set(
+        MoistureClass::Dead1h,
+        Real(0.11));
+
+    const FireCombustionParameters legacy =
+        ERFFire::make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell);
+    const FireFuelCombustionAccounting accounting =
+        ERFFire::make_anderson13_fire_combustion_accounting(
+            base,
+            cell);
+
+    EXPECT_EQ(
+        accounting.parameters.dry_fuel_load_kg_m2,
+        legacy.dry_fuel_load_kg_m2);
+    EXPECT_EQ(
+        accounting.parameters.sensible_heat_release_j_kg_dry,
+        legacy.sensible_heat_release_j_kg_dry);
+    EXPECT_EQ(
+        accounting.parameters.fuel_moisture_fraction,
+        legacy.fuel_moisture_fraction);
+    EXPECT_EQ(
+        accounting.parameters.burn_time_constant_s,
+        legacy.burn_time_constant_s);
+    EXPECT_EQ(
+        accounting.parameters.combustion_water_yield_kg_per_kg_dry,
+        legacy.combustion_water_yield_kg_per_kg_dry);
+    EXPECT_EQ(
+        accounting.prescribed_water_load_kg_m2,
+        legacy.dry_fuel_load_kg_m2
+            * legacy.fuel_moisture_fraction);
+}
+
+TEST(FireFuelCombustionAccounting, MaterialFailuresRemainDistinct)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+    FireFuelCombustionAccounting accounting{};
+
+    FireFuelRasterCell incomplete;
+    incomplete.model_id = FireFuelModelId::FM2;
+    incomplete.moisture.set(
+        MoistureClass::Dead1h,
+        Real(0.08));
+
+    EXPECT_EQ(
+        ERFFire::try_make_anderson13_fire_combustion_accounting(
+            base,
+            incomplete,
+            accounting),
+        FireFuelCombustionAccountingStatus::
+            missing_required_moisture);
+
+    FireFuelRasterCell nonburnable;
+    nonburnable.model_id =
+        FireFuelModelId::NonBurnable;
+    EXPECT_EQ(
+        ERFFire::try_make_anderson13_fire_combustion_accounting(
+            base,
+            nonburnable,
+            accounting),
+        FireFuelCombustionAccountingStatus::nonburnable);
+
+    FireFuelRasterCell invalid;
+    invalid.model_id =
+        static_cast<FireFuelModelId>(99);
+    EXPECT_EQ(
+        ERFFire::try_make_anderson13_fire_combustion_accounting(
+            base,
+            invalid,
+            accounting),
+        FireFuelCombustionAccountingStatus::invalid_model);
+
+    FireCombustionParameters invalid_base = base;
+    invalid_base.burn_time_constant_s = Real(0);
+    FireFuelRasterCell fm1;
+    fm1.model_id = FireFuelModelId::FM1;
+    fm1.moisture.set(
+        MoistureClass::Dead1h,
+        Real(0.08));
+    EXPECT_EQ(
+        ERFFire::try_make_anderson13_fire_combustion_accounting(
+            invalid_base,
+            fm1,
+            accounting),
+        FireFuelCombustionAccountingStatus::
+            invalid_base_parameters);
+}
+
+TEST(FireFuelCombustionAccounting, ProductionResolverRemainsFailClosedForFM2)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM2;
+    cell.moisture =
+        complete_model_moisture(cell.model_id);
+
+    FireFuelCombustionAccounting accounting{};
+    ASSERT_EQ(
+        ERFFire::try_make_anderson13_fire_combustion_accounting(
+            base,
+            cell,
+            accounting),
+        FireFuelCombustionAccountingStatus::success);
+
+    FireCombustionParameters production{};
+    EXPECT_EQ(
+        ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell,
+            production),
+        FireFuelCombustionParameterStatus::unsupported_model);
+    EXPECT_EQ(production.dry_fuel_load_kg_m2, Real(0));
+}
+
+#ifdef AMREX_USE_GPU
+TEST(FireFuelCombustionAccounting, DeviceSafeResolutionMatchesHost)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM10;
+    cell.moisture =
+        complete_model_moisture(cell.model_id);
+
+    FireFuelCombustionAccounting host{};
+    const auto host_status =
+        ERFFire::try_make_anderson13_fire_combustion_accounting(
+            base,
+            cell,
+            host);
+    ASSERT_EQ(
+        host_status,
+        FireFuelCombustionAccountingStatus::success);
+
+    amrex::Gpu::DeviceScalar<FireFuelCombustionAccounting>
+        device_accounting;
+    amrex::Gpu::DeviceScalar<int> device_status;
+
+    auto* accounting_ptr =
+        device_accounting.dataPtr();
+    auto* status_ptr =
+        device_status.dataPtr();
+
+    amrex::ParallelFor(
+        1,
+        [=] AMREX_GPU_DEVICE (int) noexcept
+        {
+            FireFuelCombustionAccounting result{};
+            const auto status =
+                ERFFire::try_make_anderson13_fire_combustion_accounting(
+                    base,
+                    cell,
+                    result);
+            *accounting_ptr = result;
+            *status_ptr = static_cast<int>(status);
+        });
+
+    const FireFuelCombustionAccounting actual =
+        device_accounting.dataValue();
+
+    EXPECT_EQ(
+        device_status.dataValue(),
+        static_cast<int>(
+            FireFuelCombustionAccountingStatus::success));
+    EXPECT_EQ(
+        actual.parameters.dry_fuel_load_kg_m2,
+        host.parameters.dry_fuel_load_kg_m2);
+    EXPECT_EQ(
+        actual.parameters.fuel_moisture_fraction,
+        host.parameters.fuel_moisture_fraction);
+    EXPECT_EQ(
+        actual.prescribed_water_load_kg_m2,
+        host.prescribed_water_load_kg_m2);
+    EXPECT_EQ(
+        actual.parameters.sensible_heat_release_j_kg_dry,
+        host.parameters.sensible_heat_release_j_kg_dry);
+    EXPECT_EQ(
+        actual.parameters.burn_time_constant_s,
+        host.parameters.burn_time_constant_s);
+    EXPECT_EQ(
+        actual.parameters.combustion_water_yield_kg_per_kg_dry,
+        host.parameters.combustion_water_yield_kg_per_kg_dry);
+}
+#endif
 
 TEST(FireFuelCombustion, AndersonModelsRemainUnsupportedUntilCombustionPolicy)
 {
