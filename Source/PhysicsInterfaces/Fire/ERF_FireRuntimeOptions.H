@@ -53,8 +53,16 @@ struct ERFFireRuntimeOptions
     // vector to the Rothermel model/midflame-wind vector.
     amrex::Real wind_adjustment_factor{amrex::Real(1.0)};
 
+    // Current base/catalog policy remains FM1. When fuel_raster_file is empty,
+    // dead_fuel_moisture_fraction defines the uniform material. When a raster
+    // file is supplied, these values remain the canonical FM1 base physics and
+    // each cell's prescribed dead 1-h moisture overrides the scalar moisture.
     std::string fuel_model{"FM1"};
     amrex::Real dead_fuel_moisture_fraction{};
+
+    // Optional strict ERF_FIRE_FUEL_RASTER v1 text source on the exact Fire
+    // grid. Empty preserves the legacy O(1) uniform-material path.
+    std::string fuel_raster_file{};
 
     // Optional Fire horizontal cell counts over the same physical domain as
     // atmospheric level 0. A zero pair preserves the legacy 1:1 L0 grid.
