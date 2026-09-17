@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <ERF_FireCheckpointV4.H>
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireRuntimeOptions.H>
 #include <ERF_FireSpreadRuntime.H>
@@ -890,7 +891,7 @@ TEST(FireFuelRuntime, SpatialMoistureDrivesSpreadAndCombustion)
     }
 }
 
-TEST(FireFuelRuntime, SpatialRuntimeRequiresBatchedAdvanceAndDefersCheckpointPersistence)
+TEST(FireFuelRuntime, SpatialRuntimeRequiresBatchedAdvanceAndRejectsLegacySnapshots)
 {
     const auto config = fuel_runtime_config();
     const auto spatial_fuel =
@@ -940,6 +941,146 @@ TEST(FireFuelRuntime, SpatialRuntimeRequiresCanonicalFm1Base)
             Real(0),
             custom_config,
             spatial_fuel),
+        std::invalid_argument);
+}
+
+TEST(FireFuelRuntime, SpatialCheckpointV4RoundTripContinuesExactly)
+{
+    const auto config = fuel_runtime_config();
+    const auto spatial_fuel =
+        fuel_runtime_spatial_raster(
+            config,
+            config.dead_fuel_moisture_fraction,
+            Real(0.20));
+    Runtime original(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        spatial_fuel);
+
+    const auto environment =
+        fuel_runtime_environment(
+            config.raster_geometry,
+            {Real(0.5), Real(0.125)});
+    const auto batch = fuel_runtime_batch(environment);
+
+    (void)original.advance_direct_reference_wind_batched(
+        batch,
+        Real(0.25));
+
+    Runtime expected = original;
+    const auto expected_diagnostics =
+        expected.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+
+    ASSERT_NE(original.spatial_fuel_raster(), nullptr);
+    const std::uint64_t fingerprint =
+        ERFFire::collective_fire_fuel_raster_fingerprint_fnv1a64(
+            *original.spatial_fuel_raster());
+    amrex::MultiFab checkpoint =
+        ERFFire::make_erf_fire_checkpoint_v4_raster(
+            original);
+
+    auto options = make_options();
+    options.reference_height_agl_m = Real(0.5);
+    std::stringstream stream;
+    ERFFire::write_erf_fire_checkpoint_v4_metadata(
+        original,
+        options,
+        fingerprint,
+        stream);
+
+    EXPECT_EQ(
+        ERFFire::read_erf_fire_checkpoint_version(stream),
+        4);
+    stream.clear();
+    stream.seekg(0);
+
+    auto metadata =
+        ERFFire::read_erf_fire_checkpoint_v4_metadata(
+            stream);
+    EXPECT_EQ(metadata.spatial_fuel_schema_version, 1);
+    EXPECT_EQ(
+        metadata.spatial_fuel_fingerprint_fnv1a64,
+        fingerprint);
+
+    Runtime restored =
+        ERFFire::collective_restore_erf_fire_checkpoint_v4(
+            std::move(metadata),
+            checkpoint);
+
+    ASSERT_TRUE(restored.has_spatial_fuel());
+    ASSERT_NE(restored.spatial_fuel_raster(), nullptr);
+    EXPECT_EQ(
+        ERFFire::collective_fire_fuel_raster_fingerprint_fnv1a64(
+            *restored.spatial_fuel_raster()),
+        fingerprint);
+    expect_runtime_distributed_state_equal(
+        restored,
+        original);
+
+    const auto restored_diagnostics =
+        restored.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+    expect_step_diagnostics_equal(
+        restored_diagnostics,
+        expected_diagnostics);
+    expect_runtime_distributed_state_equal(
+        restored,
+        expected);
+}
+
+TEST(FireFuelRuntime, SpatialCheckpointV4RejectsMaterialFingerprintMismatch)
+{
+    const auto config = fuel_runtime_config();
+    const auto spatial_fuel =
+        fuel_runtime_spatial_raster(
+            config,
+            config.dead_fuel_moisture_fraction,
+            Real(0.20));
+    Runtime runtime(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        spatial_fuel);
+
+    ASSERT_NE(runtime.spatial_fuel_raster(), nullptr);
+    const std::uint64_t fingerprint =
+        ERFFire::collective_fire_fuel_raster_fingerprint_fnv1a64(
+            *runtime.spatial_fuel_raster());
+    const auto changed_fuel =
+        fuel_runtime_spatial_raster(
+            config,
+            config.dead_fuel_moisture_fraction,
+            Real(0.19));
+    const std::uint64_t changed_fingerprint =
+        ERFFire::collective_fire_fuel_raster_fingerprint_fnv1a64(
+            changed_fuel);
+    EXPECT_NE(fingerprint, changed_fingerprint);
+
+    amrex::MultiFab checkpoint =
+        ERFFire::make_erf_fire_checkpoint_v4_raster(
+            runtime);
+    auto options = make_options();
+    options.reference_height_agl_m = Real(0.5);
+    std::stringstream stream;
+    ERFFire::write_erf_fire_checkpoint_v4_metadata(
+        runtime,
+        options,
+        fingerprint,
+        stream);
+    auto metadata =
+        ERFFire::read_erf_fire_checkpoint_v4_metadata(
+            stream);
+    metadata.spatial_fuel_fingerprint_fnv1a64 =
+        changed_fingerprint;
+
+    EXPECT_THROW(
+        (void)ERFFire::collective_restore_erf_fire_checkpoint_v4(
+            std::move(metadata),
+            checkpoint),
         std::invalid_argument);
 }
 
