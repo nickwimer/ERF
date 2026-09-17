@@ -80,7 +80,7 @@ fire_barrier_scatter_component_vertices(
     }
 }
 
-inline void
+inline std::vector<std::optional<FireFuelBarrierContact>>
 collective_clip_fire_barrier_topology_candidates(
     const FireFuelRaster& raster,
     const std::vector<std::vector<FireVec2>>& starts_m,
@@ -114,6 +114,7 @@ collective_clip_fire_barrier_topology_candidates(
     fire_barrier_scatter_component_vertices(
         clipped.positions_m,
         candidates_m);
+    return clipped.contacts;
 }
 
 inline void
@@ -344,11 +345,15 @@ make_fire_barrier_topology_front(
  * Topology-aware explicit-midpoint/RK2 advance constrained by NonBurnable.
  *
  * Vertex trajectories are clipped at first NonBurnable contact at both RK
- * stages before topology events are localized. If a self-contact or Hole
- * extinction occurs, every raw component edge at the common event time is
- * required to remain outside NonBurnable interior before the event is
- * returned. When no topology event occurs, midpoint/final fronts are required
- * to satisfy the same edge invariant before constructing the next stage.
+ * stages before topology events are localized. A midpoint contact is persistent
+ * for the rest of the RK2 step when no earlier topology event intervenes: with
+ * no represented sliding law, a zero stage-two material speed on the exact
+ * barrier face must not algebraically move the final explicit-midpoint state
+ * back into the burnable region. If a self-contact or Hole extinction occurs,
+ * every raw component edge at the common event time is required to remain
+ * outside NonBurnable interior before the event is returned. When no topology
+ * event occurs, midpoint/final fronts satisfy the same edge invariant before
+ * constructing the next stage.
  *
  * This routine preserves the existing topology-event ordering: Hole
  * extinction wins only when it occurs strictly before self-contact, so a tie
@@ -430,10 +435,12 @@ advance_front_rk2_batched_until_topology_event_avoiding_nonburnable(
         }
     }
 
-    detail::collective_clip_fire_barrier_topology_candidates(
-        fuel_raster,
-        initial_vertices_m,
-        midpoint_vertices_m);
+    const std::vector<std::optional<FireFuelBarrierContact>>
+        midpoint_contacts =
+            detail::collective_clip_fire_barrier_topology_candidates(
+                fuel_raster,
+                initial_vertices_m,
+                midpoint_vertices_m);
 
     const detail::FireBarrierTopologyStageEvent midpoint_event =
         detail::locate_fire_barrier_topology_stage_event(
@@ -492,10 +499,26 @@ advance_front_rk2_batched_until_topology_event_avoiding_nonburnable(
         }
     }
 
-    detail::collective_clip_fire_barrier_topology_candidates(
+    (void)detail::collective_clip_fire_barrier_topology_candidates(
         fuel_raster,
         initial_vertices_m,
         final_vertices_m);
+
+    if (midpoint_contacts.size() != initial_positions.size()) {
+        throw std::logic_error(
+            "Fire barrier topology midpoint contacts lost vertex correspondence");
+    }
+
+    flat_index = 0;
+    for (auto& component : final_vertices_m) {
+        for (FireVec2& vertex : component) {
+            if (midpoint_contacts[flat_index].has_value()) {
+                vertex =
+                    midpoint_contacts[flat_index]->position_m;
+            }
+            ++flat_index;
+        }
+    }
 
     const detail::FireBarrierTopologyStageEvent final_event =
         detail::locate_fire_barrier_topology_stage_event(
