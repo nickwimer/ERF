@@ -4,12 +4,15 @@
 #include <ERF_FireFuelMoisture.H>
 #include <ERF_FireRasterGeometry.H>
 #include <ERF_FireSurfaceLayout.H>
+#include <ERF_FireTypes.H>
 
 #include <AMReX_Arena.H>
 #include <AMReX_Array4.H>
 #include <AMReX_Box.H>
 #include <AMReX_FArrayBox.H>
 #include <AMReX_Gpu.H>
+#include <AMReX_GpuBuffer.H>
+#include <AMReX_GpuLaunch.H>
 #include <AMReX_IntVect.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_Math.H>
@@ -17,8 +20,10 @@
 #include <AMReX_ParReduce.H>
 #include <AMReX_ParallelDescriptor.H>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -239,6 +244,219 @@ fire_fuel_host_mf_info()
     return info;
 }
 
+struct FireFuelRasterPointQuery
+{
+    int local_box{};
+    int i{};
+    int j{};
+    int output_index{};
+};
+
+inline FireFuelRasterCell
+decode_collective_fire_fuel_sample(
+    const amrex::Real* raw)
+{
+    FireFuelRasterCell result;
+
+    const amrex::Real raw_model =
+        raw[FireFuelRasterComponents::model_id];
+    const amrex::Real raw_mask =
+        raw[FireFuelRasterComponents::moisture_presence_mask];
+
+    if (!std::isfinite(raw_model)
+        || !std::isfinite(raw_mask)) {
+        throw std::logic_error(
+            "collective Fire fuel point sample contains non-finite encoding");
+    }
+
+    if (raw_model == amrex::Real(0)) {
+        result.model_id = FireFuelModelId::NonBurnable;
+    } else if (raw_model == amrex::Real(1)) {
+        result.model_id = FireFuelModelId::FM1;
+    } else {
+        throw std::logic_error(
+            "collective Fire fuel point sample contains invalid model id");
+    }
+
+    constexpr int valid_mask =
+        (1 << FireFuelMoisture::component_count) - 1;
+    if (raw_mask < amrex::Real(0)
+        || raw_mask > static_cast<amrex::Real>(valid_mask)) {
+        throw std::logic_error(
+            "collective Fire fuel point sample contains invalid moisture mask");
+    }
+    const int mask = static_cast<int>(raw_mask);
+    if (static_cast<amrex::Real>(mask) != raw_mask) {
+        throw std::logic_error(
+            "collective Fire fuel point sample contains non-integral moisture mask");
+    }
+
+    FireFuelMoisture moisture;
+    for (int component = 0;
+         component < FireFuelMoisture::component_count;
+         ++component) {
+        const amrex::Real value =
+            raw[fire_fuel_moisture_component_from_index(component)];
+        if (!std::isfinite(value)) {
+            throw std::logic_error(
+                "collective Fire fuel point sample contains non-finite moisture");
+        }
+        if ((mask & (1 << component)) != 0
+            && !moisture.try_set(
+                fire_fuel_moisture_class_from_index(component),
+                value)) {
+            throw std::logic_error(
+                "collective Fire fuel point sample contains invalid moisture");
+        }
+    }
+
+    result.moisture = moisture;
+    return result;
+}
+
+/**
+ * Collectively sample distributed raw material values at ordered map points.
+ *
+ * Every rank must provide the same ordered positions. Each rank gathers only
+ * queries owned by its local FireSurfaceLayout boxes into compact GPU buffers;
+ * one all-reduce then assembles those sparse results on every rank. No full
+ * material raster is gathered and no per-point MPI operation is performed.
+ */
+inline std::vector<FireFuelRasterCell>
+collective_sample_fire_fuel_raster_points(
+    const FireCartesianRasterGeometry2D& geometry,
+    const amrex::MultiFab& values,
+    const std::vector<FireVec2>& positions_m)
+{
+    if (positions_m.empty()) {
+        return {};
+    }
+
+    constexpr int packed_stride =
+        FireFuelRasterComponents::component_count + 1;
+    const std::size_t max_points =
+        static_cast<std::size_t>(
+            std::numeric_limits<int>::max() / packed_stride);
+    if (positions_m.size() > max_points) {
+        throw std::length_error(
+            "collective Fire fuel point sample is too large for one MPI reduction");
+    }
+
+    std::vector<FireCartesianRasterIndex2D> cells;
+    cells.reserve(positions_m.size());
+    for (const FireVec2& position : positions_m) {
+        cells.push_back(
+            fire_cartesian_raster_locate_cell(
+                geometry,
+                position.x,
+                position.y));
+    }
+
+    std::vector<FireFuelRasterPointQuery> local_queries;
+    local_queries.reserve(positions_m.size());
+
+    for (amrex::MFIter mfi(values); mfi.isValid(); ++mfi) {
+        const amrex::Box& box = mfi.validbox();
+        const int local_box = mfi.LocalIndex();
+
+        for (std::size_t index = 0;
+             index < cells.size();
+             ++index) {
+            if (cells[index].i
+                    > static_cast<std::size_t>(
+                        std::numeric_limits<int>::max())
+                || cells[index].j
+                    > static_cast<std::size_t>(
+                        std::numeric_limits<int>::max())) {
+                throw std::overflow_error(
+                    "Fire fuel point-sample cell index is not representable");
+            }
+
+            const int i = static_cast<int>(cells[index].i);
+            const int j = static_cast<int>(cells[index].j);
+            const amrex::IntVect cell(i, j, 0);
+            if (box.contains(cell)) {
+                local_queries.push_back({
+                    local_box,
+                    i,
+                    j,
+                    static_cast<int>(index)});
+            }
+        }
+    }
+
+    const std::size_t packed_count =
+        positions_m.size()
+        * static_cast<std::size_t>(packed_stride);
+    amrex::Gpu::Buffer<amrex::Real> packed(packed_count);
+    std::fill_n(
+        packed.hostData(),
+        packed_count,
+        amrex::Real(0));
+    (void)packed.copyToDeviceAsync();
+
+    amrex::Gpu::Buffer<FireFuelRasterPointQuery> queries(
+        local_queries.data(),
+        local_queries.size());
+
+    if (!local_queries.empty()) {
+        const auto arrays = values.const_arrays();
+        const auto* query_data = queries.data();
+        auto* packed_data = packed.data();
+        const int query_count =
+            static_cast<int>(local_queries.size());
+
+        amrex::ParallelFor(
+            query_count,
+            [=] AMREX_GPU_DEVICE (int query_index) noexcept
+            {
+                const FireFuelRasterPointQuery query =
+                    query_data[query_index];
+                const auto cell_values =
+                    arrays[query.local_box];
+                const int base =
+                    query.output_index * packed_stride;
+
+                packed_data[base] = amrex::Real(1);
+                for (int component = 0;
+                     component
+                         < FireFuelRasterComponents::component_count;
+                     ++component) {
+                    packed_data[base + 1 + component] =
+                        cell_values(
+                            query.i,
+                            query.j,
+                            0,
+                            component);
+                }
+            });
+    }
+
+    (void)packed.copyToHost();
+
+    amrex::ParallelDescriptor::ReduceRealSum(
+        packed.hostData(),
+        static_cast<int>(packed_count));
+
+    std::vector<FireFuelRasterCell> result;
+    result.reserve(positions_m.size());
+    for (std::size_t index = 0;
+         index < positions_m.size();
+         ++index) {
+        const std::size_t base =
+            index * static_cast<std::size_t>(packed_stride);
+        if (packed[base] != amrex::Real(1)) {
+            throw std::logic_error(
+                "collective Fire fuel point sample did not resolve exactly one distributed owner");
+        }
+        result.push_back(
+            decode_collective_fire_fuel_sample(
+                packed.hostData() + base + 1));
+    }
+
+    return result;
+}
+
 } // namespace detail
 
 /**
@@ -438,6 +656,25 @@ public:
                 "Fire fuel raster contains an invalid encoded cell");
         }
         return result;
+    }
+
+    /**
+     * Collectively sample material at ordered physical map-plane positions.
+     *
+     * Every rank must call this method with the same ordered position vector.
+     * Internal/upper-boundary ownership follows the authoritative Cartesian
+     * raster locator. The result has the same length and ordering as input.
+     * One sparse all-reduce is used for a nonempty batch; there is no full-
+     * domain gather and no per-point MPI communication.
+     */
+    [[nodiscard]] std::vector<FireFuelRasterCell>
+    collective_sample_points(
+        const std::vector<FireVec2>& positions_m) const
+    {
+        return detail::collective_sample_fire_fuel_raster_points(
+            geometry(),
+            storage_->values,
+            positions_m);
     }
 
     [[nodiscard]] FireFuelRasterState
