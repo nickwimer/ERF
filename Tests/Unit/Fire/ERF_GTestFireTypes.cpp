@@ -1,4 +1,5 @@
 #include <ERF_FireFuelBarrier.H>
+#include <ERF_FireFuelBarrierAdvance.H>
 #include <ERF_FireTypes.H>
 
 #include <AMReX_ParallelDescriptor.H>
@@ -19,10 +20,14 @@ namespace
 
 using amrex::Real;
 using ERFFire::FireCartesianRasterGeometry2D;
+using ERFFire::FireFront;
+using ERFFire::FireFrontComponent;
+using ERFFire::FireFrontRole;
 using ERFFire::FireFuelModelId;
 using ERFFire::FireFuelMoistureClass;
 using ERFFire::FireFuelRaster;
 using ERFFire::FireFuelRasterState;
+using ERFFire::FirePerimeter;
 using ERFFire::FireVec2;
 
 FireCartesianRasterGeometry2D
@@ -71,6 +76,48 @@ make_barrier_raster(
     return FireFuelRaster::collective_from_io_rank_state(
         geometry,
         state);
+}
+
+FireFront
+make_barrier_test_front(Real right_x)
+{
+    return FireFront(
+        std::vector<FireFrontComponent>{
+            {
+                FireFrontRole::Outer,
+                FirePerimeter(
+                    std::vector<FireVec2>{
+                        {Real(0.5), Real(0.75)},
+                        {right_x, Real(0.75)},
+                        {right_x, Real(1.25)},
+                        {Real(0.5), Real(1.25)}
+                    })
+            }
+        });
+}
+
+ERFFire::NormalSpeedBatchFunction
+east_edge_speed(Real speed)
+{
+    return [speed](
+        const std::vector<FireVec2>& positions,
+        const std::vector<FireVec2>& normals,
+        Real) {
+        if (positions.size() != normals.size()) {
+            throw std::logic_error(
+                "barrier test positions/normals size mismatch");
+        }
+        std::vector<Real> result(
+            positions.size(), Real(0));
+        for (std::size_t index = 0;
+             index < positions.size();
+             ++index) {
+            if (positions[index].x > Real(1)) {
+                result[index] = speed;
+            }
+        }
+        return result;
+    };
 }
 
 TEST(FireTypes, Vec2StoresPhysicalComponents)
@@ -227,6 +274,176 @@ TEST(FireFuelBarrier, RejectsInvalidSegmentBatchesBeforeSampling)
             std::vector<FireVec2>{{Real(0.5), Real(0.5)}},
             std::vector<FireVec2>{{Real(4.5), Real(0.5)}}),
         std::out_of_range);
+}
+
+TEST(FireFuelBarrier, MotionClipStopsAtFirstContact)
+{
+    const FireFuelRaster raster =
+        make_barrier_raster({{2U, 0U}});
+    const std::vector<FireVec2> starts{
+        {Real(0.25), Real(0.5)},
+        {Real(0.25), Real(1.5)}};
+    const std::vector<FireVec2> candidates{
+        {Real(3.75), Real(0.5)},
+        {Real(3.75), Real(1.5)}};
+
+    const auto clipped =
+        ERFFire::collective_clip_fire_fuel_motion_to_nonburnable(
+            raster,
+            starts,
+            candidates);
+
+    ASSERT_EQ(clipped.positions_m.size(), 2U);
+    ASSERT_EQ(clipped.contacts.size(), 2U);
+    ASSERT_TRUE(clipped.contacts[0].has_value());
+    EXPECT_EQ(clipped.positions_m[0].x, Real(2));
+    EXPECT_EQ(clipped.positions_m[0].y, Real(0.5));
+    EXPECT_FALSE(clipped.contacts[1].has_value());
+    EXPECT_EQ(clipped.positions_m[1].x, candidates[1].x);
+    EXPECT_EQ(clipped.positions_m[1].y, candidates[1].y);
+}
+
+TEST(FireFuelBarrier, Rk2NoContactMatchesUnconstrainedBitwise)
+{
+    const FireFuelRaster raster = make_barrier_raster({});
+    const FireFront initial = make_barrier_test_front(Real(1.5));
+
+    const auto speeds =
+        [](const std::vector<FireVec2>& positions,
+           const std::vector<FireVec2>& normals,
+           Real) {
+            if (positions.size() != normals.size()) {
+                throw std::logic_error(
+                    "barrier test positions/normals size mismatch");
+            }
+            return std::vector<Real>(
+                positions.size(), Real(0.1));
+        };
+
+    const FireFront reference =
+        ERFFire::advance_front_rk2_batched(
+            initial,
+            Real(1),
+            Real(0.1),
+            speeds);
+    const FireFront constrained =
+        ERFFire::advance_front_rk2_batched_clipped_to_nonburnable(
+            initial,
+            Real(1),
+            Real(0.1),
+            speeds,
+            raster);
+
+    ASSERT_EQ(reference.components().size(), constrained.components().size());
+    for (std::size_t component = 0;
+         component < reference.components().size();
+         ++component) {
+        const auto& expected =
+            reference.components()[component].perimeter.vertices_m();
+        const auto& actual =
+            constrained.components()[component].perimeter.vertices_m();
+        ASSERT_EQ(expected.size(), actual.size());
+        for (std::size_t vertex = 0;
+             vertex < expected.size();
+             ++vertex) {
+            EXPECT_EQ(actual[vertex].x, expected[vertex].x);
+            EXPECT_EQ(actual[vertex].y, expected[vertex].y);
+        }
+    }
+}
+
+TEST(FireFuelBarrier, Rk2ClipsFinalTrajectoriesAtBarrier)
+{
+    const FireFuelRaster raster =
+        make_barrier_raster({
+            {2U, 0U},
+            {2U, 1U}});
+    const FireFront initial =
+        make_barrier_test_front(Real(1.5));
+
+    const FireFront constrained =
+        ERFFire::advance_front_rk2_batched_clipped_to_nonburnable(
+            initial,
+            Real(0),
+            Real(1),
+            east_edge_speed(Real(1)),
+            raster);
+
+    ASSERT_EQ(constrained.components().size(), 1U);
+    const auto& vertices =
+        constrained.components()[0].perimeter.vertices_m();
+    ASSERT_EQ(vertices.size(), 4U);
+    EXPECT_EQ(vertices[1].x, Real(2));
+    EXPECT_EQ(vertices[2].x, Real(2));
+    EXPECT_GE(vertices[1].y, Real(0));
+    EXPECT_LE(vertices[2].y, Real(2));
+}
+
+TEST(FireFuelBarrier, Rk2ClipsMidpointAndSticksOnRepeatedContact)
+{
+    const FireFuelRaster raster =
+        make_barrier_raster({
+            {2U, 0U},
+            {2U, 1U}});
+    const FireFront initial =
+        make_barrier_test_front(Real(1.5));
+
+    int calls = 0;
+    Real second_stage_max_x = -std::numeric_limits<Real>::infinity();
+    const auto speeds =
+        [&calls, &second_stage_max_x](
+            const std::vector<FireVec2>& positions,
+            const std::vector<FireVec2>& normals,
+            Real) {
+            ++calls;
+            if (positions.size() != normals.size()) {
+                throw std::logic_error(
+                    "barrier test positions/normals size mismatch");
+            }
+            if (calls == 2) {
+                for (const FireVec2& position : positions) {
+                    second_stage_max_x =
+                        std::max(second_stage_max_x, position.x);
+                }
+            }
+            std::vector<Real> result(
+                positions.size(), Real(0));
+            for (std::size_t index = 0;
+                 index < positions.size();
+                 ++index) {
+                if (positions[index].x > Real(1)) {
+                    result[index] = Real(2);
+                }
+            }
+            return result;
+        };
+
+    const FireFront contacted =
+        ERFFire::advance_front_rk2_batched_clipped_to_nonburnable(
+            initial,
+            Real(0),
+            Real(1),
+            speeds,
+            raster);
+
+    EXPECT_EQ(calls, 2);
+    EXPECT_EQ(second_stage_max_x, Real(2));
+    const auto& contacted_vertices =
+        contacted.components()[0].perimeter.vertices_m();
+    EXPECT_EQ(contacted_vertices[1].x, Real(2));
+    EXPECT_EQ(contacted_vertices[2].x, Real(2));
+
+    const FireFront repeated =
+        ERFFire::advance_front_rk2_batched_clipped_to_nonburnable(
+            contacted,
+            Real(1),
+            Real(0.25),
+            east_edge_speed(Real(1)),
+            raster);
+    const auto& repeated_vertices =
+        repeated.components()[0].perimeter.vertices_m();
+    EXPECT_EQ(repeated_vertices[1].x, Real(2));
+    EXPECT_EQ(repeated_vertices[2].x, Real(2));
 }
 
 } // namespace
