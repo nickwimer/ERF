@@ -1,6 +1,7 @@
 #ifndef ERF_ROTHERMEL_FUEL_H
 #define ERF_ROTHERMEL_FUEL_H
 
+#include <AMReX_Extension.H>
 #include <AMReX_GpuQualifiers.H>
 #include <AMReX_REAL.H>
 

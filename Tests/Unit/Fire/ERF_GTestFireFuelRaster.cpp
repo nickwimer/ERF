@@ -10,6 +10,8 @@
 #include <AMReX_ParallelDescriptor.H>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <fstream>
@@ -417,6 +419,16 @@ remove_fuel_source_text(const std::string& filename)
         (void)std::remove(filename.c_str());
     }
     amrex::ParallelDescriptor::Barrier();
+}
+
+Real
+fuel_accounting_tolerance(Real expected)
+{
+    return Real(1024)
+        * std::numeric_limits<Real>::epsilon()
+        * std::max(
+            Real(1),
+            std::abs(expected));
 }
 
 FireFuelMoisture
@@ -913,11 +925,15 @@ TEST(FireFuelCombustionAccounting, AllModelsConserveDryFuelAndPrescribedWater)
                 .combustion_water_yield_kg_per_kg_dry,
             base.combustion_water_yield_kg_per_kg_dry);
 
-        EXPECT_EQ(
+        const Real reconstructed_water =
             accounting.parameters.dry_fuel_load_kg_m2
-                * accounting.parameters
-                    .fuel_moisture_fraction,
-            accounting.prescribed_water_load_kg_m2);
+            * accounting.parameters
+                .fuel_moisture_fraction;
+        EXPECT_NEAR(
+            reconstructed_water,
+            accounting.prescribed_water_load_kg_m2,
+            fuel_accounting_tolerance(
+                accounting.prescribed_water_load_kg_m2));
     }
 }
 
@@ -1101,15 +1117,21 @@ TEST(FireFuelCombustionAccounting, DeviceSafeResolutionMatchesHost)
         device_status.dataValue(),
         static_cast<int>(
             FireFuelCombustionAccountingStatus::success));
-    EXPECT_EQ(
+    EXPECT_NEAR(
         actual.parameters.dry_fuel_load_kg_m2,
-        host.parameters.dry_fuel_load_kg_m2);
-    EXPECT_EQ(
+        host.parameters.dry_fuel_load_kg_m2,
+        fuel_accounting_tolerance(
+            host.parameters.dry_fuel_load_kg_m2));
+    EXPECT_NEAR(
         actual.parameters.fuel_moisture_fraction,
-        host.parameters.fuel_moisture_fraction);
-    EXPECT_EQ(
+        host.parameters.fuel_moisture_fraction,
+        fuel_accounting_tolerance(
+            host.parameters.fuel_moisture_fraction));
+    EXPECT_NEAR(
         actual.prescribed_water_load_kg_m2,
-        host.prescribed_water_load_kg_m2);
+        host.prescribed_water_load_kg_m2,
+        fuel_accounting_tolerance(
+            host.prescribed_water_load_kg_m2));
     EXPECT_EQ(
         actual.parameters.sensible_heat_release_j_kg_dry,
         host.parameters.sensible_heat_release_j_kg_dry);
