@@ -36,6 +36,60 @@ struct RothermelInputs
  * published Rothermel/Albini correlations are evaluated internally in their
  * native English-unit basis.
  */
+/**
+ * Environmental inputs for the original-13 multi-class Rothermel calculation.
+ *
+ * Moistures are kg water per kg oven-dry fuel. Values for absent particle
+ * classes are ignored after finite/non-negative validation. model_wind_speed_mps
+ * is the same midflame/model wind contract used by RothermelInputs.
+ */
+struct RothermelMulticlassInputs
+{
+    amrex::Real dead_1h_moisture_fraction{};
+    amrex::Real dead_10h_moisture_fraction{};
+    amrex::Real dead_100h_moisture_fraction{};
+    amrex::Real live_foliage_moisture_fraction{};
+    amrex::Real model_wind_speed_mps{};
+    amrex::Real slope_tangent_magnitude{};
+};
+
+/**
+ * Audit diagnostics for the generalized original-13 Rothermel calculation.
+ *
+ * There is deliberately no single "effective heating number" or heat of
+ * preignition: the mixed-fuel heat sink retains the particle-class
+ * surface-area weighting from Rothermel (1972).
+ */
+struct RothermelMulticlassResult
+{
+    amrex::Real dead_net_fuel_loading_kg_m2{};
+    amrex::Real live_net_fuel_loading_kg_m2{};
+    amrex::Real characteristic_dead_moisture_fraction{};
+    amrex::Real characteristic_live_moisture_fraction{};
+    amrex::Real live_moisture_of_extinction{};
+    amrex::Real characteristic_sav_m_inv{};
+    amrex::Real bulk_density_kg_m3{};
+    amrex::Real packing_ratio{};
+    amrex::Real optimum_packing_ratio{};
+    amrex::Real reaction_velocity_exponent{};
+    amrex::Real max_reaction_velocity_s_inv{};
+    amrex::Real reaction_velocity_s_inv{};
+    amrex::Real dead_moisture_damping{};
+    amrex::Real live_moisture_damping{};
+    amrex::Real mineral_damping{};
+    amrex::Real dead_reaction_intensity_w_m2{};
+    amrex::Real live_reaction_intensity_w_m2{};
+    amrex::Real reaction_intensity_w_m2{};
+    amrex::Real propagating_flux_ratio{};
+    amrex::Real heat_sink_j_m3{};
+    amrex::Real no_wind_no_slope_ros_mps{};
+    amrex::Real wind_factor_coefficient_si{};
+    amrex::Real wind_factor_exponent{};
+    amrex::Real wind_factor{};
+    amrex::Real slope_factor{};
+    amrex::Real aligned_heading_ros_mps{};
+};
+
 struct RothermelResult
 {
     amrex::Real net_fuel_loading_kg_m2{};
@@ -75,6 +129,20 @@ struct RothermelResult
 [[nodiscard]] RothermelResult evaluate_rothermel(
     const RothermelFuelParameters& fuel,
     const RothermelInputs& inputs);
+
+/**
+ * Evaluate the static multi-class Rothermel/Albini formulation for one
+ * original Anderson/Albini fuel model.
+ *
+ * Particle-size properties, moisture, and preignition heat are surface-area
+ * weighted. Dead and live reaction intensities are evaluated separately and
+ * summed per Albini's computer-form revision. The live-fuel moisture of
+ * extinction uses Albini's fine-fuel weighting correction. No wind-speed cap
+ * is imposed, matching evaluate_rothermel().
+ */
+[[nodiscard]] RothermelMulticlassResult evaluate_rothermel_multiclass(
+    const Anderson13FuelParameters& fuel,
+    const RothermelMulticlassInputs& inputs);
 
 /**
  * Invert the same Rothermel wind-factor power law used by

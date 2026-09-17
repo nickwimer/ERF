@@ -13,6 +13,7 @@ namespace
 
 using ERFFire::RothermelFuelParameters;
 using ERFFire::RothermelInputs;
+using ERFFire::RothermelMulticlassInputs;
 
 constexpr double mph_to_mps = 0.44704;
 constexpr double mps_to_chains_per_hour = 3600.0 / 20.1168;
@@ -231,6 +232,225 @@ TEST(FireRothermel, FM1EightPercentZeroWindSlopeMatchesIndependentFixture)
     EXPECT_DOUBLE_EQ(static_cast<double>(result.slope_factor), 0.0);
     EXPECT_NEAR(static_cast<double>(result.aligned_heading_ros_mps),
                 0.02020335102524543, 1.0e-14);
+}
+
+TEST(FireRothermelMulticlass, FM1ReducesToLegacySingleClassPhysics)
+{
+    const auto legacy = ERFFire::evaluate_rothermel(
+        ERFFire::make_fm1_fuel_parameters(),
+        RothermelInputs{0.08, 1.0, 0.20});
+
+    // Moistures for absent classes are intentionally different; they must
+    // have no influence on the projected FM1 result.
+    const auto multi = ERFFire::evaluate_rothermel_multiclass(
+        ERFFire::make_anderson13_fuel_parameters(1),
+        RothermelMulticlassInputs{
+            0.08, 0.31, 0.47, 1.70, 1.0, 0.20});
+
+    EXPECT_NEAR(
+        static_cast<double>(multi.dead_net_fuel_loading_kg_m2),
+        static_cast<double>(legacy.net_fuel_loading_kg_m2),
+        1.0e-14);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(multi.live_net_fuel_loading_kg_m2), 0.0);
+    EXPECT_NEAR(
+        static_cast<double>(multi.bulk_density_kg_m3),
+        static_cast<double>(legacy.bulk_density_kg_m3),
+        1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(multi.packing_ratio),
+        static_cast<double>(legacy.packing_ratio),
+        1.0e-15);
+    EXPECT_NEAR(
+        static_cast<double>(multi.optimum_packing_ratio),
+        static_cast<double>(legacy.optimum_packing_ratio),
+        1.0e-15);
+    EXPECT_NEAR(
+        static_cast<double>(multi.reaction_velocity_exponent),
+        static_cast<double>(legacy.reaction_velocity_exponent),
+        1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(multi.max_reaction_velocity_s_inv),
+        static_cast<double>(legacy.max_reaction_velocity_s_inv),
+        1.0e-13);
+    EXPECT_NEAR(
+        static_cast<double>(multi.reaction_velocity_s_inv),
+        static_cast<double>(legacy.reaction_velocity_s_inv),
+        1.0e-13);
+    EXPECT_NEAR(
+        static_cast<double>(multi.dead_moisture_damping),
+        static_cast<double>(legacy.moisture_damping),
+        1.0e-14);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(multi.live_moisture_damping), 0.0);
+    EXPECT_NEAR(
+        static_cast<double>(multi.mineral_damping),
+        static_cast<double>(legacy.mineral_damping),
+        1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(multi.dead_reaction_intensity_w_m2),
+        static_cast<double>(legacy.reaction_intensity_w_m2),
+        1.0e-7);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(multi.live_reaction_intensity_w_m2), 0.0);
+    EXPECT_NEAR(
+        static_cast<double>(multi.reaction_intensity_w_m2),
+        static_cast<double>(legacy.reaction_intensity_w_m2),
+        1.0e-7);
+    EXPECT_NEAR(
+        static_cast<double>(multi.propagating_flux_ratio),
+        static_cast<double>(legacy.propagating_flux_ratio),
+        1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(multi.heat_sink_j_m3),
+        static_cast<double>(legacy.heat_sink_j_m3),
+        1.0e-7);
+    EXPECT_NEAR(
+        static_cast<double>(multi.no_wind_no_slope_ros_mps),
+        static_cast<double>(legacy.no_wind_no_slope_ros_mps),
+        1.0e-14);
+    EXPECT_NEAR(
+        static_cast<double>(multi.wind_factor),
+        static_cast<double>(legacy.wind_factor),
+        1.0e-13);
+    EXPECT_NEAR(
+        static_cast<double>(multi.slope_factor),
+        static_cast<double>(legacy.slope_factor),
+        1.0e-13);
+    EXPECT_NEAR(
+        static_cast<double>(multi.aligned_heading_ros_mps),
+        static_cast<double>(legacy.aligned_heading_ros_mps),
+        1.0e-13);
+}
+
+TEST(FireRothermelMulticlass, Model2LiveDeadFixtureMatchesIndependentCalculation)
+{
+    const auto result = ERFFire::evaluate_rothermel_multiclass(
+        ERFFire::make_anderson13_fuel_parameters(2),
+        RothermelMulticlassInputs{
+            0.08, 0.08, 0.08, 1.00,
+            5.0 * mph_to_mps, 0.0});
+
+    // Independently evaluated from the Rothermel surface-area weighting and
+    // Albini computer-form corrections using the table-7 model-2 inputs.
+    EXPECT_NEAR(static_cast<double>(result.dead_net_fuel_loading_kg_m2),
+                0.4196986901241104, 1.0e-13);
+    EXPECT_NEAR(static_cast<double>(result.live_net_fuel_loading_kg_m2),
+                0.10606341675896719, 1.0e-13);
+    EXPECT_NEAR(static_cast<double>(result.characteristic_dead_moisture_fraction),
+                0.08, 1.0e-15);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.characteristic_live_moisture_fraction),
+        1.0);
+    EXPECT_NEAR(static_cast<double>(result.live_moisture_of_extinction),
+                8.073269029040183, 1.0e-12);
+    EXPECT_NEAR(static_cast<double>(result.characteristic_sav_m_inv),
+                9133.913155203867, 1.0e-9);
+    EXPECT_NEAR(static_cast<double>(result.dead_reaction_intensity_w_m2),
+                464814.36502015276, 1.0e-6);
+    EXPECT_NEAR(static_cast<double>(result.live_reaction_intensity_w_m2),
+                163893.35963937454, 1.0e-6);
+    EXPECT_NEAR(static_cast<double>(result.heat_sink_j_m3),
+                2881375.3018895136, 1.0e-6);
+    EXPECT_NEAR(static_cast<double>(result.no_wind_no_slope_ros_mps),
+                0.011595890573710788, 1.0e-14);
+    EXPECT_NEAR(static_cast<double>(result.wind_factor),
+                14.663076039651468, 1.0e-12);
+    EXPECT_NEAR(static_cast<double>(result.aligned_heading_ros_mps),
+                0.18162731580350977, 1.0e-13);
+}
+
+TEST(FireRothermelMulticlass, Model11AreaWeightsDeadMoistureClasses)
+{
+    const auto result = ERFFire::evaluate_rothermel_multiclass(
+        ERFFire::make_anderson13_fuel_parameters(11),
+        RothermelMulticlassInputs{
+            0.04, 0.08, 0.12, 0.0,
+            0.8, 0.20});
+
+    EXPECT_NEAR(static_cast<double>(result.characteristic_dead_moisture_fraction),
+                0.05129581827568404, 1.0e-14);
+    EXPECT_NEAR(static_cast<double>(result.characteristic_sav_m_inv),
+                3876.9517355761604, 1.0e-10);
+    EXPECT_NEAR(static_cast<double>(result.bulk_density_kg_m3),
+                8.473767124824914, 1.0e-12);
+    EXPECT_NEAR(static_cast<double>(result.dead_moisture_damping),
+                0.5711092964059014, 1.0e-13);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.live_reaction_intensity_w_m2), 0.0);
+    EXPECT_NEAR(static_cast<double>(result.dead_reaction_intensity_w_m2),
+                457227.3297030352, 1.0e-6);
+    EXPECT_NEAR(static_cast<double>(result.heat_sink_j_m3),
+                4424503.227893632, 1.0e-6);
+    EXPECT_NEAR(static_cast<double>(result.no_wind_no_slope_ros_mps),
+                0.0034777923915500185, 1.0e-15);
+    EXPECT_NEAR(static_cast<double>(result.wind_factor),
+                3.0132182036836346, 1.0e-13);
+    EXPECT_NEAR(static_cast<double>(result.slope_factor),
+                0.7224216407916382, 1.0e-13);
+    EXPECT_NEAR(static_cast<double>(result.aligned_heading_ros_mps),
+                0.016469572220237216, 1.0e-14);
+}
+
+TEST(FireRothermelMulticlass, DeadExtinctionPreventsLiveOnlyReaction)
+{
+    const auto result = ERFFire::evaluate_rothermel_multiclass(
+        ERFFire::make_anderson13_fuel_parameters(4),
+        RothermelMulticlassInputs{
+            0.20, 0.20, 0.20, 0.05,
+            4.0, 0.30});
+
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.dead_moisture_damping), 0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.live_moisture_damping), 0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.dead_reaction_intensity_w_m2), 0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.live_reaction_intensity_w_m2), 0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.reaction_intensity_w_m2), 0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.no_wind_no_slope_ros_mps), 0.0);
+    EXPECT_DOUBLE_EQ(
+        static_cast<double>(result.aligned_heading_ros_mps), 0.0);
+    EXPECT_GT(
+        static_cast<double>(result.heat_sink_j_m3), 0.0);
+}
+
+TEST(FireRothermelMulticlass, AndersonRepresentativeRatesHavePublishedScale)
+{
+    constexpr std::array<double, 13> published_chains_per_hour{{
+        78.0, 35.0, 104.0,
+        75.0, 18.0, 32.0, 20.0,
+        1.6, 7.5, 7.9,
+        6.0, 13.0, 13.5
+    }};
+
+    for (std::size_t index = 0;
+         index < published_chains_per_hour.size();
+         ++index) {
+        const auto result = ERFFire::evaluate_rothermel_multiclass(
+            ERFFire::make_anderson13_fuel_parameters(
+                static_cast<int>(index + 1)),
+            RothermelMulticlassInputs{
+                0.08, 0.08, 0.08, 1.00,
+                5.0 * mph_to_mps, 0.0});
+
+        const double chains_per_hour =
+            static_cast<double>(result.aligned_heading_ros_mps)
+            * mps_to_chains_per_hour;
+
+        // Anderson (1982) gives representative rounded rates from the
+        // operational nomographs. The core intentionally omits the historical
+        // wind-speed cap, so this is a scale-level independent reference, not
+        // an equation-level equality test.
+        EXPECT_NEAR(
+            chains_per_hour,
+            published_chains_per_hour[index],
+            0.30 * published_chains_per_hour[index])
+            << "fuel model " << (index + 1);
+    }
 }
 
 TEST(FireRothermel, MoistureAtOrAboveExtinctionStopsSpreadExactly)
