@@ -17,6 +17,7 @@ CEXE_headers += ERF_FireAtmosphericSource.H
 CEXE_headers += ERF_FireCheckpoint.H
 CEXE_headers += ERF_FireCheckpointV4.H
 CEXE_headers += ERF_FireContext.H
+CEXE_headers += ERF_FireFuelSource.H
 CEXE_headers += ERF_FireLevel0Advance.H
 CEXE_headers += ERF_FireLevel0Environment.H
 CEXE_headers += ERF_FireLevel0SourceCoupling.H
