@@ -2,6 +2,7 @@
 #define ERF_FIRE_FUEL_BARRIER_ADVANCE_H_
 
 #include <ERF_FireFuelBarrier.H>
+#include <ERF_FireFuelBarrierFront.H>
 #include <ERF_FireFrontPropagator.H>
 
 #include <cmath>
@@ -179,17 +180,20 @@ fire_barrier_rebuild_front(
 
 /**
  * Fixed-topology explicit-midpoint/RK2 advance with NonBurnable trajectory
- * clipping at both RK stages.
+ * clipping and edge-exclusion checks at both RK stages.
  *
- * This is the first barrier-dynamics integration layer. Every candidate vertex
- * trajectory is clipped at first entry into the interior of the NonBurnable
- * cell union before the next RK geometry is constructed. With no contacts the
- * arithmetic/order matches advance_front_rk2_batched exactly.
+ * Every candidate vertex trajectory is clipped at first entry into the
+ * interior of the NonBurnable cell union before the next RK geometry is
+ * constructed. The reconstructed initial, midpoint, and final fronts are also
+ * required to have no edge entering NonBurnable interior, so two individually
+ * legal vertex trajectories cannot create an illegal chord through a barrier.
+ * With no contacts the arithmetic/order of vertex evolution matches
+ * advance_front_rk2_batched exactly.
  *
  * This primitive deliberately does not yet resolve front self-contact,
- * barrier sliding, edge/barrier intersections between vertices, or remeshing
- * near a barrier. Production runtime enablement must wait for those constraints
- * so a clipped vertex cannot be followed by an edge that cuts through a cell.
+ * barrier sliding/rerouting, topology events interacting with barriers, or
+ * remeshing near a barrier. Edge penetration is rejected rather than repaired
+ * because choosing a detour here would silently change represented topology.
  */
 [[nodiscard]] inline FireFront
 advance_front_rk2_batched_clipped_to_nonburnable(
@@ -211,6 +215,12 @@ advance_front_rk2_batched_clipped_to_nonburnable(
         throw std::invalid_argument(
             "Fire barrier RK2 normal-speed callback must be set");
     }
+
+    collective_require_fire_front_edges_avoid_nonburnable(
+        front,
+        fuel_raster,
+        "initial RK2 state");
+
     if (dt_s == amrex::Real(0)) {
         return front;
     }
@@ -253,6 +263,11 @@ advance_front_rk2_batched_clipped_to_nonburnable(
             front,
             midpoint_clip.positions_m);
 
+    collective_require_fire_front_edges_avoid_nonburnable(
+        midpoint_front,
+        fuel_raster,
+        "RK2 midpoint");
+
     std::vector<FireVec2> midpoint_positions;
     std::vector<FireVec2> midpoint_normals;
     detail::fire_barrier_flatten_front(
@@ -284,9 +299,17 @@ advance_front_rk2_batched_clipped_to_nonburnable(
             initial_positions,
             final_candidates);
 
-    return detail::fire_barrier_rebuild_front(
-        front,
-        final_clip.positions_m);
+    FireFront final_front =
+        detail::fire_barrier_rebuild_front(
+            front,
+            final_clip.positions_m);
+
+    collective_require_fire_front_edges_avoid_nonburnable(
+        final_front,
+        fuel_raster,
+        "RK2 final state");
+
+    return final_front;
 }
 
 } // namespace ERFFire
