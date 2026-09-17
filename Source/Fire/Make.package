@@ -3,8 +3,8 @@ CEXE_sources += ERF_FireTerrainSurface.cpp
 CEXE_sources += ERF_FirePerimeter.cpp
 CEXE_sources += ERF_FireFrontTopology.cpp
 CEXE_sources += ERF_FireFrontCollision.cpp
-CEXE_sources += ERF_FireFrontPropagator.cpp
 CEXE_sources += ERF_VectorPerimeterPropagator.cpp
+CEXE_sources += ERF_FireFrontPropagator.cpp
 CEXE_sources += ERF_FirePerimeterRemesher.cpp
 CEXE_sources += ERF_FirePerimeterSweep.cpp
 
@@ -55,6 +55,7 @@ CEXE_headers += ERF_FireBurnedFractionRaster.H
 CEXE_headers += ERF_FireCellArrival.H
 CEXE_headers += ERF_FireCellCoverage.H
 CEXE_headers += ERF_FireFirstArrivalRaster.H
+CEXE_headers += ERF_FireFuelBarrier.H
 CEXE_headers += ERF_FireFuelField.H
 CEXE_headers += ERF_FireFuelRaster.H
 CEXE_headers += ERF_FireRasterGeometry.H
