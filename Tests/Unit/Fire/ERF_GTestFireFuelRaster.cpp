@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -488,6 +489,81 @@ TEST(FireFuelRaster, DeviceDecoderMatchesCanonicalMaterial)
     EXPECT_EQ(device_decode_mismatch_count(raster), 0);
 }
 #endif
+
+TEST(FireFuelRaster, CollectivePointSamplerPreservesOrderAndFaceOwnership)
+{
+    const auto geometry = fuel_raster_geometry();
+    const FireFuelRaster raster =
+        FireFuelRaster::collective_from_io_rank_state(
+            geometry,
+            make_io_rank_state(geometry));
+
+    const std::vector<FireVec2> positions{
+        {Real(101), Real(-48)},
+        {Real(104), Real(-48)},
+        {Real(101), Real(-46)},
+        {Real(108), Real(-38)},
+        {Real(104), Real(-48)}};
+    const int expected_i[]{0, 2, 0, 3, 2};
+    const int expected_j[]{0, 0, 1, 2, 0};
+
+    const auto sampled =
+        raster.collective_sample_points(positions);
+
+    ASSERT_EQ(sampled.size(), positions.size());
+    for (std::size_t index = 0;
+         index < sampled.size();
+         ++index) {
+        const auto expected =
+            make_expected_cell(
+                expected_i[index],
+                expected_j[index]);
+        EXPECT_EQ(
+            sampled[index].model_id,
+            expected.model_id);
+        expect_same_moisture(
+            sampled[index].moisture,
+            expected.moisture);
+    }
+}
+
+TEST(FireFuelRaster, CollectivePointSamplerEmptyBatchIsEmpty)
+{
+    const auto geometry = fuel_raster_geometry();
+    const FireFuelRaster raster =
+        FireFuelRaster::collective_from_io_rank_state(
+            geometry,
+            make_io_rank_state(geometry));
+
+    EXPECT_TRUE(
+        raster.collective_sample_points({}).empty());
+}
+
+TEST(FireFuelRaster, CollectivePointSamplerRejectsInvalidPoints)
+{
+    const auto geometry = fuel_raster_geometry();
+    const FireFuelRaster raster =
+        FireFuelRaster::collective_from_io_rank_state(
+            geometry,
+            make_io_rank_state(geometry));
+    const Real inf = std::numeric_limits<Real>::infinity();
+
+    EXPECT_THROW(
+        (void)raster.collective_sample_points(
+            std::vector<FireVec2>{
+                {
+                    std::nextafter(geometry.xlo_m, -inf),
+                    geometry.ylo_m}}),
+        std::out_of_range);
+
+    EXPECT_THROW(
+        (void)raster.collective_sample_points(
+            std::vector<FireVec2>{
+                {
+                    std::numeric_limits<Real>::quiet_NaN(),
+                    geometry.ylo_m}}),
+        std::invalid_argument);
+}
 
 TEST(FireFuelCombustion, Fm1OverridesOnlyDead1hMoisture)
 {
