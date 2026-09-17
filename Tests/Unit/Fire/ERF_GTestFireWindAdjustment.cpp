@@ -194,3 +194,4 @@ TEST(FireWindAdjustment, UnityWafMatchesUnadjustedRothermelRichardsPath)
 
 #include "ERF_GTestFireFuelBarrierTopologyI.H"
 #include "ERF_GTestFireFuelBarrierSweepI.H"
+#include "ERF_GTestFireNonBurnableRuntimeI.H"
