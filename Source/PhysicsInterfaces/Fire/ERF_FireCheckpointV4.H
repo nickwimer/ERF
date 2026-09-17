@@ -8,6 +8,7 @@
 
 #include <AMReX_Arena.H>
 #include <AMReX_Gpu.H>
+#include <AMReX_GpuLaunch.H>
 #include <AMReX_MFIter.H>
 #include <AMReX_MultiFab.H>
 #include <AMReX_ParallelDescriptor.H>
@@ -490,7 +491,8 @@ read_erf_fire_checkpoint_v4_metadata(
 
 /**
  * Restore state and exact resolved material from one v4 distributed raster.
- * The fingerprint is checked before the restored runtime is exposed.
+ * The material fingerprint and cellwise combustion invariants are checked
+ * before the restored runtime is exposed.
  */
 [[nodiscard]] inline ERFFireSpreadRuntime
 collective_restore_erf_fire_checkpoint_v4(
@@ -537,6 +539,73 @@ collective_restore_erf_fire_checkpoint_v4(
         ERFFireCheckpointRasterComponents::component_count,
         0,
         0);
+    amrex::Gpu::streamSynchronize();
+
+    // Spatial combustion stores cumulative water using each cell's local
+    // moisture, while the legacy v2/v3 restore validator expects the base
+    // scalar moisture. First validate the checkpoint exactly against its
+    // resolved spatial material on the active FireSurfaceLayout.
+    const amrex::MultiFab& fuel_values =
+        spatial_fuel.distributed_values();
+    amrex::MultiFab spatial_combustion_state(
+        fuel_values.boxArray(),
+        fuel_values.DistributionMap(),
+        FireCombustionRaster::component_count,
+        0);
+    spatial_combustion_state.ParallelCopy(
+        legacy_raster,
+        ERFFireCheckpointRasterComponents::ignited_area_fraction,
+        0,
+        FireCombustionRaster::component_count,
+        0,
+        0);
+    amrex::Gpu::streamSynchronize();
+
+    detail::validate_spatial_fuel_impl(
+        geometry,
+        metadata.checkpoint.runtime_state.config
+            .combustion_parameters,
+        spatial_combustion_state,
+        spatial_fuel,
+        true);
+
+    // Feed the existing dynamic-state restore path a base-moisture-equivalent
+    // water component. All other persisted state remains byte-for-byte from
+    // the checkpoint. attach_spatial_fuel_after_checkpoint_restore() then
+    // re-resolves water from immutable spatial material before exposure.
+    const amrex::Real base_water_per_kg_dry =
+        metadata.checkpoint.runtime_state.config
+            .combustion_parameters.fuel_moisture_fraction
+        + metadata.checkpoint.runtime_state.config
+            .combustion_parameters
+            .combustion_water_yield_kg_per_kg_dry;
+
+    for (amrex::MFIter mfi(legacy_raster);
+         mfi.isValid();
+         ++mfi) {
+        const amrex::Box box = mfi.validbox();
+        const auto values = legacy_raster.array(mfi);
+        amrex::ParallelFor(
+            box,
+            [=] AMREX_GPU_DEVICE (
+                int i,
+                int j,
+                int k) noexcept
+            {
+                values(
+                    i,
+                    j,
+                    k,
+                    ERFFireCheckpointRasterComponents::water_released_kg_m2) =
+                    values(
+                        i,
+                        j,
+                        k,
+                        ERFFireCheckpointRasterComponents::consumed_dry_fuel_kg_m2)
+                    * base_water_per_kg_dry;
+            });
+    }
+    amrex::Gpu::streamSynchronize();
 
     ERFFireSpreadRuntime restored =
         ERFFireSpreadRuntime::
