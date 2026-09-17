@@ -264,10 +264,11 @@ public:
         const amrex::MultiFab& checkpoint_raster);
 
     /**
-     * Attach already validated spatial material to a restored dynamic state.
+     * Attach already validated spatial material to restored dynamic state.
      *
-     * This is the v4 checkpoint adapter boundary. It performs no MPI
-     * communication and refuses geometry or FM1 base-physics mismatches.
+     * Every rank must participate. Geometry and canonical FM1 base physics are
+     * checked, then cumulative combustion-water accounting is re-resolved from
+     * the immutable cellwise moisture before the spatial runtime is exposed.
      */
     [[nodiscard]] static ERFFireSpreadRuntime
     attach_spatial_fuel_after_checkpoint_restore(
@@ -332,6 +333,9 @@ public:
                 "restored spatial Fire runtime requires canonical FM1 combustion parameters");
         }
 
+        restored_runtime.combustion_
+            .restore_spatial_water_accounting(
+                spatial_fuel_raster);
         restored_runtime.spatial_fuel_raster_.emplace(
             std::move(spatial_fuel_raster));
         return restored_runtime;
