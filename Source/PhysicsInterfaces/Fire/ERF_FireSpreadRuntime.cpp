@@ -123,6 +123,60 @@ same_horizontal_geometry(
 }
 
 bool
+same_rothermel_fuel_parameters(
+    const RothermelFuelParameters& lhs,
+    const RothermelFuelParameters& rhs) noexcept
+{
+    return lhs.dead_1h_load_kg_m2 == rhs.dead_1h_load_kg_m2
+        && lhs.dead_1h_sav_m_inv == rhs.dead_1h_sav_m_inv
+        && lhs.fuel_bed_depth_m == rhs.fuel_bed_depth_m
+        && lhs.dead_heat_content_j_kg == rhs.dead_heat_content_j_kg
+        && lhs.particle_density_kg_m3 == rhs.particle_density_kg_m3
+        && lhs.total_mineral_fraction == rhs.total_mineral_fraction
+        && lhs.effective_mineral_fraction == rhs.effective_mineral_fraction
+        && lhs.dead_moisture_of_extinction == rhs.dead_moisture_of_extinction;
+}
+
+bool
+same_combustion_parameters(
+    const FireCombustionParameters& lhs,
+    const FireCombustionParameters& rhs) noexcept
+{
+    return lhs.dry_fuel_load_kg_m2 == rhs.dry_fuel_load_kg_m2
+        && lhs.sensible_heat_release_j_kg_dry
+            == rhs.sensible_heat_release_j_kg_dry
+        && lhs.fuel_moisture_fraction == rhs.fuel_moisture_fraction
+        && lhs.burn_time_constant_s == rhs.burn_time_constant_s
+        && lhs.combustion_water_yield_kg_per_kg_dry
+            == rhs.combustion_water_yield_kg_per_kg_dry;
+}
+
+void
+require_spatial_runtime_material_contract(
+    const ERFFireSpreadConfig& config,
+    const FireFuelRaster& fuel_raster)
+{
+    require(
+        same_horizontal_geometry(
+            config.raster_geometry,
+            fuel_raster.geometry()),
+        "spatial Fire fuel raster geometry must match the runtime raster geometry");
+
+    require(
+        same_rothermel_fuel_parameters(
+            config.fuel,
+            make_fm1_fuel_parameters()),
+        "spatial Fire runtime currently requires canonical FM1 spread parameters");
+
+    require(
+        same_combustion_parameters(
+            config.combustion_parameters,
+            make_fm1_combustion_parameters(
+                config.dead_fuel_moisture_fraction)),
+        "spatial Fire runtime currently requires canonical FM1 combustion parameters");
+}
+
+bool
 environment_matches_geometry(
     const FireFlatEnvironmentSampler& environment,
     const FireCartesianRasterGeometry2D& geometry) noexcept
@@ -287,8 +341,15 @@ resolve_front_topology_event(
                     continue;
                 }
 
+                if (components[component_index].role
+                    != FireFrontRole::Hole) {
+                    throw std::runtime_error(
+                        "Fire Outer self-contact with multiple Outer components "
+                        "is not yet supported");
+                }
+
                 post_event_components.push_back({
-                    components[component_index].role,
+                    FireFrontRole::Hole,
                     FirePerimeter(
                         event_vertices_m[
                             component_index])
@@ -800,6 +861,94 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         burned_fraction_);
 }
 
+ERFFireSpreadRuntime::ERFFireSpreadRuntime(
+    FirePerimeter initial_perimeter,
+    amrex::Real initial_time_s,
+    ERFFireSpreadConfig config,
+    FireFuelRaster spatial_fuel_raster)
+    : config_(std::move(config)),
+      fuel_field_(
+          config_.raster_geometry,
+          config_.fuel,
+          config_.dead_fuel_moisture_fraction),
+      spatial_fuel_raster_(std::move(spatial_fuel_raster)),
+      front_(
+          std::vector<FireFrontComponent>{
+              {
+                  FireFrontRole::Outer,
+                  std::move(initial_perimeter)
+              }
+          }),
+      burned_fraction_(config_.raster_geometry),
+      first_arrival_(config_.raster_geometry),
+      combustion_(
+          config_.raster_geometry,
+          config_.combustion_parameters,
+          config_.combustion_options),
+      current_time_s_(initial_time_s)
+{
+    validate_runtime_scalars(
+        config_,
+        current_time_s_);
+    require_spatial_runtime_material_contract(
+        config_,
+        *spatial_fuel_raster_);
+
+    auto initial_remesh =
+        remesh_front(front_, config_.remesh_options);
+    front_ = std::move(initial_remesh.front);
+
+    (void)first_arrival_.initialize_from_perimeter(
+        perimeter(), current_time_s_);
+    (void)burned_fraction_.update_from_perimeter(perimeter());
+    (void)combustion_.initialize_from_burned_fraction(
+        burned_fraction_,
+        *spatial_fuel_raster_);
+}
+
+ERFFireSpreadRuntime::ERFFireSpreadRuntime(
+    FireFront initial_front,
+    amrex::Real initial_time_s,
+    ERFFireSpreadConfig config,
+    FireFuelRaster spatial_fuel_raster)
+    : config_(std::move(config)),
+      fuel_field_(
+          config_.raster_geometry,
+          config_.fuel,
+          config_.dead_fuel_moisture_fraction),
+      spatial_fuel_raster_(std::move(spatial_fuel_raster)),
+      front_(std::move(initial_front)),
+      burned_fraction_(config_.raster_geometry),
+      first_arrival_(config_.raster_geometry),
+      combustion_(
+          config_.raster_geometry,
+          config_.combustion_parameters,
+          config_.combustion_options),
+      current_time_s_(initial_time_s)
+{
+    validate_runtime_scalars(
+        config_,
+        current_time_s_);
+    require_spatial_runtime_material_contract(
+        config_,
+        *spatial_fuel_raster_);
+
+    auto initial_remesh =
+        remesh_front(
+            front_,
+            config_.remesh_options);
+    front_ = std::move(initial_remesh.front);
+
+    (void)first_arrival_.initialize_from_front(
+        front_,
+        current_time_s_);
+    (void)burned_fraction_.update_from_front(
+        front_);
+    (void)combustion_.initialize_from_burned_fraction(
+        burned_fraction_,
+        *spatial_fuel_raster_);
+}
+
 const FireFront&
 ERFFireSpreadRuntime::front() const
 {
@@ -948,6 +1097,11 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 ERFFireSpreadRuntimeState
 ERFFireSpreadRuntime::snapshot_state() const
 {
+    if (spatial_fuel_raster_) {
+        throw std::logic_error(
+            "spatial Fire runtime checkpoint persistence is not implemented; refusing incomplete snapshot");
+    }
+
     ERFFireSpreadRuntimeState state;
     state.config = config_;
 
@@ -989,6 +1143,11 @@ ERFFireSpreadRuntimeState
 ERFFireSpreadRuntime::
 collective_snapshot_state_to_io_rank() const
 {
+    if (spatial_fuel_raster_) {
+        throw std::logic_error(
+            "spatial Fire runtime checkpoint persistence is not implemented; refusing incomplete collective snapshot");
+    }
+
     ERFFireSpreadRuntimeState state;
     state.config = config_;
 
@@ -1520,6 +1679,11 @@ ERFFireSpreadRuntime::advance_wind_impl(
     amrex::Real wind_adjustment_factor,
     amrex::Real dt_s)
 {
+    if (spatial_fuel_raster_) {
+        throw std::logic_error(
+            "spatial Fire fuel requires a batched spread advance; scalar per-vertex material sampling is disabled");
+    }
+
     if (wind_input_mode == WindInputMode::ExplicitWaf20ft) {
         require(
             std::isfinite(wind_adjustment_factor)
@@ -1817,6 +1981,16 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             samples.size() == positions_m.size(),
             "fire batched environment sampler returned the wrong size");
 
+        std::vector<FireFuelRasterCell> spatial_materials;
+        if (spatial_fuel_raster_) {
+            spatial_materials =
+                spatial_fuel_raster_->collective_sample_points(
+                    positions_m);
+            require(
+                spatial_materials.size() == positions_m.size(),
+                "fire spatial material sampler returned the wrong size");
+        }
+
         std::vector<amrex::Real> speeds;
         speeds.reserve(samples.size());
 
@@ -1862,14 +2036,38 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     terrain_gradient_m_per_m,
                     slope_tangent);
 
-            const FireFuelProperties& material =
-                fuel_field_.sample(positions_m[index].x, positions_m[index].y);
+            const RothermelFuelParameters* spread_fuel = nullptr;
+            amrex::Real dead_1h_moisture{};
+
+            if (spatial_fuel_raster_) {
+                const FireFuelRasterCell& material =
+                    spatial_materials[index];
+                require(
+                    material.model_id == FireFuelModelId::FM1,
+                    "spatial Fire spread currently supports only FM1; NonBurnable barrier dynamics are not yet enabled");
+                require(
+                    material.moisture.try_get(
+                        FireFuelMoistureClass::Dead1h,
+                        dead_1h_moisture),
+                    "spatial FM1 spread requires prescribed dead 1-h moisture");
+                spread_fuel = &config_.fuel;
+            } else {
+                const FireFuelProperties& material =
+                    fuel_field_.sample(
+                        positions_m[index].x,
+                        positions_m[index].y);
+                dead_1h_moisture =
+                    material.moisture.get(
+                        FireFuelMoistureClass::Dead1h);
+                spread_fuel =
+                    &material.single_dead_class;
+            }
 
             const RothermelResult behavior =
                 evaluate_rothermel(
-                    material.single_dead_class,
+                    *spread_fuel,
                     RothermelInputs{
-                        material.moisture.get(FireFuelMoistureClass::Dead1h),
+                        dead_1h_moisture,
                         speed_mps,
                         slope_tangent});
 
@@ -2002,7 +2200,18 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
 
                 const FireCombustionRasterAdvance
                     combustion_update =
-                        next_combustion
+                        spatial_fuel_raster_
+                        ? next_combustion
+                            .advance_from_front_topology_event_sweep(
+                                working_front,
+                                topology_advance
+                                    .terminal_vertices_m,
+                                event_front,
+                                burned_before_segment,
+                                next_burned,
+                                *spatial_fuel_raster_,
+                                event_dt_s)
+                        : next_combustion
                             .advance_from_front_topology_event_sweep(
                                 working_front,
                                 topology_advance
@@ -2086,7 +2295,16 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
 
             const FireCombustionRasterAdvance
                 combustion_update =
-                    next_combustion
+                    spatial_fuel_raster_
+                    ? next_combustion
+                        .advance_from_front_linear_sweep(
+                            working_front,
+                            completed_front,
+                            burned_before_segment,
+                            next_burned,
+                            *spatial_fuel_raster_,
+                            segment_dt_s)
+                    : next_combustion
                         .advance_from_front_linear_sweep(
                             working_front,
                             completed_front,

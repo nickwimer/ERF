@@ -6,6 +6,7 @@
 #include <ERF_FireFirstArrivalRaster.H>
 #include <ERF_FireFront.H>
 #include <ERF_FireFuelField.H>
+#include <ERF_FireFuelRaster.H>
 #include <ERF_FireFlatEnvironmentSampler.H>
 #include <ERF_FireTerrainSurface.H>
 #include <ERF_FirePerimeterRemesher.H>
@@ -14,6 +15,7 @@
 #include <AMReX_REAL.H>
 
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -116,6 +118,27 @@ public:
         amrex::Real initial_time_s,
         ERFFireSpreadConfig config);
 
+    /**
+     * Construct an FM1 runtime with prescribed cellwise material.
+     *
+     * The spatial raster is immutable/shareable and must exactly match the
+     * Fire runtime geometry. This first production spatial path supports only
+     * canonical FM1 spread/combustion parameters with cellwise dead 1-h
+     * moisture. NonBurnable remains rejected until barrier dynamics exist.
+     * Spatial material is consumed only by batched RK advance entry points.
+     */
+    ERFFireSpreadRuntime(
+        FirePerimeter initial_perimeter,
+        amrex::Real initial_time_s,
+        ERFFireSpreadConfig config,
+        FireFuelRaster spatial_fuel_raster);
+
+    ERFFireSpreadRuntime(
+        FireFront initial_front,
+        amrex::Real initial_time_s,
+        ERFFireSpreadConfig config,
+        FireFuelRaster spatial_fuel_raster);
+
     [[nodiscard]] const FireFront&
     front() const;
 
@@ -162,9 +185,11 @@ public:
     }
 
     /**
-     * Read-only uniform material derived from config(), including on restore.
-     * No independent material state is serialized or mutable through this view.
-     * Spatial fuel and live-fuel spread physics are not enabled by this adapter.
+     * Read-only uniform compatibility material derived from config().
+     *
+     * Uniform runtimes evaluate this field directly. Spatial runtimes retain
+     * it only as their legacy/config compatibility view; production spread and
+     * combustion consume spatial_fuel_raster() instead.
      */
     [[nodiscard]] const FireFuelField&
     fuel_field() const noexcept
@@ -172,12 +197,31 @@ public:
         return fuel_field_;
     }
 
+    [[nodiscard]] bool
+    has_spatial_fuel() const noexcept
+    {
+        return spatial_fuel_raster_.has_value();
+    }
+
+    /**
+     * Immutable distributed spatial material, or nullptr for a uniform runtime.
+     * Copies of a spatial runtime share the static raster storage.
+     */
+    [[nodiscard]] const FireFuelRaster*
+    spatial_fuel_raster() const noexcept
+    {
+        return spatial_fuel_raster_
+            ? &*spatial_fuel_raster_
+            : nullptr;
+    }
+
     /**
      * Return one canonical runtime snapshot in a single-rank runtime.
      *
      * This accessor is noncollective. Parallel checkpoint/output code must use
      * collective_snapshot_state_to_io_rank() so ordinary runtime access never
-     * hides full-domain communication.
+     * hides full-domain communication. Spatial-fuel runtimes reject snapshot
+     * serialization until material provenance/persistence is added.
      */
     [[nodiscard]] ERFFireSpreadRuntimeState
     snapshot_state() const;
@@ -188,7 +232,9 @@ public:
      * Every rank must call this method in the same collective order. The
      * returned perimeter/configuration/scalars are valid on every rank, while
      * full canonical raster vectors are populated only on IOProcessor().
-     * Ordinary snapshot_state() remains deliberately noncollective.
+     * Ordinary snapshot_state() remains deliberately noncollective. Spatial-
+     * fuel runtimes reject checkpoint packing until material persistence is
+     * implemented rather than silently producing an incomplete restart.
      */
     [[nodiscard]] ERFFireSpreadRuntimeState
     collective_snapshot_state_to_io_rank() const;
@@ -238,6 +284,7 @@ public:
      * Direct-reference advance with one ordered environment batch per RK
      * stage. The batch sample carries both reference wind and the represented
      * map-plane terrain gradient; flat samplers supply exact zero gradient.
+     * Spatial fuel is sampled collectively once for the same ordered batch.
      */
     [[nodiscard]] ERFFireStepDiagnostics
     advance_direct_reference_wind_batched(
@@ -281,7 +328,8 @@ public:
 
     /**
      * Explicit-WAF advance with batched wind and terrain-gradient sampling.
-     * Flat samplers supply exact zero terrain gradient.
+     * Flat samplers supply exact zero terrain gradient. Spatial fuel uses the
+     * same ordered batch contract and one collective material sample per call.
      */
     [[nodiscard]] ERFFireStepDiagnostics
     advance_explicit_waf_20ft_batched(
@@ -342,9 +390,12 @@ private:
         amrex::Real dt_s);
 
     ERFFireSpreadConfig config_;
-    // Value-owned and read-only to callers; ordinary runtime copies/moves do
-    // not retain references into another runtime or allocate material rasters.
+    // Value-owned and read-only to callers; ordinary uniform runtime copies
+    // retain no references into another runtime.
     FireFuelField fuel_field_;
+    // Static distributed material is immutable/shareable. Optional keeps the
+    // existing uniform runtime O(1) and checkpoint schema unchanged.
+    std::optional<FireFuelRaster> spatial_fuel_raster_;
     FireFront front_;
     FireBurnedFractionRaster burned_fraction_;
     FireFirstArrivalRaster first_arrival_;

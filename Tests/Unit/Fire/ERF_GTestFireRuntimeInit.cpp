@@ -214,6 +214,10 @@ using ERFFire::FireFrontComponent;
 using ERFFire::FireFlatEnvironmentSampler;
 using ERFFire::FireTerrainSurface;
 using ERFFire::FireCartesianRasterGeometry2D;
+using ERFFire::FireFuelModelId;
+using ERFFire::FireFuelMoistureClass;
+using ERFFire::FireFuelRaster;
+using ERFFire::FireFuelRasterState;
 
 SpreadConfig
 fuel_runtime_config(int resolution = 0, int material_case = 0)
@@ -294,6 +298,33 @@ fuel_runtime_batch(const FireFlatEnvironmentSampler& environment)
     };
 }
 
+FireFuelRaster
+fuel_runtime_spatial_raster(
+    const SpreadConfig& config,
+    Real left_moisture,
+    Real right_moisture)
+{
+    FireFuelRasterState state;
+    const auto& geometry = config.raster_geometry;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        state.cells.resize(geometry.nx * geometry.ny);
+        for (std::size_t j = 0; j < geometry.ny; ++j) {
+            for (std::size_t i = 0; i < geometry.nx; ++i) {
+                auto& cell = state.cells[j * geometry.nx + i];
+                cell.model_id = FireFuelModelId::FM1;
+                cell.moisture.set(
+                    FireFuelMoistureClass::Dead1h,
+                    i < geometry.nx / 2
+                        ? left_moisture
+                        : right_moisture);
+            }
+        }
+    }
+    return FireFuelRaster::collective_from_io_rank_state(
+        geometry,
+        state);
+}
+
 std::string
 fuel_runtime_state_bytes(const RuntimeState& state)
 {
@@ -339,6 +370,95 @@ expect_runtime_material(const Runtime& runtime, const SpreadConfig& config)
     }
     EXPECT_FALSE(material.moisture.has(Component::LiveHerbaceous));
     EXPECT_FALSE(material.moisture.has(Component::LiveWoody));
+}
+
+void
+expect_step_diagnostics_equal(
+    const ERFFire::ERFFireStepDiagnostics& actual,
+    const ERFFire::ERFFireStepDiagnostics& expected)
+{
+    EXPECT_EQ(actual.start_time_s, expected.start_time_s);
+    EXPECT_EQ(actual.end_time_s, expected.end_time_s);
+    EXPECT_EQ(actual.pre_remesh_vertex_count, expected.pre_remesh_vertex_count);
+    EXPECT_EQ(actual.post_remesh_vertex_count, expected.post_remesh_vertex_count);
+    EXPECT_EQ(actual.vertices_removed, expected.vertices_removed);
+    EXPECT_EQ(actual.vertices_added, expected.vertices_added);
+    EXPECT_EQ(actual.newly_arrived_cell_count, expected.newly_arrived_cell_count);
+    EXPECT_EQ(actual.arrived_cell_count, expected.arrived_cell_count);
+    EXPECT_EQ(actual.newly_burned_area_m2, expected.newly_burned_area_m2);
+    EXPECT_EQ(actual.burned_area_m2, expected.burned_area_m2);
+    EXPECT_EQ(actual.newly_consumed_dry_fuel_kg, expected.newly_consumed_dry_fuel_kg);
+    EXPECT_EQ(actual.remaining_dry_fuel_kg, expected.remaining_dry_fuel_kg);
+    EXPECT_EQ(actual.consumed_dry_fuel_kg, expected.consumed_dry_fuel_kg);
+    EXPECT_EQ(actual.sensible_energy_increment_j, expected.sensible_energy_increment_j);
+    EXPECT_EQ(actual.sensible_energy_j, expected.sensible_energy_j);
+    EXPECT_EQ(actual.water_released_increment_kg, expected.water_released_increment_kg);
+    EXPECT_EQ(actual.water_released_kg, expected.water_released_kg);
+}
+
+void
+expect_runtime_distributed_state_equal(
+    const Runtime& actual,
+    const Runtime& expected)
+{
+    ASSERT_EQ(
+        actual.front().components().size(),
+        expected.front().components().size());
+    for (std::size_t component = 0;
+         component < actual.front().components().size();
+         ++component) {
+        const auto& a = actual.front().components()[component];
+        const auto& b = expected.front().components()[component];
+        EXPECT_EQ(a.role, b.role);
+        ASSERT_EQ(a.perimeter.vertices_m().size(), b.perimeter.vertices_m().size());
+        for (std::size_t vertex = 0;
+             vertex < a.perimeter.vertices_m().size();
+             ++vertex) {
+            EXPECT_EQ(a.perimeter.vertices_m()[vertex].x,
+                      b.perimeter.vertices_m()[vertex].x);
+            EXPECT_EQ(a.perimeter.vertices_m()[vertex].y,
+                      b.perimeter.vertices_m()[vertex].y);
+        }
+    }
+
+    const auto actual_burned =
+        actual.burned_fraction_raster().collective_snapshot_state_to_io_rank();
+    const auto expected_burned =
+        expected.burned_fraction_raster().collective_snapshot_state_to_io_rank();
+    EXPECT_EQ(actual_burned.burned_fraction, expected_burned.burned_fraction);
+
+    const auto actual_arrival =
+        actual.first_arrival_raster().collective_snapshot_state_to_io_rank();
+    const auto expected_arrival =
+        expected.first_arrival_raster().collective_snapshot_state_to_io_rank();
+    EXPECT_EQ(actual_arrival.arrived, expected_arrival.arrived);
+    EXPECT_EQ(actual_arrival.first_arrival_time_s, expected_arrival.first_arrival_time_s);
+    EXPECT_EQ(actual_arrival.has_initial_condition, expected_arrival.has_initial_condition);
+    EXPECT_EQ(actual_arrival.initial_condition_time_s,
+              expected_arrival.initial_condition_time_s);
+    EXPECT_EQ(actual_arrival.has_committed_sweep, expected_arrival.has_committed_sweep);
+    EXPECT_EQ(actual_arrival.last_sweep_end_time_s,
+              expected_arrival.last_sweep_end_time_s);
+
+    const auto actual_combustion =
+        actual.combustion_raster().collective_snapshot_state_to_io_rank();
+    const auto expected_combustion =
+        expected.combustion_raster().collective_snapshot_state_to_io_rank();
+    EXPECT_EQ(actual_combustion.initialized, expected_combustion.initialized);
+    ASSERT_EQ(actual_combustion.cells.size(), expected_combustion.cells.size());
+    for (std::size_t index = 0;
+         index < actual_combustion.cells.size();
+         ++index) {
+        const auto& a = actual_combustion.cells[index];
+        const auto& b = expected_combustion.cells[index];
+        EXPECT_EQ(a.ignited_area_fraction, b.ignited_area_fraction);
+        EXPECT_EQ(a.remaining_dry_fuel_kg_m2, b.remaining_dry_fuel_kg_m2);
+        EXPECT_EQ(a.consumed_dry_fuel_kg_m2, b.consumed_dry_fuel_kg_m2);
+        EXPECT_EQ(a.sensible_energy_j_m2, b.sensible_energy_j_m2);
+        EXPECT_EQ(a.water_released_kg_m2, b.water_released_kg_m2);
+    }
+
+    EXPECT_EQ(actual.current_time_s(), expected.current_time_s());
 }
 
 // Frozen legacy normal-speed arithmetic from the pre-field runtime. This
@@ -633,6 +753,194 @@ TEST(FireFuelRuntime, FailedMidpointSamplingPreservesMaterialAndHistory)
     EXPECT_EQ(calls, 2);
     expect_runtime_material(runtime, config);
     EXPECT_EQ(fuel_runtime_state_bytes(runtime.snapshot_state()), before);
+}
+
+TEST(FireFuelRuntime, SpatialUniformRasterMatchesUniformBatchedRuntime)
+{
+    const auto config = fuel_runtime_config();
+    const auto spatial_fuel =
+        fuel_runtime_spatial_raster(
+            config,
+            config.dead_fuel_moisture_fraction,
+            config.dead_fuel_moisture_fraction);
+
+    Runtime uniform(
+        fuel_runtime_ignition(),
+        Real(0),
+        config);
+    Runtime spatial(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        spatial_fuel);
+
+    EXPECT_FALSE(uniform.has_spatial_fuel());
+    ASSERT_TRUE(spatial.has_spatial_fuel());
+    ASSERT_NE(spatial.spatial_fuel_raster(), nullptr);
+
+    Runtime spatial_copy = spatial;
+    ASSERT_NE(spatial_copy.spatial_fuel_raster(), nullptr);
+    EXPECT_EQ(
+        &spatial.spatial_fuel_raster()->distributed_values(),
+        &spatial_copy.spatial_fuel_raster()->distributed_values());
+
+    const auto environment =
+        fuel_runtime_environment(
+            config.raster_geometry,
+            {Real(1), Real(0)});
+    const auto batch = fuel_runtime_batch(environment);
+
+    const auto uniform_diagnostics =
+        uniform.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+    const auto spatial_diagnostics =
+        spatial.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+
+    expect_step_diagnostics_equal(
+        spatial_diagnostics,
+        uniform_diagnostics);
+    expect_runtime_distributed_state_equal(
+        spatial,
+        uniform);
+}
+
+TEST(FireFuelRuntime, SpatialMoistureDrivesSpreadAndCombustion)
+{
+    const auto config = fuel_runtime_config();
+    const Real dry_moisture =
+        config.dead_fuel_moisture_fraction;
+    const Real wet_moisture = Real(0.20);
+    const auto spatial_fuel =
+        fuel_runtime_spatial_raster(
+            config,
+            dry_moisture,
+            wet_moisture);
+
+    Runtime uniform(
+        fuel_runtime_ignition(),
+        Real(0),
+        config);
+    Runtime spatial(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        spatial_fuel);
+
+    const auto environment =
+        fuel_runtime_environment(
+            config.raster_geometry,
+            FireVec2{});
+    const auto batch = fuel_runtime_batch(environment);
+
+    const auto uniform_diagnostics =
+        uniform.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+    const auto spatial_diagnostics =
+        spatial.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+
+    EXPECT_LT(
+        spatial_diagnostics.burned_area_m2,
+        uniform_diagnostics.burned_area_m2);
+    EXPECT_NE(
+        spatial_diagnostics.water_released_kg,
+        uniform_diagnostics.water_released_kg);
+
+    const auto combustion =
+        spatial.combustion_raster()
+            .collective_snapshot_state_to_io_rank();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        const auto& geometry = config.raster_geometry;
+        ASSERT_EQ(
+            combustion.cells.size(),
+            geometry.nx * geometry.ny);
+
+        bool saw_dry_consumption = false;
+        bool saw_wet_consumption = false;
+        for (std::size_t j = 0; j < geometry.ny; ++j) {
+            for (std::size_t i = 0; i < geometry.nx; ++i) {
+                const auto& cell =
+                    combustion.cells[j * geometry.nx + i];
+                const Real moisture =
+                    i < geometry.nx / 2
+                        ? dry_moisture
+                        : wet_moisture;
+                EXPECT_EQ(
+                    cell.water_released_kg_m2,
+                    cell.consumed_dry_fuel_kg_m2
+                        * (moisture
+                           + config.combustion_parameters
+                               .combustion_water_yield_kg_per_kg_dry));
+                if (cell.consumed_dry_fuel_kg_m2 > Real(0)) {
+                    if (i < geometry.nx / 2) {
+                        saw_dry_consumption = true;
+                    } else {
+                        saw_wet_consumption = true;
+                    }
+                }
+            }
+        }
+        EXPECT_TRUE(saw_dry_consumption);
+        EXPECT_TRUE(saw_wet_consumption);
+    }
+}
+
+TEST(FireFuelRuntime, SpatialRuntimeRequiresBatchedAdvanceAndDefersCheckpointPersistence)
+{
+    const auto config = fuel_runtime_config();
+    const auto spatial_fuel =
+        fuel_runtime_spatial_raster(
+            config,
+            config.dead_fuel_moisture_fraction,
+            config.dead_fuel_moisture_fraction);
+    Runtime runtime(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        spatial_fuel);
+
+    const auto environment =
+        fuel_runtime_environment(
+            config.raster_geometry,
+            {Real(1), Real(0)});
+
+    EXPECT_THROW(
+        (void)runtime.advance_direct_reference_wind(
+            environment,
+            Real(0.25)),
+        std::logic_error);
+    EXPECT_EQ(runtime.current_time_s(), Real(0));
+
+    EXPECT_THROW(
+        (void)runtime.snapshot_state(),
+        std::logic_error);
+    EXPECT_THROW(
+        (void)runtime.collective_snapshot_state_to_io_rank(),
+        std::logic_error);
+}
+
+TEST(FireFuelRuntime, SpatialRuntimeRequiresCanonicalFm1Base)
+{
+    const auto custom_config =
+        fuel_runtime_config(0, 1);
+    const auto spatial_fuel =
+        fuel_runtime_spatial_raster(
+            custom_config,
+            Real(0.08),
+            Real(0.08));
+
+    EXPECT_THROW(
+        (void)Runtime(
+            fuel_runtime_ignition(),
+            Real(0),
+            custom_config,
+            spatial_fuel),
+        std::invalid_argument);
 }
 
 } // namespace
