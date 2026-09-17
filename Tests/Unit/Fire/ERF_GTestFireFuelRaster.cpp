@@ -457,6 +457,47 @@ complete_model_moisture(FireFuelModelId id)
     return moisture;
 }
 
+#ifdef AMREX_USE_GPU
+struct DeviceFuelCombustionAccountingProbe
+{
+    FireFuelCombustionAccounting accounting{};
+    int status{};
+};
+
+DeviceFuelCombustionAccountingProbe
+run_device_fuel_combustion_accounting_probe(
+    const FireCombustionParameters& base,
+    const FireFuelRasterCell& cell)
+{
+    amrex::Gpu::DeviceScalar<FireFuelCombustionAccounting>
+        device_accounting;
+    amrex::Gpu::DeviceScalar<int> device_status;
+
+    auto* accounting_ptr =
+        device_accounting.dataPtr();
+    auto* status_ptr =
+        device_status.dataPtr();
+
+    amrex::ParallelFor(
+        1,
+        [=] AMREX_GPU_DEVICE (int) noexcept
+        {
+            FireFuelCombustionAccounting result{};
+            const auto status =
+                ERFFire::try_make_anderson13_fire_combustion_accounting(
+                    base,
+                    cell,
+                    result);
+            *accounting_ptr = result;
+            *status_ptr = static_cast<int>(status);
+        });
+
+    return {
+        device_accounting.dataValue(),
+        device_status.dataValue()};
+}
+#endif
+
 } // namespace
 
 TEST(FireFuelModel, Anderson13MoistureContractsMatchPublishedClasses)
@@ -1087,59 +1128,38 @@ TEST(FireFuelCombustionAccounting, DeviceSafeResolutionMatchesHost)
         host_status,
         FireFuelCombustionAccountingStatus::success);
 
-    amrex::Gpu::DeviceScalar<FireFuelCombustionAccounting>
-        device_accounting;
-    amrex::Gpu::DeviceScalar<int> device_status;
-
-    auto* accounting_ptr =
-        device_accounting.dataPtr();
-    auto* status_ptr =
-        device_status.dataPtr();
-
-    amrex::ParallelFor(
-        1,
-        [=] AMREX_GPU_DEVICE (int) noexcept
-        {
-            FireFuelCombustionAccounting result{};
-            const auto status =
-                ERFFire::try_make_anderson13_fire_combustion_accounting(
-                    base,
-                    cell,
-                    result);
-            *accounting_ptr = result;
-            *status_ptr = static_cast<int>(status);
-        });
-
-    const FireFuelCombustionAccounting actual =
-        device_accounting.dataValue();
+    const DeviceFuelCombustionAccountingProbe actual =
+        run_device_fuel_combustion_accounting_probe(
+            base,
+            cell);
 
     EXPECT_EQ(
-        device_status.dataValue(),
+        actual.status,
         static_cast<int>(
             FireFuelCombustionAccountingStatus::success));
     EXPECT_NEAR(
-        actual.parameters.dry_fuel_load_kg_m2,
+        actual.accounting.parameters.dry_fuel_load_kg_m2,
         host.parameters.dry_fuel_load_kg_m2,
         fuel_accounting_tolerance(
             host.parameters.dry_fuel_load_kg_m2));
     EXPECT_NEAR(
-        actual.parameters.fuel_moisture_fraction,
+        actual.accounting.parameters.fuel_moisture_fraction,
         host.parameters.fuel_moisture_fraction,
         fuel_accounting_tolerance(
             host.parameters.fuel_moisture_fraction));
     EXPECT_NEAR(
-        actual.prescribed_water_load_kg_m2,
+        actual.accounting.prescribed_water_load_kg_m2,
         host.prescribed_water_load_kg_m2,
         fuel_accounting_tolerance(
             host.prescribed_water_load_kg_m2));
     EXPECT_EQ(
-        actual.parameters.sensible_heat_release_j_kg_dry,
+        actual.accounting.parameters.sensible_heat_release_j_kg_dry,
         host.parameters.sensible_heat_release_j_kg_dry);
     EXPECT_EQ(
-        actual.parameters.burn_time_constant_s,
+        actual.accounting.parameters.burn_time_constant_s,
         host.parameters.burn_time_constant_s);
     EXPECT_EQ(
-        actual.parameters.combustion_water_yield_kg_per_kg_dry,
+        actual.accounting.parameters.combustion_water_yield_kg_per_kg_dry,
         host.parameters.combustion_water_yield_kg_per_kg_dry);
 }
 #endif
