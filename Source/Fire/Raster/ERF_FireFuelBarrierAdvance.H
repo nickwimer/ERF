@@ -5,6 +5,7 @@
 #include <ERF_FireFuelBarrierFront.H>
 #include <ERF_FireFrontPropagator.H>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <optional>
@@ -28,6 +29,14 @@ struct FireFuelBarrierMotionClipResult
  * Every rank must provide the same starts/candidates. Candidates with no
  * contact are preserved bit-for-bit. Contacted candidates are replaced by the
  * exact raster-face contact returned by collective_first_nonburnable_contacts.
+ *
+ * An RK trial point may lie outside the represented Fire rectangle even when a
+ * NonBurnable barrier is encountered first. The underlying raster traversal
+ * intentionally accepts only closed-domain endpoints, so such trial segments
+ * are truncated to their first domain-face intersection for the material
+ * query. If no barrier is found before that face, the original out-of-domain
+ * motion is rejected rather than silently turning the Fire-domain boundary
+ * into an implicit barrier.
  */
 [[nodiscard]] inline FireFuelBarrierMotionClipResult
 collective_clip_fire_fuel_motion_to_nonburnable(
@@ -40,13 +49,138 @@ collective_clip_fire_fuel_motion_to_nonburnable(
             "Fire fuel barrier motion clip start/candidate batches must have equal size");
     }
 
+    const auto& geometry = raster.geometry();
+    (void)detail::validate_fire_cartesian_raster_geometry(
+        geometry);
+
+    const FireCartesianCell2D upper_cell =
+        detail::fire_cartesian_raster_cell_bounds(
+            geometry,
+            geometry.nx - 1,
+            geometry.ny - 1);
+    const amrex::Real xlo_m = geometry.xlo_m;
+    const amrex::Real ylo_m = geometry.ylo_m;
+    const amrex::Real xhi_m = upper_cell.xhi_m;
+    const amrex::Real yhi_m = upper_cell.yhi_m;
+
+    std::vector<FireVec2> query_candidates =
+        candidates_m;
+    std::vector<unsigned char> domain_truncated(
+        candidates_m.size(),
+        static_cast<unsigned char>(0));
+
+    for (std::size_t index = 0;
+         index < candidates_m.size();
+         ++index) {
+        const FireVec2& start = starts_m[index];
+        const FireVec2& candidate = candidates_m[index];
+
+        // The committed state must already be represented by the Fire raster.
+        (void)detail::fire_cartesian_raster_locate_cell(
+            geometry,
+            start.x,
+            start.y);
+
+        if (!std::isfinite(candidate.x)
+            || !std::isfinite(candidate.y)) {
+            throw std::invalid_argument(
+                "Fire fuel barrier motion candidate must be finite");
+        }
+
+        const bool candidate_inside =
+            candidate.x >= xlo_m
+            && candidate.x <= xhi_m
+            && candidate.y >= ylo_m
+            && candidate.y <= yhi_m;
+        if (candidate_inside) {
+            continue;
+        }
+
+        const amrex::Real dx =
+            candidate.x - start.x;
+        const amrex::Real dy =
+            candidate.y - start.y;
+        if (!std::isfinite(dx) || !std::isfinite(dy)) {
+            throw std::overflow_error(
+                "Fire fuel barrier motion displacement is not finite");
+        }
+
+        amrex::Real domain_fraction =
+            amrex::Real(1);
+
+        if (candidate.x < xlo_m) {
+            if (!(dx < amrex::Real(0))) {
+                throw std::logic_error(
+                    "Fire fuel barrier motion cannot reach the lower x domain face");
+            }
+            domain_fraction =
+                std::min(
+                    domain_fraction,
+                    (xlo_m - start.x) / dx);
+        } else if (candidate.x > xhi_m) {
+            if (!(dx > amrex::Real(0))) {
+                throw std::logic_error(
+                    "Fire fuel barrier motion cannot reach the upper x domain face");
+            }
+            domain_fraction =
+                std::min(
+                    domain_fraction,
+                    (xhi_m - start.x) / dx);
+        }
+
+        if (candidate.y < ylo_m) {
+            if (!(dy < amrex::Real(0))) {
+                throw std::logic_error(
+                    "Fire fuel barrier motion cannot reach the lower y domain face");
+            }
+            domain_fraction =
+                std::min(
+                    domain_fraction,
+                    (ylo_m - start.y) / dy);
+        } else if (candidate.y > yhi_m) {
+            if (!(dy > amrex::Real(0))) {
+                throw std::logic_error(
+                    "Fire fuel barrier motion cannot reach the upper y domain face");
+            }
+            domain_fraction =
+                std::min(
+                    domain_fraction,
+                    (yhi_m - start.y) / dy);
+        }
+
+        if (!std::isfinite(domain_fraction)
+            || domain_fraction < amrex::Real(0)
+            || domain_fraction > amrex::Real(1)) {
+            throw std::logic_error(
+                "Fire fuel barrier motion produced an invalid domain intersection");
+        }
+
+        const amrex::Real clipped_fraction =
+            std::clamp(
+                domain_fraction,
+                amrex::Real(0),
+                amrex::Real(1));
+        query_candidates[index] = {
+            std::clamp(
+                start.x + clipped_fraction * dx,
+                xlo_m,
+                xhi_m),
+            std::clamp(
+                start.y + clipped_fraction * dy,
+                ylo_m,
+                yhi_m)
+        };
+        domain_truncated[index] =
+            static_cast<unsigned char>(1);
+    }
+
     FireFuelBarrierMotionClipResult result;
     result.positions_m = candidates_m;
     result.contacts =
         collective_first_nonburnable_contacts(
             raster,
             starts_m,
-            candidates_m);
+            query_candidates);
 
     if (result.contacts.size() != candidates_m.size()) {
         throw std::logic_error(
@@ -59,6 +193,12 @@ collective_clip_fire_fuel_motion_to_nonburnable(
         if (result.contacts[index].has_value()) {
             result.positions_m[index] =
                 result.contacts[index]->position_m;
+            continue;
+        }
+
+        if (domain_truncated[index] != 0) {
+            throw std::out_of_range(
+                "Fire fuel barrier motion leaves the raster before reaching NonBurnable material");
         }
     }
 
