@@ -27,6 +27,29 @@ struct FireFuelSpreadInputs
     RothermelMulticlassInputs rothermel{};
 };
 
+namespace detail
+{
+
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real
+fire_fuel_required_moisture_or_zero(
+    const FireFuelMoisture& moisture,
+    unsigned int required_mask,
+    FireFuelMoistureClass component) noexcept
+{
+    const unsigned int bit =
+        fire_fuel_moisture_component_bit(component);
+    if ((required_mask & bit) == 0u) {
+        return amrex::Real(0);
+    }
+
+    amrex::Real value{};
+    (void)moisture.try_get(component, value);
+    return value;
+}
+
+} // namespace detail
+
 /**
  * Resolve one categorical material into original-13 multi-class inputs.
  *
@@ -63,30 +86,29 @@ try_make_fire_fuel_spread_inputs(
         return FireFuelSpreadInputStatus::missing_required_moisture;
     }
 
-    const auto required_value =
-        [&moisture, required_mask = contract.required_mask]
-        AMREX_GPU_HOST_DEVICE (
-            FireFuelMoistureClass component) noexcept
-        {
-            const unsigned int bit =
-                fire_fuel_moisture_component_bit(component);
-            if ((required_mask & bit) == 0u) {
-                return amrex::Real(0);
-            }
-
-            amrex::Real value{};
-            (void)moisture.try_get(component, value);
-            return value;
-        };
-
     result.anderson13_model_number =
         fire_fuel_model_number(model_id);
     result.rothermel = {
-        required_value(FireFuelMoistureClass::Dead1h),
-        required_value(FireFuelMoistureClass::Dead10h),
-        required_value(FireFuelMoistureClass::Dead100h),
-        required_value(FireFuelMoistureClass::LiveHerbaceous)
-            + required_value(FireFuelMoistureClass::LiveWoody),
+        detail::fire_fuel_required_moisture_or_zero(
+            moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::Dead1h),
+        detail::fire_fuel_required_moisture_or_zero(
+            moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::Dead10h),
+        detail::fire_fuel_required_moisture_or_zero(
+            moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::Dead100h),
+        detail::fire_fuel_required_moisture_or_zero(
+            moisture,
+            contract.required_mask,
+            FireFuelMoistureClass::LiveHerbaceous)
+            + detail::fire_fuel_required_moisture_or_zero(
+                moisture,
+                contract.required_mask,
+                FireFuelMoistureClass::LiveWoody),
         model_wind_speed_mps,
         slope_tangent_magnitude
     };
