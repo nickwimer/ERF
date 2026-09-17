@@ -117,11 +117,16 @@ validate_spatial_fuel_impl(
                 }
 
                 FireCombustionParameters local{};
-                if (try_make_fire_combustion_parameters_for_fuel_cell(
+                const auto status =
+                    try_make_fire_combustion_parameters_for_fuel_cell(
                         base,
                         fuel_cell,
-                        local)
-                    != FireFuelCombustionParameterStatus::success) {
+                        local);
+
+                if (status
+                        != FireFuelCombustionParameterStatus::success
+                    && status
+                        != FireFuelCombustionParameterStatus::nonburnable) {
                     return {1, 0};
                 }
 
@@ -157,6 +162,17 @@ validate_spatial_fuel_impl(
                         k,
                         FireCombustionRaster::water_released_comp)};
 
+                if (status
+                    == FireFuelCombustionParameterStatus::nonburnable) {
+                    const bool canonical_zero =
+                        state.ignited_area_fraction == amrex::Real(0)
+                        && state.remaining_dry_fuel_kg_m2 == amrex::Real(0)
+                        && state.consumed_dry_fuel_kg_m2 == amrex::Real(0)
+                        && state.sensible_energy_j_m2 == amrex::Real(0)
+                        && state.water_released_kg_m2 == amrex::Real(0);
+                    return {0, canonical_zero ? 0 : 1};
+                }
+
                 return {
                     0,
                     combustion_state_valid(state, local)
@@ -171,7 +187,7 @@ validate_spatial_fuel_impl(
 
     if (material_failure != 0) {
         throw std::invalid_argument(
-            "Fire spatial combustion currently requires every cell to be FM1 with prescribed dead 1-h moisture; NonBurnable remains disabled until barrier dynamics are enforced");
+            "Fire spatial combustion requires FM1 with prescribed dead 1-h moisture or NonBurnable cells");
     }
     if (state_failure != 0) {
         throw std::invalid_argument(
@@ -279,6 +295,17 @@ rewrite_water_for_spatial_fuel_impl(
                         fuel_cell,
                         local)
                     : FireFuelCombustionParameterStatus::unsupported_model;
+
+                if (status
+                    == FireFuelCombustionParameterStatus::nonburnable) {
+                    values(
+                        i,
+                        j,
+                        k,
+                        FireCombustionRaster::water_released_comp) =
+                        amrex::Real(0);
+                    return;
+                }
 
                 if (status
                     != FireFuelCombustionParameterStatus::success) {
