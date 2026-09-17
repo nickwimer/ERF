@@ -1,4 +1,5 @@
 #include <ERF_FireCheckpoint.H>
+#include <ERF_FireCheckpointV4.H>
 
 #include <ERF_FireContext.H>
 #include <ERF_FireRuntimeInit.H>
@@ -51,8 +52,28 @@ ERFFireContext::write_checkpoint(
             initial_fire_runtime.get();
     }
 
+    const bool spatial_checkpoint =
+        fire_runtime_for_checkpoint->has_spatial_fuel();
+
+    std::uint64_t spatial_fuel_fingerprint_fnv1a64 = 0;
+    if (spatial_checkpoint) {
+        const FireFuelRaster* spatial_fuel =
+            fire_runtime_for_checkpoint->spatial_fuel_raster();
+        if (spatial_fuel == nullptr) {
+            amrex::Error(
+                "ERF-Fire spatial checkpoint runtime lost its material raster");
+        }
+
+        spatial_fuel_fingerprint_fnv1a64 =
+            collective_fire_fuel_raster_fingerprint_fnv1a64(
+                *spatial_fuel);
+    }
+
     amrex::MultiFab fire_checkpoint_raster =
-        make_erf_fire_checkpoint_v2_raster(
+        spatial_checkpoint
+        ? make_erf_fire_checkpoint_v4_raster(
+            *fire_runtime_for_checkpoint)
+        : make_erf_fire_checkpoint_v2_raster(
             *fire_runtime_for_checkpoint);
 
     amrex::VisMF::Write(
@@ -98,10 +119,18 @@ ERFFireContext::write_checkpoint(
     }
 
     try {
-        write_erf_fire_checkpoint_v3_metadata(
-            *fire_runtime_for_checkpoint,
-            runtime_options_,
-            fire_state);
+        if (spatial_checkpoint) {
+            write_erf_fire_checkpoint_v4_metadata(
+                *fire_runtime_for_checkpoint,
+                runtime_options_,
+                spatial_fuel_fingerprint_fnv1a64,
+                fire_state);
+        } else {
+            write_erf_fire_checkpoint_v3_metadata(
+                *fire_runtime_for_checkpoint,
+                runtime_options_,
+                fire_state);
+        }
 
         const std::string
             fire_terrain_policy_name =
@@ -197,7 +226,8 @@ ERFFireContext::restore_checkpoint(
 
         if (checkpoint_version != 1
             && checkpoint_version != 2
-            && checkpoint_version != 3) {
+            && checkpoint_version != 3
+            && checkpoint_version != 4) {
             throw std::runtime_error(
                 "unsupported ERF-Fire checkpoint format version");
         }
@@ -209,6 +239,11 @@ ERFFireContext::restore_checkpoint(
 
         ERFFireCheckpointV2Metadata v2_metadata;
         ERFFireCheckpointV3Metadata v3_metadata;
+        ERFFireCheckpointV4Metadata v4_metadata;
+
+        int v4_spatial_fuel_schema_version = 0;
+        unsigned long long
+            v4_spatial_fuel_fingerprint_fnv1a64 = 0ULL;
 
         // Preserve the existing collective restart ordering exactly.
         // resolve_terrain_source() may load a regular-text terrain source using
@@ -258,13 +293,27 @@ ERFFireContext::restore_checkpoint(
                     checkpoint =
                         &v2_metadata.checkpoint;
 
-                } else {
+                } else if (checkpoint_version == 3) {
                     v3_metadata =
                         read_erf_fire_checkpoint_v3_metadata(
                             fire_state_stream);
 
                     checkpoint =
                         &v3_metadata.checkpoint;
+
+                } else {
+                    v4_metadata =
+                        read_erf_fire_checkpoint_v4_metadata(
+                            fire_state_stream);
+
+                    checkpoint =
+                        &v4_metadata.checkpoint;
+                    v4_spatial_fuel_schema_version =
+                        v4_metadata.spatial_fuel_schema_version;
+                    v4_spatial_fuel_fingerprint_fnv1a64 =
+                        static_cast<unsigned long long>(
+                            v4_metadata
+                                .spatial_fuel_fingerprint_fnv1a64);
                 }
 
                 validate_fire_checkpoint_policy(
@@ -308,6 +357,17 @@ ERFFireContext::restore_checkpoint(
                 "IO rank failed to read or validate ERF-Fire checkpoint state");
         }
 
+        if (checkpoint_version == 4) {
+            amrex::ParallelDescriptor::Bcast(
+                &v4_spatial_fuel_schema_version,
+                1,
+                amrex::ParallelDescriptor::IOProcessorNumber());
+            amrex::ParallelDescriptor::Bcast(
+                &v4_spatial_fuel_fingerprint_fnv1a64,
+                1,
+                amrex::ParallelDescriptor::IOProcessorNumber());
+        }
+
         if (checkpoint_version == 1) {
             ERFFireSpreadRuntime restored =
                 ERFFireSpreadRuntime::
@@ -340,7 +400,21 @@ ERFFireContext::restore_checkpoint(
                 fire_raster_name);
 
             ERFFireSpreadRuntime restored =
-                ERFFireSpreadRuntime::
+                checkpoint_version == 4
+                ? collective_restore_erf_fire_checkpoint_v4(
+                    ERFFireCheckpointV4Metadata{
+                        ERFFireCheckpointState{
+                            std::move(restore_state),
+                            ERFFireCouplingMode::OneWay,
+                            ERFFireWindMode::DirectReference,
+                            amrex::Real(0),
+                            amrex::Real(1),
+                            amrex::Real(50)},
+                        v4_spatial_fuel_schema_version,
+                        static_cast<std::uint64_t>(
+                            v4_spatial_fuel_fingerprint_fnv1a64)},
+                    checkpoint_raster)
+                : ERFFireSpreadRuntime::
                     collective_restore_from_checkpoint_raster(
                         std::move(restore_state),
                         checkpoint_raster);
