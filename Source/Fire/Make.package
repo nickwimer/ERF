@@ -43,6 +43,7 @@ CEXE_headers += ERF_FirePerimeterRemesher.H
 CEXE_headers += ERF_FirePerimeterSweep.H
 CEXE_headers += ERF_VectorPerimeterPropagator.H
 
+CEXE_headers += ERF_FireFuelModel.H
 CEXE_headers += ERF_FireFuelMoisture.H
 CEXE_headers += ERF_RothermelFuel.H
 CEXE_headers += ERF_RothermelModel.H

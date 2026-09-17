@@ -1,6 +1,7 @@
 #ifndef ERF_FIRE_FUEL_RASTER_H_
 #define ERF_FIRE_FUEL_RASTER_H_
 
+#include <ERF_FireFuelModel.H>
 #include <ERF_FireFuelMoisture.H>
 #include <ERF_FireRasterGeometry.H>
 #include <ERF_FireSurfaceLayout.H>
@@ -33,18 +34,10 @@ namespace ERFFire
 {
 
 /**
- * Stable categorical identifiers for the spatial material raster.
- *
- * Only explicit no-fuel and FM1 are admitted in this storage slice. Additional
- * Anderson identifiers are added only when their multi-class behavior is
- * implemented. Storing NonBurnable here does not yet enable barrier dynamics.
+ * Distributed storage accepts the stable material IDs defined by
+ * ERF_FireFuelModel.H. Storage validity is intentionally separate from the
+ * required-moisture and production-physics contracts.
  */
-enum class FireFuelModelId : int
-{
-    NonBurnable = 0,
-    FM1 = 1
-};
-
 struct FireFuelRasterCell
 {
     FireFuelModelId model_id{FireFuelModelId::FM1};
@@ -79,14 +72,6 @@ struct FireFuelRasterComponents
 
 namespace detail
 {
-
-AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
-bool
-fire_fuel_model_id_valid(FireFuelModelId id) noexcept
-{
-    return id == FireFuelModelId::NonBurnable
-        || id == FireFuelModelId::FM1;
-}
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 FireFuelMoistureClass
@@ -128,12 +113,17 @@ try_decode_fire_fuel_raster_cell(
         return false;
     }
 
-    FireFuelModelId model_id{};
-    if (raw_model == amrex::Real(0)) {
-        model_id = FireFuelModelId::NonBurnable;
-    } else if (raw_model == amrex::Real(1)) {
-        model_id = FireFuelModelId::FM1;
-    } else {
+    if (raw_model < amrex::Real(0)
+        || raw_model > amrex::Real(13)) {
+        return false;
+    }
+    const int model_number = static_cast<int>(raw_model);
+    if (static_cast<amrex::Real>(model_number) != raw_model) {
+        return false;
+    }
+    const FireFuelModelId model_id =
+        static_cast<FireFuelModelId>(model_number);
+    if (!fire_fuel_model_id_valid(model_id)) {
         return false;
     }
 
@@ -269,11 +259,19 @@ decode_collective_fire_fuel_sample(
             "collective Fire fuel point sample contains non-finite encoding");
     }
 
-    if (raw_model == amrex::Real(0)) {
-        result.model_id = FireFuelModelId::NonBurnable;
-    } else if (raw_model == amrex::Real(1)) {
-        result.model_id = FireFuelModelId::FM1;
-    } else {
+    if (raw_model < amrex::Real(0)
+        || raw_model > amrex::Real(13)) {
+        throw std::logic_error(
+            "collective Fire fuel point sample contains invalid model id");
+    }
+    const int model_number = static_cast<int>(raw_model);
+    if (static_cast<amrex::Real>(model_number) != raw_model) {
+        throw std::logic_error(
+            "collective Fire fuel point sample contains non-integral model id");
+    }
+    result.model_id =
+        static_cast<FireFuelModelId>(model_number);
+    if (!fire_fuel_model_id_valid(result.model_id)) {
         throw std::logic_error(
             "collective Fire fuel point sample contains invalid model id");
     }

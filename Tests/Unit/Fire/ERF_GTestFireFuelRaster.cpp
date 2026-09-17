@@ -25,6 +25,7 @@ using ERFFire::FireCombustionRasterOptions;
 using ERFFire::FireCombustionState;
 using ERFFire::FireFuelCombustionParameterStatus;
 using ERFFire::FireFuelModelId;
+using ERFFire::FireFuelModelMoistureContract;
 using ERFFire::FireFuelMoisture;
 using ERFFire::FireFuelRaster;
 using ERFFire::FireFuelRasterCell;
@@ -373,6 +374,229 @@ device_decode_mismatch_count(const FireFuelRaster& raster)
 #endif
 
 } // namespace
+
+TEST(FireFuelModel, Anderson13MoistureContractsMatchPublishedClasses)
+{
+    const auto bit =
+        [](MoistureClass component) {
+            return ERFFire::fire_fuel_moisture_component_bit(
+                component);
+        };
+
+    const unsigned int d1 = bit(MoistureClass::Dead1h);
+    const unsigned int d10 = bit(MoistureClass::Dead10h);
+    const unsigned int d100 = bit(MoistureClass::Dead100h);
+    const unsigned int lh = bit(MoistureClass::LiveHerbaceous);
+    const unsigned int lw = bit(MoistureClass::LiveWoody);
+
+    const unsigned int expected[] = {
+        0u,
+        d1,
+        d1 | d10 | d100 | lh,
+        d1,
+        d1 | d10 | d100 | lw,
+        d1 | d10 | lw,
+        d1 | d10 | d100,
+        d1 | d10 | d100 | lw,
+        d1 | d10 | d100,
+        d1 | d10 | d100,
+        d1 | d10 | d100 | lw,
+        d1 | d10 | d100,
+        d1 | d10 | d100,
+        d1 | d10 | d100
+    };
+
+    for (int raw = 0; raw <= 13; ++raw) {
+        const auto id =
+            static_cast<FireFuelModelId>(raw);
+        const FireFuelModelMoistureContract contract =
+            ERFFire::fire_fuel_model_moisture_contract(id);
+
+        EXPECT_TRUE(contract.valid_model);
+        EXPECT_EQ(contract.burnable, raw != 0);
+        EXPECT_EQ(contract.required_mask, expected[raw]);
+        EXPECT_EQ(
+            ERFFire::fire_fuel_model_number(id),
+            raw == 0 ? 0 : raw);
+        EXPECT_EQ(
+            ERFFire::fire_fuel_model_is_anderson13(id),
+            raw != 0);
+    }
+
+    const auto invalid =
+        ERFFire::fire_fuel_model_moisture_contract(
+            static_cast<FireFuelModelId>(99));
+    EXPECT_FALSE(invalid.valid_model);
+    EXPECT_FALSE(invalid.burnable);
+    EXPECT_EQ(invalid.required_mask, 0u);
+    EXPECT_FALSE(
+        ERFFire::fire_fuel_model_id_valid(
+            static_cast<FireFuelModelId>(99)));
+}
+
+TEST(FireFuelModel, MissingRequiredMoistureIsExplicit)
+{
+    FireFuelMoisture moisture;
+    moisture.set(MoistureClass::Dead1h, Real(0.05));
+    moisture.set(MoistureClass::Dead10h, Real(0.07));
+    moisture.set(MoistureClass::Dead100h, Real(0.09));
+
+    const unsigned int lh =
+        ERFFire::fire_fuel_moisture_component_bit(
+            MoistureClass::LiveHerbaceous);
+    const unsigned int lw =
+        ERFFire::fire_fuel_moisture_component_bit(
+            MoistureClass::LiveWoody);
+
+    EXPECT_EQ(
+        ERFFire::fire_fuel_missing_required_moisture_mask(
+            FireFuelModelId::FM2,
+            moisture),
+        lh);
+    EXPECT_FALSE(
+        ERFFire::fire_fuel_model_moisture_complete(
+            FireFuelModelId::FM2,
+            moisture));
+
+    moisture.set(
+        MoistureClass::LiveHerbaceous,
+        Real(0.80));
+    EXPECT_TRUE(
+        ERFFire::fire_fuel_model_moisture_complete(
+            FireFuelModelId::FM2,
+            moisture));
+
+    EXPECT_EQ(
+        ERFFire::fire_fuel_missing_required_moisture_mask(
+            FireFuelModelId::FM4,
+            moisture),
+        lw);
+
+    moisture.set(
+        MoistureClass::LiveWoody,
+        Real(0.65));
+    EXPECT_TRUE(
+        ERFFire::fire_fuel_model_moisture_complete(
+            FireFuelModelId::FM4,
+            moisture));
+
+    EXPECT_TRUE(
+        ERFFire::fire_fuel_model_moisture_complete(
+            FireFuelModelId::NonBurnable,
+            FireFuelMoisture{}));
+    EXPECT_FALSE(
+        ERFFire::fire_fuel_model_moisture_complete(
+            static_cast<FireFuelModelId>(99),
+            moisture));
+}
+
+TEST(FireFuelRaster, Anderson13ModelIdsRoundTripCollectively)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        14,
+        1,
+        Real(0),
+        Real(0),
+        Real(1),
+        Real(1)};
+
+    FireFuelRasterState source;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        source.cells.resize(14);
+
+        for (int raw = 0; raw <= 13; ++raw) {
+            auto& cell =
+                source.cells[
+                    static_cast<std::size_t>(raw)];
+            cell.model_id =
+                static_cast<FireFuelModelId>(raw);
+
+            const auto contract =
+                ERFFire::fire_fuel_model_moisture_contract(
+                    cell.model_id);
+            for (int component = 0;
+                 component
+                     < FireFuelMoisture::component_count;
+                 ++component) {
+                const auto moisture_class =
+                    static_cast<MoistureClass>(
+                        component);
+                const unsigned int bit =
+                    ERFFire::fire_fuel_moisture_component_bit(
+                        moisture_class);
+                if ((contract.required_mask & bit) != 0u) {
+                    cell.moisture.set(
+                        moisture_class,
+                        Real(0.05)
+                            + Real(0.01)
+                                * static_cast<Real>(
+                                    component));
+                }
+            }
+        }
+    }
+
+    const FireFuelRaster raster =
+        FireFuelRaster::collective_from_io_rank_state(
+            geometry,
+            source);
+    const auto restored =
+        raster.collective_snapshot_state_to_io_rank();
+
+    if (!amrex::ParallelDescriptor::IOProcessor()) {
+        EXPECT_TRUE(restored.cells.empty());
+        return;
+    }
+
+    ASSERT_EQ(restored.cells.size(), 14U);
+    for (int raw = 0; raw <= 13; ++raw) {
+        const auto& cell =
+            restored.cells[
+                static_cast<std::size_t>(raw)];
+        EXPECT_EQ(
+            cell.model_id,
+            static_cast<FireFuelModelId>(raw));
+        EXPECT_TRUE(
+            ERFFire::fire_fuel_model_moisture_complete(
+                cell.model_id,
+                cell.moisture));
+    }
+}
+
+TEST(FireFuelCombustion, AndersonModelsRemainUnsupportedUntilCombustionPolicy)
+{
+    const auto base = fuel_combustion_base_parameters();
+
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM2;
+    cell.moisture.set(
+        MoistureClass::Dead1h,
+        Real(0.08));
+    cell.moisture.set(
+        MoistureClass::Dead10h,
+        Real(0.09));
+    cell.moisture.set(
+        MoistureClass::Dead100h,
+        Real(0.10));
+    cell.moisture.set(
+        MoistureClass::LiveHerbaceous,
+        Real(0.80));
+
+    ASSERT_TRUE(
+        ERFFire::fire_fuel_model_moisture_complete(
+            cell.model_id,
+            cell.moisture));
+
+    FireCombustionParameters local = base;
+    EXPECT_EQ(
+        ERFFire::try_make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            cell,
+            local),
+        FireFuelCombustionParameterStatus::unsupported_model);
+    EXPECT_EQ(local.dry_fuel_load_kg_m2, Real(0));
+    EXPECT_EQ(local.fuel_moisture_fraction, Real(0));
+}
 
 TEST(FireFuelRaster, CanonicalRoundTripPreservesCategoricalCells)
 {
