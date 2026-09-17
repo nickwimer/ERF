@@ -327,6 +327,10 @@ fire_barrier_rebuild_front(
  * constructed. The reconstructed initial, midpoint, and final fronts are also
  * required to have no edge entering NonBurnable interior, so two individually
  * legal vertex trajectories cannot create an illegal chord through a barrier.
+ * A contact reached by the midpoint trial is persistent for the remainder of
+ * the RK2 step: without an explicit sliding law the final vertex is pinned at
+ * that first contact instead of allowing a zero midpoint speed to algebraically
+ * retreat the explicit-midpoint result back into the burnable region.
  * With no contacts the arithmetic/order of vertex evolution matches
  * advance_front_rk2_batched exactly.
  *
@@ -438,6 +442,28 @@ advance_front_rk2_batched_clipped_to_nonburnable(
             fuel_raster,
             initial_positions,
             final_candidates);
+
+    if (midpoint_clip.contacts.size()
+        != final_clip.positions_m.size()) {
+        throw std::logic_error(
+            "Fire barrier RK2 midpoint contact batch lost vertex correspondence");
+    }
+    for (std::size_t index = 0;
+         index < midpoint_clip.contacts.size();
+         ++index) {
+        if (!midpoint_clip.contacts[index].has_value()) {
+            continue;
+        }
+
+        // No sliding/rerouting law is represented. Once the first half-stage
+        // reaches an impermeable barrier, preserve that physical contact for
+        // the rest of this RK2 step even if the stage-two material sample on
+        // the exact raster face reports zero propagation speed.
+        final_clip.positions_m[index] =
+            midpoint_clip.contacts[index]->position_m;
+        final_clip.contacts[index] =
+            midpoint_clip.contacts[index];
+    }
 
     FireFront final_front =
         detail::fire_barrier_rebuild_front(
