@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -35,6 +36,155 @@ TEST(FireRothermelFuel, FM1MatchesPublishedOriginalFuelModelParameters)
     EXPECT_DOUBLE_EQ(static_cast<double>(fuel.total_mineral_fraction), 0.0555);
     EXPECT_DOUBLE_EQ(static_cast<double>(fuel.effective_mineral_fraction), 0.01);
     EXPECT_DOUBLE_EQ(static_cast<double>(fuel.dead_moisture_of_extinction), 0.12);
+}
+
+
+TEST(FireRothermelFuel, Anderson13CatalogMatchesAlbiniTable7)
+{
+    struct NativeExpected
+    {
+        double sav_1h{};
+        double load_1h{};
+        double load_10h{};
+        double load_100h{};
+        double sav_live{};
+        double load_live{};
+        double depth_ft{};
+        double extinction{};
+    };
+
+    // Albini (1976), Appendix III, table 7. Loading values are lb/ft^2,
+    // SAV values are 1/ft, and depth is ft. Dead 10-h/100-h SAV are the
+    // published 109 and 30 1/ft whenever those classes are present.
+    constexpr std::array<NativeExpected, 13> expected{{
+        {3500.0, 0.034, 0.000, 0.000,    0.0, 0.000, 1.0, 0.12},
+        {3000.0, 0.092, 0.046, 0.023, 1500.0, 0.023, 1.0, 0.15},
+        {1500.0, 0.138, 0.000, 0.000,    0.0, 0.000, 2.5, 0.25},
+        {2000.0, 0.230, 0.184, 0.092, 1500.0, 0.230, 6.0, 0.20},
+        {2000.0, 0.046, 0.023, 0.000, 1500.0, 0.092, 2.0, 0.20},
+        {1750.0, 0.069, 0.115, 0.092,    0.0, 0.000, 2.5, 0.25},
+        {1750.0, 0.052, 0.086, 0.069, 1550.0, 0.017, 2.5, 0.40},
+        {2000.0, 0.069, 0.046, 0.115,    0.0, 0.000, 0.2, 0.30},
+        {2500.0, 0.134, 0.019, 0.007,    0.0, 0.000, 0.2, 0.25},
+        {2000.0, 0.138, 0.092, 0.230, 1500.0, 0.092, 1.0, 0.25},
+        {1500.0, 0.069, 0.207, 0.253,    0.0, 0.000, 1.0, 0.15},
+        {1500.0, 0.184, 0.644, 0.759,    0.0, 0.000, 2.3, 0.20},
+        {1500.0, 0.322, 1.058, 1.288,    0.0, 0.000, 3.0, 0.25}
+    }};
+
+    constexpr double foot_m = 0.3048;
+    constexpr double pound_kg = 0.45359237;
+    constexpr double btu_j = 1055.05585262;
+
+    const auto load_lb_ft2 = [=](amrex::Real value) {
+        return static_cast<double>(value)
+            * foot_m * foot_m / pound_kg;
+    };
+    const auto sav_ft_inv = [=](amrex::Real value) {
+        return static_cast<double>(value) * foot_m;
+    };
+
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        const auto fuel =
+            ERFFire::make_anderson13_fuel_parameters(
+                static_cast<int>(index + 1));
+        const auto& e = expected[index];
+
+        EXPECT_NEAR(load_lb_ft2(fuel.dead_1h.dry_load_kg_m2),
+                    e.load_1h, 1.0e-14);
+        EXPECT_NEAR(sav_ft_inv(fuel.dead_1h.sav_m_inv),
+                    e.sav_1h, 1.0e-11);
+
+        EXPECT_NEAR(load_lb_ft2(fuel.dead_10h.dry_load_kg_m2),
+                    e.load_10h, 1.0e-14);
+        EXPECT_NEAR(load_lb_ft2(fuel.dead_100h.dry_load_kg_m2),
+                    e.load_100h, 1.0e-14);
+        EXPECT_NEAR(load_lb_ft2(fuel.live_foliage.dry_load_kg_m2),
+                    e.load_live, 1.0e-14);
+
+        if (e.load_10h > 0.0) {
+            EXPECT_NEAR(sav_ft_inv(fuel.dead_10h.sav_m_inv),
+                        109.0, 1.0e-12);
+        } else {
+            EXPECT_DOUBLE_EQ(
+                static_cast<double>(fuel.dead_10h.sav_m_inv), 0.0);
+        }
+
+        if (e.load_100h > 0.0) {
+            EXPECT_NEAR(sav_ft_inv(fuel.dead_100h.sav_m_inv),
+                        30.0, 1.0e-12);
+        } else {
+            EXPECT_DOUBLE_EQ(
+                static_cast<double>(fuel.dead_100h.sav_m_inv), 0.0);
+        }
+
+        if (e.load_live > 0.0) {
+            EXPECT_NEAR(sav_ft_inv(fuel.live_foliage.sav_m_inv),
+                        e.sav_live, 1.0e-11);
+        } else {
+            EXPECT_DOUBLE_EQ(
+                static_cast<double>(fuel.live_foliage.sav_m_inv), 0.0);
+        }
+
+        EXPECT_NEAR(
+            static_cast<double>(fuel.fuel_bed_depth_m) / foot_m,
+            e.depth_ft, 1.0e-14);
+        EXPECT_DOUBLE_EQ(
+            static_cast<double>(fuel.dead_moisture_of_extinction),
+            e.extinction);
+
+        EXPECT_NEAR(
+            static_cast<double>(fuel.heat_content_j_kg)
+                * pound_kg / btu_j,
+            8000.0, 1.0e-11);
+        EXPECT_NEAR(
+            static_cast<double>(fuel.particle_density_kg_m3)
+                * foot_m * foot_m * foot_m / pound_kg,
+            32.0, 1.0e-13);
+        EXPECT_DOUBLE_EQ(
+            static_cast<double>(fuel.total_mineral_fraction),
+            0.0555);
+        EXPECT_DOUBLE_EQ(
+            static_cast<double>(fuel.effective_mineral_fraction),
+            0.01);
+    }
+}
+
+TEST(FireRothermelFuel, FM1LegacyParametersAreExactCatalogProjection)
+{
+    const auto legacy = ERFFire::make_fm1_fuel_parameters();
+    const auto catalog = ERFFire::make_anderson13_fuel_parameters(1);
+
+    EXPECT_EQ(legacy.dead_1h_load_kg_m2,
+              catalog.dead_1h.dry_load_kg_m2);
+    EXPECT_EQ(legacy.dead_1h_sav_m_inv,
+              catalog.dead_1h.sav_m_inv);
+    EXPECT_EQ(legacy.fuel_bed_depth_m,
+              catalog.fuel_bed_depth_m);
+    EXPECT_EQ(legacy.dead_heat_content_j_kg,
+              catalog.heat_content_j_kg);
+    EXPECT_EQ(legacy.particle_density_kg_m3,
+              catalog.particle_density_kg_m3);
+    EXPECT_EQ(legacy.total_mineral_fraction,
+              catalog.total_mineral_fraction);
+    EXPECT_EQ(legacy.effective_mineral_fraction,
+              catalog.effective_mineral_fraction);
+    EXPECT_EQ(legacy.dead_moisture_of_extinction,
+              catalog.dead_moisture_of_extinction);
+
+    EXPECT_EQ(catalog.dead_10h.dry_load_kg_m2, amrex::Real(0));
+    EXPECT_EQ(catalog.dead_100h.dry_load_kg_m2, amrex::Real(0));
+    EXPECT_EQ(catalog.live_foliage.dry_load_kg_m2, amrex::Real(0));
+}
+
+TEST(FireRothermelFuel, Anderson13CatalogRejectsInvalidModelNumber)
+{
+    EXPECT_THROW(
+        (void)ERFFire::make_anderson13_fuel_parameters(0),
+        std::invalid_argument);
+    EXPECT_THROW(
+        (void)ERFFire::make_anderson13_fuel_parameters(14),
+        std::invalid_argument);
 }
 
 TEST(FireRothermel, FM1EightPercentZeroWindSlopeMatchesIndependentFixture)
