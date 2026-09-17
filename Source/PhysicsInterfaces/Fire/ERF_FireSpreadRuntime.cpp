@@ -341,15 +341,8 @@ resolve_front_topology_event(
                     continue;
                 }
 
-                if (components[component_index].role
-                    != FireFrontRole::Hole) {
-                    throw std::runtime_error(
-                        "Fire Outer self-contact with multiple Outer components "
-                        "is not yet supported");
-                }
-
                 post_event_components.push_back({
-                    FireFrontRole::Hole,
+                    components[component_index].role,
                     FirePerimeter(
                         event_vertices_m[
                             component_index])
