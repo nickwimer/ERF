@@ -1,5 +1,7 @@
 #include "ERF_FireSpreadRuntime.H"
 
+#include <ERF_FireFuelBarrierRemesher.H>
+#include <ERF_FireFuelBarrierSweep.H>
 #include <ERF_FireSpreadOutput.H>
 #include <ERF_FireWindAdjustment.H>
 #include <ERF_FireFrontPropagator.H>
@@ -888,7 +890,10 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         *spatial_fuel_raster_);
 
     auto initial_remesh =
-        remesh_front(front_, config_.remesh_options);
+        collective_remesh_fire_front_avoiding_nonburnable(
+            front_,
+            config_.remesh_options,
+            *spatial_fuel_raster_);
     front_ = std::move(initial_remesh.front);
 
     (void)first_arrival_.initialize_from_perimeter(
@@ -927,9 +932,10 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         *spatial_fuel_raster_);
 
     auto initial_remesh =
-        remesh_front(
+        collective_remesh_fire_front_avoiding_nonburnable(
             front_,
-            config_.remesh_options);
+            config_.remesh_options,
+            *spatial_fuel_raster_);
     front_ = std::move(initial_remesh.front);
 
     (void)first_arrival_.initialize_from_front(
@@ -2035,9 +2041,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             if (spatial_fuel_raster_) {
                 const FireFuelRasterCell& material =
                     spatial_materials[index];
+                if (material.model_id
+                    == FireFuelModelId::NonBurnable) {
+                    speeds.push_back(amrex::Real(0));
+                    continue;
+                }
                 require(
                     material.model_id == FireFuelModelId::FM1,
-                    "spatial Fire spread currently supports only FM1; NonBurnable barrier dynamics are not yet enabled");
+                    "spatial Fire spread encountered an unsupported fuel model");
                 require(
                     material.moisture.try_get(
                         FireFuelMoistureClass::Dead1h,
@@ -2121,7 +2132,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
 
             FireFrontTopologyAdvanceResult
                 topology_advance =
-                    advance_front_rk2_batched_until_topology_event(
+                    spatial_fuel_raster_
+                    ? advance_front_rk2_batched_until_topology_event_constrained_by_nonburnable(
+                        working_front,
+                        segment_start_time_s,
+                        segment_dt_s,
+                        normal_speeds,
+                        *spatial_fuel_raster_)
+                    : advance_front_rk2_batched_until_topology_event(
                         working_front,
                         segment_start_time_s,
                         segment_dt_s,
@@ -2159,6 +2177,12 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             .terminal_vertices_m,
                         *topology_advance
                             .topology_event);
+
+                if (spatial_fuel_raster_) {
+                    collective_require_resolved_fire_topology_avoids_nonburnable(
+                        event_front,
+                        *spatial_fuel_raster_);
+                }
 
                 const FireBurnedFractionRaster
                     burned_before_segment =
@@ -2376,7 +2400,12 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 vertex_count(advanced_front);
 
         FireFrontRemeshResult remeshed =
-            remesh_front(
+            spatial_fuel_raster_
+            ? collective_remesh_fire_front_avoiding_nonburnable(
+                advanced_front,
+                config_.remesh_options,
+                *spatial_fuel_raster_)
+            : remesh_front(
                 advanced_front,
                 config_.remesh_options);
 
