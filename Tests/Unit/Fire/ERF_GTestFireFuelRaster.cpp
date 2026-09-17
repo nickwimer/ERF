@@ -720,14 +720,28 @@ TEST(FireFuelCombustionRaster, SpatialMoistureChangesOnlyWaterAccounting)
     const auto perimeter = full_combustion_perimeter();
     const auto burned = fully_burned_combustion_raster();
 
+    FireCombustionRaster legacy(
+        geometry,
+        base,
+        FireCombustionRasterOptions{4});
     FireCombustionRaster spatial(
         geometry,
         base,
         FireCombustionRasterOptions{4});
+
+    (void)legacy.initialize_from_burned_fraction(burned);
     (void)spatial.initialize_from_burned_fraction(
         burned,
         fuel);
-    const auto update =
+
+    const auto legacy_update =
+        legacy.advance_from_linear_sweep(
+            perimeter,
+            perimeter,
+            burned,
+            burned,
+            Real(2));
+    const auto spatial_update =
         spatial.advance_from_linear_sweep(
             perimeter,
             perimeter,
@@ -736,50 +750,67 @@ TEST(FireFuelCombustionRaster, SpatialMoistureChangesOnlyWaterAccounting)
             fuel,
             Real(2));
 
-    const auto state =
+    EXPECT_EQ(
+        spatial_update.newly_consumed_dry_fuel_kg,
+        legacy_update.newly_consumed_dry_fuel_kg);
+    EXPECT_EQ(
+        spatial_update.sensible_energy_increment_j,
+        legacy_update.sensible_energy_increment_j);
+
+    const auto legacy_state =
+        legacy.collective_snapshot_state_to_io_rank();
+    const auto spatial_state =
         spatial.collective_snapshot_state_to_io_rank();
+
     if (amrex::ParallelDescriptor::IOProcessor()) {
-        ASSERT_EQ(state.cells.size(), 2u);
+        ASSERT_EQ(spatial_state.cells.size(), 2u);
+        ASSERT_EQ(
+            legacy_state.cells.size(),
+            spatial_state.cells.size());
+
         for (std::size_t index = 0; index < 2; ++index) {
-            FireFuelRasterCell material;
-            material.model_id = FireFuelModelId::FM1;
-            material.moisture.set(
-                MoistureClass::Dead1h,
-                moisture[index]);
-            const auto local =
-                ERFFire::make_fire_combustion_parameters_for_fuel_cell(
-                    base,
-                    material);
-            const FireCombustionState initial{
-                Real(1),
-                base.dry_fuel_load_kg_m2,
-                Real(0),
-                Real(0),
-                Real(0)};
-            const auto expected =
-                ERFFire::advance_fire_combustion(
-                    initial,
-                    local,
-                    Real(2));
-            expect_same_combustion_state(
-                state.cells[index],
-                expected.state);
+            const auto& actual = spatial_state.cells[index];
+            const auto& reference = legacy_state.cells[index];
+
+            EXPECT_EQ(
+                actual.ignited_area_fraction,
+                reference.ignited_area_fraction);
+            EXPECT_EQ(
+                actual.remaining_dry_fuel_kg_m2,
+                reference.remaining_dry_fuel_kg_m2);
+            EXPECT_EQ(
+                actual.consumed_dry_fuel_kg_m2,
+                reference.consumed_dry_fuel_kg_m2);
+            EXPECT_EQ(
+                actual.sensible_energy_j_m2,
+                reference.sensible_energy_j_m2);
+
+            const Real expected_water =
+                actual.consumed_dry_fuel_kg_m2
+                * (moisture[index]
+                   + base.combustion_water_yield_kg_per_kg_dry);
+            EXPECT_EQ(
+                actual.water_released_kg_m2,
+                expected_water);
         }
+
         EXPECT_EQ(
-            state.cells[0].remaining_dry_fuel_kg_m2,
-            state.cells[1].remaining_dry_fuel_kg_m2);
+            spatial_state.cells[0].remaining_dry_fuel_kg_m2,
+            spatial_state.cells[1].remaining_dry_fuel_kg_m2);
         EXPECT_EQ(
-            state.cells[0].consumed_dry_fuel_kg_m2,
-            state.cells[1].consumed_dry_fuel_kg_m2);
+            spatial_state.cells[0].consumed_dry_fuel_kg_m2,
+            spatial_state.cells[1].consumed_dry_fuel_kg_m2);
         EXPECT_EQ(
-            state.cells[0].sensible_energy_j_m2,
-            state.cells[1].sensible_energy_j_m2);
+            spatial_state.cells[0].sensible_energy_j_m2,
+            spatial_state.cells[1].sensible_energy_j_m2);
         EXPECT_NE(
-            state.cells[0].water_released_kg_m2,
-            state.cells[1].water_released_kg_m2);
+            spatial_state.cells[0].water_released_kg_m2,
+            spatial_state.cells[1].water_released_kg_m2);
     }
 
-    EXPECT_GT(update.water_released_increment_kg, Real(0));
+    EXPECT_GT(
+        spatial_update.water_released_increment_kg,
+        Real(0));
 }
 
 TEST(FireFuelCombustionRaster, RejectsNonburnableAndMissingMoistureBeforeMutation)
