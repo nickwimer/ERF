@@ -222,5 +222,92 @@ if(NOT rank_change_analysis_result EQUAL 0)
     "stderr:\n${rank_change_analysis_error}")
 endif()
 
+# File-backed heterogeneous-v4 persistence proof. The existing timestep
+# identity executable has a Fire-only helper mode so this stays inside the
+# already-built production-linked target while exercising the real v4 metadata
+# and VisMF raster files. One rank writes the checkpoint/reference continuation;
+# two ranks restore that one-rank checkpoint and continue; one rank then
+# compares every persisted state/material component exactly.
+get_filename_component(response_exe_dir "${RESPONSE_EXE}" DIRECTORY)
+set(spatial_v4_exe "${response_exe_dir}/erf_fire_timestep_identity")
+if(NOT EXISTS "${spatial_v4_exe}")
+  message(FATAL_ERROR
+    "spatial-v4 rank-change helper executable is missing: ${spatial_v4_exe}")
+endif()
+
+set(spatial_v4_root "${test_root}/fire_spatial_v4_rank_change")
+file(REMOVE_RECURSE "${spatial_v4_root}")
+file(MAKE_DIRECTORY "${spatial_v4_root}")
+
+function(run_spatial_v4 ranks mode description)
+  execute_process(
+    COMMAND
+      "${MPIEXEC}"
+      "${MPIEXEC_NUMPROC_FLAG}" "${ranks}"
+      ${mpiexec_preflags}
+      "${spatial_v4_exe}"
+      ${mpiexec_postflags}
+      "fire_spatial_v4_test.mode=${mode}"
+      "fire_spatial_v4_test.root=${spatial_v4_root}"
+    WORKING_DIRECTORY "${test_root}"
+    RESULT_VARIABLE spatial_result
+    OUTPUT_VARIABLE spatial_output
+    ERROR_VARIABLE spatial_error
+  )
+  if(NOT spatial_result EQUAL 0)
+    message(FATAL_ERROR
+      "${description} failed with exit code ${spatial_result}\n"
+      "stdout:\n${spatial_output}\n"
+      "stderr:\n${spatial_error}")
+  endif()
+endfunction()
+
+run_spatial_v4(
+  1
+  write_reference
+  "one-rank spatial-v4 checkpoint/reference continuation")
+
+foreach(required_file
+    "${spatial_v4_root}/checkpoint/FireState"
+    "${spatial_v4_root}/checkpoint/Level_0/FireStateRaster_H"
+    "${spatial_v4_root}/reference_final/FireState"
+    "${spatial_v4_root}/reference_final/Level_0/FireStateRaster_H")
+  if(NOT EXISTS "${required_file}")
+    message(FATAL_ERROR
+      "spatial-v4 one-rank writer is missing ${required_file}")
+  endif()
+endforeach()
+
+file(READ "${spatial_v4_root}/checkpoint/FireState" spatial_v4_metadata)
+string(FIND
+  "${spatial_v4_metadata}"
+  "ERF_FIRE_RUNTIME_STATE 4"
+  spatial_v4_version_position)
+if(NOT spatial_v4_version_position EQUAL 0)
+  message(FATAL_ERROR
+    "spatial-v4 one-rank checkpoint did not write format version 4")
+endif()
+
+run_spatial_v4(
+  2
+  restore_continue
+  "two-rank spatial-v4 restore/continuation from one-rank checkpoint")
+
+foreach(required_file
+    "${spatial_v4_root}/restart_final/FireState"
+    "${spatial_v4_root}/restart_final/Level_0/FireStateRaster_H")
+  if(NOT EXISTS "${required_file}")
+    message(FATAL_ERROR
+      "spatial-v4 two-rank continuation is missing ${required_file}")
+  endif()
+endforeach()
+
+run_spatial_v4(
+  1
+  compare
+  "spatial-v4 exact post-restart comparison")
+
+message(STATUS
+  "ERF-Fire spatial v4 checkpoint is exact across one-rank-to-two-rank restart continuation")
 message(STATUS
   "ERF-Fire decomposition invariance includes one-rank-to-two-rank checkpoint restart")
