@@ -2,12 +2,16 @@
 #include <ERF_FireCombustionRaster.H>
 #include <ERF_FireFuelCombustion.H>
 #include <ERF_FireFuelRaster.H>
+#include <ERF_FireFuelSource.H>
+#include <ERF_FireFuelSpread.H>
 #include <ERF_FirePerimeter.H>
 
 #include <AMReX_ParallelDescriptor.H>
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdio>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -373,6 +377,70 @@ device_decode_mismatch_count(const FireFuelRaster& raster)
 }
 #endif
 
+void
+write_fuel_source_text(
+    const std::string& filename,
+    const std::string& contents)
+{
+    int failed = 0;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        std::ofstream stream(
+            filename,
+            std::ios::out | std::ios::trunc);
+        if (!stream.good()) {
+            failed = 1;
+        } else {
+            stream << contents;
+            stream.close();
+            if (stream.fail()) {
+                failed = 1;
+            }
+        }
+    }
+    amrex::ParallelDescriptor::Bcast(
+        &failed,
+        1,
+        amrex::ParallelDescriptor::IOProcessorNumber());
+    ASSERT_EQ(failed, 0);
+    amrex::ParallelDescriptor::Barrier();
+}
+
+void
+remove_fuel_source_text(const std::string& filename)
+{
+    amrex::ParallelDescriptor::Barrier();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        (void)std::remove(filename.c_str());
+    }
+    amrex::ParallelDescriptor::Barrier();
+}
+
+FireFuelMoisture
+complete_model_moisture(FireFuelModelId id)
+{
+    FireFuelMoisture moisture;
+    const auto contract =
+        ERFFire::fire_fuel_model_moisture_contract(id);
+
+    for (int component = 0;
+         component < FireFuelMoisture::component_count;
+         ++component) {
+        const auto moisture_class =
+            static_cast<MoistureClass>(component);
+        const unsigned int bit =
+            ERFFire::fire_fuel_moisture_component_bit(
+                moisture_class);
+        if ((contract.required_mask & bit) != 0u) {
+            moisture.set(
+                moisture_class,
+                Real(0.05)
+                    + Real(0.10)
+                        * static_cast<Real>(component));
+        }
+    }
+    return moisture;
+}
+
 } // namespace
 
 TEST(FireFuelModel, Anderson13MoistureContractsMatchPublishedClasses)
@@ -488,6 +556,201 @@ TEST(FireFuelModel, MissingRequiredMoistureIsExplicit)
         ERFFire::fire_fuel_model_moisture_complete(
             static_cast<FireFuelModelId>(99),
             moisture));
+}
+
+TEST(FireFuelSpread, Anderson13MaterialsMapRequiredMoistureExactly)
+{
+    for (int raw = 1; raw <= 13; ++raw) {
+        const auto id =
+            static_cast<FireFuelModelId>(raw);
+        const FireFuelMoisture moisture =
+            complete_model_moisture(id);
+
+        ERFFire::FireFuelSpreadInputs inputs{};
+        EXPECT_EQ(
+            ERFFire::try_make_fire_fuel_spread_inputs(
+                id,
+                moisture,
+                Real(2.5),
+                Real(0.30),
+                inputs),
+            ERFFire::FireFuelSpreadInputStatus::success);
+
+        EXPECT_EQ(
+            inputs.anderson13_model_number,
+            raw);
+        EXPECT_EQ(
+            inputs.rothermel.model_wind_speed_mps,
+            Real(2.5));
+        EXPECT_EQ(
+            inputs.rothermel.slope_tangent_magnitude,
+            Real(0.30));
+
+        const auto required_value =
+            [&moisture, id](MoistureClass component) {
+                const auto contract =
+                    ERFFire::fire_fuel_model_moisture_contract(
+                        id);
+                const unsigned int bit =
+                    ERFFire::fire_fuel_moisture_component_bit(
+                        component);
+                return (contract.required_mask & bit) != 0u
+                    ? moisture.get(component)
+                    : Real(0);
+            };
+
+        EXPECT_EQ(
+            inputs.rothermel.dead_1h_moisture_fraction,
+            required_value(MoistureClass::Dead1h));
+        EXPECT_EQ(
+            inputs.rothermel.dead_10h_moisture_fraction,
+            required_value(MoistureClass::Dead10h));
+        EXPECT_EQ(
+            inputs.rothermel.dead_100h_moisture_fraction,
+            required_value(MoistureClass::Dead100h));
+        EXPECT_EQ(
+            inputs.rothermel.live_foliage_moisture_fraction,
+            required_value(MoistureClass::LiveHerbaceous)
+                + required_value(MoistureClass::LiveWoody));
+
+        const auto behavior =
+            ERFFire::evaluate_rothermel_multiclass(
+                ERFFire::make_anderson13_fuel_parameters(
+                    inputs.anderson13_model_number),
+                inputs.rothermel);
+        EXPECT_GE(
+            behavior.aligned_heading_ros_mps,
+            Real(0));
+    }
+}
+
+TEST(FireFuelSpread, MissingMoistureAndNonburnableRemainDistinct)
+{
+    ERFFire::FireFuelSpreadInputs inputs{};
+
+    FireFuelMoisture incomplete;
+    incomplete.set(
+        MoistureClass::Dead1h,
+        Real(0.08));
+
+    EXPECT_EQ(
+        ERFFire::try_make_fire_fuel_spread_inputs(
+            FireFuelModelId::FM2,
+            incomplete,
+            Real(1),
+            Real(0),
+            inputs),
+        ERFFire::FireFuelSpreadInputStatus::
+            missing_required_moisture);
+    EXPECT_EQ(inputs.anderson13_model_number, 0);
+
+    EXPECT_EQ(
+        ERFFire::try_make_fire_fuel_spread_inputs(
+            FireFuelModelId::NonBurnable,
+            FireFuelMoisture{},
+            Real(1),
+            Real(0),
+            inputs),
+        ERFFire::FireFuelSpreadInputStatus::nonburnable);
+
+    EXPECT_EQ(
+        ERFFire::try_make_fire_fuel_spread_inputs(
+            static_cast<FireFuelModelId>(99),
+            FireFuelMoisture{},
+            Real(1),
+            Real(0),
+            inputs),
+        ERFFire::FireFuelSpreadInputStatus::invalid_model);
+}
+
+TEST(FireFuelSource, Anderson13TextInputPreservesResolvedMaterial)
+{
+    const std::string filename =
+        "fire_fuel_source_anderson13_test.txt";
+
+    write_fuel_source_text(
+        filename,
+        "ERF_FIRE_FUEL_RASTER 1\n"
+        "nx 2\n"
+        "ny 1\n"
+        "xlo_m 0\n"
+        "ylo_m 0\n"
+        "dx_m 1\n"
+        "dy_m 1\n"
+        "components 7\n"
+        "cells\n"
+        "2 15 0.08 0.09 0.10 0.80 0\n"
+        "10 23 0.06 0.07 0.08 0 0.65\n"
+        "END_ERF_FIRE_FUEL_RASTER\n");
+
+    const FireCartesianRasterGeometry2D geometry{
+        2, 1, Real(0), Real(0), Real(1), Real(1)};
+
+    const FireFuelRaster raster =
+        ERFFire::read_erf_fire_aligned_fuel_raster_text_file(
+            filename,
+            geometry);
+    const auto state =
+        raster.collective_snapshot_state_to_io_rank();
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        ASSERT_EQ(state.cells.size(), 2U);
+        EXPECT_EQ(
+            state.cells[0].model_id,
+            FireFuelModelId::FM2);
+        EXPECT_EQ(
+            state.cells[1].model_id,
+            FireFuelModelId::FM10);
+        EXPECT_TRUE(
+            ERFFire::fire_fuel_model_moisture_complete(
+                state.cells[0].model_id,
+                state.cells[0].moisture));
+        EXPECT_TRUE(
+            ERFFire::fire_fuel_model_moisture_complete(
+                state.cells[1].model_id,
+                state.cells[1].moisture));
+        EXPECT_EQ(
+            state.cells[0].moisture.get(
+                MoistureClass::LiveHerbaceous),
+            Real(0.80));
+        EXPECT_EQ(
+            state.cells[1].moisture.get(
+                MoistureClass::LiveWoody),
+            Real(0.65));
+    }
+
+    remove_fuel_source_text(filename);
+}
+
+TEST(FireFuelSource, RejectsMissingRequiredModelMoisture)
+{
+    const std::string filename =
+        "fire_fuel_source_missing_moisture_test.txt";
+
+    write_fuel_source_text(
+        filename,
+        "ERF_FIRE_FUEL_RASTER 1\n"
+        "nx 1\n"
+        "ny 1\n"
+        "xlo_m 0\n"
+        "ylo_m 0\n"
+        "dx_m 1\n"
+        "dy_m 1\n"
+        "components 7\n"
+        "cells\n"
+        "2 7 0.08 0.09 0.10 0 0\n"
+        "END_ERF_FIRE_FUEL_RASTER\n");
+
+    const FireCartesianRasterGeometry2D geometry{
+        1, 1, Real(0), Real(0), Real(1), Real(1)};
+
+    EXPECT_THROW(
+        (void)ERFFire::read_erf_fire_aligned_fuel_raster_text_file(
+            filename,
+            geometry),
+        std::runtime_error);
+
+    remove_fuel_source_text(filename);
 }
 
 TEST(FireFuelRaster, Anderson13ModelIdsRoundTripCollectively)

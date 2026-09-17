@@ -180,8 +180,9 @@ read_fire_aligned_fuel_raster_text_state_on_io_rank(
                     stream, "cell moisture value", filename);
         }
 
-        if (raw_model != static_cast<int>(FireFuelModelId::NonBurnable)
-            && raw_model != static_cast<int>(FireFuelModelId::FM1)) {
+        const FireFuelModelId model_id =
+            static_cast<FireFuelModelId>(raw_model);
+        if (!fire_fuel_model_id_valid(model_id)) {
             throw std::runtime_error(
                 "ERF-Fire fuel raster contains an unsupported fuel-model id in "
                 + filename);
@@ -193,7 +194,7 @@ read_fire_aligned_fuel_raster_text_state_on_io_rank(
         }
 
         FireFuelRasterCell cell;
-        cell.model_id = static_cast<FireFuelModelId>(raw_model);
+        cell.model_id = model_id;
 
         for (int component = 0;
              component < FireFuelMoisture::component_count;
@@ -222,6 +223,13 @@ read_fire_aligned_fuel_raster_text_state_on_io_rank(
         if (!fire_fuel_raster_cell_valid(cell)) {
             throw std::runtime_error(
                 "ERF-Fire fuel raster contains invalid resolved material: "
+                + filename);
+        }
+        if (!fire_fuel_model_moisture_complete(
+                cell.model_id,
+                cell.moisture)) {
+            throw std::runtime_error(
+                "ERF-Fire fuel raster is missing required prescribed moisture for its fuel model: "
                 + filename);
         }
 
@@ -263,8 +271,10 @@ read_fire_aligned_fuel_raster_text_state_on_io_rank(
  *   ... exactly nx*ny canonical row-major cells, j-major then i ...
  *   END_ERF_FIRE_FUEL_RASTER
  *
- * Model IDs and moisture masks use FireFuelRaster's stable encoding. Missing
- * moisture components have a cleared mask bit and must carry numerical zero;
+ * Model IDs and moisture masks use FireFuelRaster's stable encoding. Burnable
+ * models 1-13 must include every moisture channel required by their material
+ * contract. Missing moisture components have a cleared mask bit and must carry
+ * numerical zero;
  * this prevents multiple text encodings from resolving to the same material.
  * Geometry must exactly match the configured Fire raster. Only IOProcessor()
  * reads the file; the validated canonical material is distributed directly to
