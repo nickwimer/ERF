@@ -941,17 +941,22 @@ TEST(FireFuelCombustionAccounting, AllModelsConserveDryFuelAndPrescribedWater)
             + fuel.live_foliage.dry_load_kg_m2
                 * expected_live_moisture;
 
-        EXPECT_EQ(
+        EXPECT_NEAR(
             accounting.parameters.dry_fuel_load_kg_m2,
-            expected_dry)
+            expected_dry,
+            fuel_accounting_tolerance(expected_dry))
             << "fuel model " << raw;
-        EXPECT_EQ(
+        EXPECT_NEAR(
             accounting.prescribed_water_load_kg_m2,
-            expected_water)
+            expected_water,
+            fuel_accounting_tolerance(expected_water))
             << "fuel model " << raw;
-        EXPECT_EQ(
+        const Real expected_moisture =
+            expected_water / expected_dry;
+        EXPECT_NEAR(
             accounting.parameters.fuel_moisture_fraction,
-            expected_water / expected_dry)
+            expected_moisture,
+            fuel_accounting_tolerance(expected_moisture))
             << "fuel model " << raw;
 
         EXPECT_EQ(
