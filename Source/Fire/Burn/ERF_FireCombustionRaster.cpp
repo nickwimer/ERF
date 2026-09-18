@@ -297,7 +297,7 @@ initialize_combustion_states_on_device(
 
                 FireFuelCombustionAccounting accounting{};
                 const auto material_status =
-                    try_make_anderson13_fire_combustion_accounting(
+                    try_make_spatial_fire_combustion_accounting(
                         parameters,
                         fuel_cell,
                         accounting);
@@ -1309,7 +1309,7 @@ FireCombustionRaster::initialize_from_burned_fraction_impl(
 
                         FireFuelCombustionAccounting accounting{};
                         const auto material_status =
-                            try_make_anderson13_fire_combustion_accounting(
+                            try_make_spatial_fire_combustion_accounting(
                                 parameters_,
                                 fuel_cell,
                                 accounting);
@@ -2109,7 +2109,7 @@ detail::advance_fire_combustion_vertex_sweep(
 
                         FireFuelCombustionAccounting accounting{};
                         const auto material_status =
-                            try_make_anderson13_fire_combustion_accounting(
+                            try_make_spatial_fire_combustion_accounting(
                                 parameters,
                                 fuel_cell,
                                 accounting);
@@ -2282,7 +2282,7 @@ detail::advance_fire_combustion_vertex_sweep(
 
                         FireFuelCombustionAccounting accounting{};
                         const auto material_status =
-                            try_make_anderson13_fire_combustion_accounting(
+                            try_make_spatial_fire_combustion_accounting(
                                 parameters_,
                                 fuel_cell,
                                 accounting);
