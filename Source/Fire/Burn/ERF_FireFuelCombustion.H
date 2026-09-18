@@ -317,6 +317,103 @@ make_fire_combustion_parameters_for_fuel_cell(
         "Fire local combustion parameter status is invalid");
 }
 
+
+/**
+ * Resolve one spatial fuel cell for the production combustion runtime.
+ *
+ * FM1 preserves the established ERF-Fire compatibility contract: the base
+ * dry load, sensible heat, burn time, and combustion-water yield remain
+ * authoritative, while only prescribed dead 1-h moisture varies spatially.
+ * FM2-FM13 use the conservative Anderson-13 dry-load and moisture accounting
+ * above. NonBurnable remains a canonical zero-combustion material.
+ */
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+FireFuelCombustionAccountingStatus
+try_make_spatial_fire_combustion_accounting(
+    const FireCombustionParameters& base,
+    const FireFuelRasterCell& fuel_cell,
+    FireFuelCombustionAccounting& result) noexcept
+{
+    result = {};
+
+    FireCombustionParameters legacy{};
+    const auto legacy_status =
+        try_make_fire_combustion_parameters_for_fuel_cell(
+            base,
+            fuel_cell,
+            legacy);
+
+    switch (legacy_status) {
+    case FireFuelCombustionParameterStatus::success:
+        result.parameters = legacy;
+        result.prescribed_water_load_kg_m2 =
+            legacy.dry_fuel_load_kg_m2
+            * legacy.fuel_moisture_fraction;
+        if (!amrex::Math::isfinite(
+                result.prescribed_water_load_kg_m2)
+            || result.prescribed_water_load_kg_m2
+                < amrex::Real(0)) {
+            result = {};
+            return FireFuelCombustionAccountingStatus::
+                overflow_error;
+        }
+        return FireFuelCombustionAccountingStatus::success;
+
+    case FireFuelCombustionParameterStatus::invalid_base_parameters:
+        return FireFuelCombustionAccountingStatus::
+            invalid_base_parameters;
+
+    case FireFuelCombustionParameterStatus::nonburnable:
+        return FireFuelCombustionAccountingStatus::nonburnable;
+
+    case FireFuelCombustionParameterStatus::missing_dead_1h_moisture:
+        return FireFuelCombustionAccountingStatus::
+            missing_required_moisture;
+
+    case FireFuelCombustionParameterStatus::unsupported_model:
+        break;
+    }
+
+    return try_make_anderson13_fire_combustion_accounting(
+        base,
+        fuel_cell,
+        result);
+}
+
+/** Host convenience wrapper for the production spatial accounting policy. */
+[[nodiscard]] inline FireFuelCombustionAccounting
+make_spatial_fire_combustion_accounting(
+    const FireCombustionParameters& base,
+    const FireFuelRasterCell& fuel_cell)
+{
+    FireFuelCombustionAccounting result{};
+    switch (try_make_spatial_fire_combustion_accounting(
+                base,
+                fuel_cell,
+                result)) {
+    case FireFuelCombustionAccountingStatus::success:
+        return result;
+    case FireFuelCombustionAccountingStatus::invalid_base_parameters:
+        throw std::invalid_argument(
+            "Fire spatial combustion base parameters are invalid");
+    case FireFuelCombustionAccountingStatus::nonburnable:
+        throw std::invalid_argument(
+            "Fire spatial combustion accounting does not apply to NonBurnable material");
+    case FireFuelCombustionAccountingStatus::invalid_model:
+        throw std::invalid_argument(
+            "Fire spatial combustion accounting has an invalid fuel model");
+    case FireFuelCombustionAccountingStatus::missing_required_moisture:
+        throw std::invalid_argument(
+            "Fire spatial combustion accounting is missing required prescribed moisture");
+    case FireFuelCombustionAccountingStatus::overflow_error:
+        throw std::overflow_error(
+            "Fire spatial combustion accounting is not finite");
+    }
+
+    throw std::logic_error(
+        "Fire spatial combustion accounting status is invalid");
+}
+
 } // namespace ERFFire
 
 #endif // ERF_FIRE_FUEL_COMBUSTION_H_
