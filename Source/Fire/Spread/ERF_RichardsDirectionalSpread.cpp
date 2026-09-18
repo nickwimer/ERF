@@ -89,9 +89,13 @@ combine_rothermel_wind_slope_factors (
     return {resultant};
 }
 
+namespace
+{
+
+template <typename Behavior>
 RichardsDirectionalSpread
-make_richards_directional_spread (
-    const RothermelResult& behavior,
+make_richards_directional_spread_impl (
+    const Behavior& behavior,
     const FireVec2& wind_push_unit,
     const FireVec2& upslope_unit)
 {
@@ -107,12 +111,15 @@ make_richards_directional_spread (
         behavior.slope_factor,
         upslope_unit);
 
-    const amrex::Real resultant_factor = forcing.resultant_factor();
-    const FireVec2 heading_unit = forcing.heading_unit();
+    const amrex::Real resultant_factor =
+        forcing.resultant_factor();
+    const FireVec2 heading_unit =
+        forcing.heading_unit();
 
     const amrex::Real effective_wind_mps =
         rothermel_model_wind_speed_for_factor_mps(
-            behavior, resultant_factor);
+            behavior,
+            resultant_factor);
 
     const amrex::Real heading_ros_mps =
         behavior.no_wind_no_slope_ros_mps
@@ -130,6 +137,32 @@ make_richards_directional_spread (
             heading_ros_mps,
             effective_wind_mps)
     };
+}
+
+} // namespace
+
+RichardsDirectionalSpread
+make_richards_directional_spread (
+    const RothermelResult& behavior,
+    const FireVec2& wind_push_unit,
+    const FireVec2& upslope_unit)
+{
+    return make_richards_directional_spread_impl(
+        behavior,
+        wind_push_unit,
+        upslope_unit);
+}
+
+RichardsDirectionalSpread
+make_richards_directional_spread (
+    const RothermelMulticlassResult& behavior,
+    const FireVec2& wind_push_unit,
+    const FireVec2& upslope_unit)
+{
+    return make_richards_directional_spread_impl(
+        behavior,
+        wind_push_unit,
+        upslope_unit);
 }
 
 } // namespace ERFFire

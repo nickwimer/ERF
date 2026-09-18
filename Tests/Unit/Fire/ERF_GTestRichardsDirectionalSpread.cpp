@@ -228,6 +228,47 @@ TEST(FireRichardsDirectional, ComposedObliqueWaveletNormalsMatchFixedFixture)
         3.0e-14);
 }
 
+TEST(FireRichardsDirectional, MulticlassBehaviorUsesSameDirectionalAdapter)
+{
+    const auto behavior =
+        ERFFire::evaluate_rothermel_multiclass(
+            ERFFire::make_anderson13_fuel_parameters(2),
+            ERFFire::RothermelMulticlassInputs{
+                0.08, 0.09, 0.10, 0.80,
+                1.0, 0.20});
+
+    const auto spread =
+        ERFFire::make_richards_directional_spread(
+            behavior,
+            {1.0, 0.0},
+            {0.0, 1.0});
+
+    EXPECT_NEAR(
+        static_cast<double>(
+            spread.forcing.resultant_vector.x),
+        static_cast<double>(behavior.wind_factor),
+        1.0e-13);
+    EXPECT_NEAR(
+        static_cast<double>(
+            spread.forcing.resultant_vector.y),
+        static_cast<double>(behavior.slope_factor),
+        1.0e-13);
+
+    const amrex::Real recovered =
+        ERFFire::rothermel_model_wind_speed_for_factor_mps(
+            behavior,
+            behavior.wind_factor);
+    EXPECT_NEAR(
+        static_cast<double>(recovered),
+        1.0,
+        3.0e-14);
+
+    EXPECT_GT(
+        static_cast<double>(
+            spread.ellipse.heading_ros_mps),
+        0.0);
+}
+
 TEST(FireRichardsDirectional, ExtinguishedBehaviorProducesStationaryWavelet)
 {
     const auto behavior = ERFFire::evaluate_rothermel(

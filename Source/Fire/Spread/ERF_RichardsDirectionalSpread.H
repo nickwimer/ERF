@@ -106,6 +106,11 @@ struct RichardsDirectionalSpread
     const FireVec2& wind_push_unit,
     const FireVec2& upslope_unit);
 
+[[nodiscard]] RichardsDirectionalSpread make_richards_directional_spread(
+    const RothermelMulticlassResult& behavior,
+    const FireVec2& wind_push_unit,
+    const FireVec2& upslope_unit);
+
 } // namespace ERFFire
 
 #endif // ERF_RICHARDS_DIRECTIONAL_SPREAD_H

@@ -780,9 +780,13 @@ evaluate_rothermel_multiclass (
     };
 }
 
+namespace
+{
+
 amrex::Real
-rothermel_model_wind_speed_for_factor_mps (
-    const RothermelResult& result,
+rothermel_model_wind_speed_for_factor_impl (
+    amrex::Real coefficient_si,
+    amrex::Real exponent,
     amrex::Real target_wind_factor)
 {
     if (!finite(target_wind_factor)
@@ -791,10 +795,10 @@ rothermel_model_wind_speed_for_factor_mps (
             "Rothermel target wind factor must be finite and non-negative");
     }
 
-    if (!finite(result.wind_factor_coefficient_si)
-        || result.wind_factor_coefficient_si <= amrex::Real(0.0)
-        || !finite(result.wind_factor_exponent)
-        || result.wind_factor_exponent <= amrex::Real(0.0)) {
+    if (!finite(coefficient_si)
+        || coefficient_si <= amrex::Real(0.0)
+        || !finite(exponent)
+        || exponent <= amrex::Real(0.0)) {
         throw std::invalid_argument(
             "Rothermel wind-factor inversion parameters are invalid");
     }
@@ -804,8 +808,8 @@ rothermel_model_wind_speed_for_factor_mps (
     }
 
     const amrex::Real wind_mps = std::pow(
-        target_wind_factor / result.wind_factor_coefficient_si,
-        amrex::Real(1.0) / result.wind_factor_exponent);
+        target_wind_factor / coefficient_si,
+        amrex::Real(1.0) / exponent);
 
     if (!finite(wind_mps)) {
         throw std::overflow_error(
@@ -813,6 +817,30 @@ rothermel_model_wind_speed_for_factor_mps (
     }
 
     return wind_mps;
+}
+
+} // namespace
+
+amrex::Real
+rothermel_model_wind_speed_for_factor_mps (
+    const RothermelResult& result,
+    amrex::Real target_wind_factor)
+{
+    return rothermel_model_wind_speed_for_factor_impl(
+        result.wind_factor_coefficient_si,
+        result.wind_factor_exponent,
+        target_wind_factor);
+}
+
+amrex::Real
+rothermel_model_wind_speed_for_factor_mps (
+    const RothermelMulticlassResult& result,
+    amrex::Real target_wind_factor)
+{
+    return rothermel_model_wind_speed_for_factor_impl(
+        result.wind_factor_coefficient_si,
+        result.wind_factor_exponent,
+        target_wind_factor);
 }
 
 } // namespace ERFFire

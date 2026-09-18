@@ -154,6 +154,10 @@ struct RothermelResult
     const RothermelResult& result,
     amrex::Real target_wind_factor);
 
+[[nodiscard]] amrex::Real rothermel_model_wind_speed_for_factor_mps(
+    const RothermelMulticlassResult& result,
+    amrex::Real target_wind_factor);
+
 } // namespace ERFFire
 
 #endif // ERF_ROTHERMEL_MODEL_H
