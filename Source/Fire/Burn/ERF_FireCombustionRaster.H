@@ -143,7 +143,7 @@ public:
      * Re-resolve only cumulative water accounting against immutable spatial
      * material after a checkpoint restore whose other combustion components
      * have already been validated. The resulting state is validated against
-     * the local FM1 moisture before it is committed.
+     * the local Anderson material before it is committed.
      */
     void restore_spatial_water_accounting(
         const FireFuelRaster& fuel_raster)

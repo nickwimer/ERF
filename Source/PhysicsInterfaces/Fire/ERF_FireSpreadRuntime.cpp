@@ -2,6 +2,7 @@
 
 #include <ERF_FireFuelBarrierRemesher.H>
 #include <ERF_FireFuelBarrierSweep.H>
+#include <ERF_FireFuelSpread.H>
 #include <ERF_FireSpreadOutput.H>
 #include <ERF_FireWindAdjustment.H>
 #include <ERF_FireFrontPropagator.H>
@@ -2035,53 +2036,87 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     terrain_gradient_m_per_m,
                     slope_tangent);
 
-            const RothermelFuelParameters* spread_fuel = nullptr;
-            amrex::Real dead_1h_moisture{};
+            const FireVec2 wind_direction =
+                wind_push_unit(
+                    wind_mps,
+                    speed_mps);
+
+            RichardsDirectionalSpread spread{};
 
             if (spatial_fuel_raster_) {
                 const FireFuelRasterCell& material =
                     spatial_materials[index];
+
                 if (material.model_id
                     == FireFuelModelId::NonBurnable) {
                     speeds.push_back(amrex::Real(0));
                     continue;
                 }
-                require(
-                    material.model_id == FireFuelModelId::FM1,
-                    "spatial Fire spread encountered an unsupported fuel model");
-                require(
-                    material.moisture.try_get(
-                        FireFuelMoistureClass::Dead1h,
-                        dead_1h_moisture),
-                    "spatial FM1 spread requires prescribed dead 1-h moisture");
-                spread_fuel = &config_.fuel;
+
+                if (material.model_id
+                    == FireFuelModelId::FM1) {
+                    amrex::Real dead_1h_moisture{};
+                    require(
+                        material.moisture.try_get(
+                            FireFuelMoistureClass::Dead1h,
+                            dead_1h_moisture),
+                        "spatial FM1 spread requires prescribed dead 1-h moisture");
+
+                    const RothermelResult behavior =
+                        evaluate_rothermel(
+                            config_.fuel,
+                            RothermelInputs{
+                                dead_1h_moisture,
+                                speed_mps,
+                                slope_tangent});
+
+                    spread =
+                        make_richards_directional_spread(
+                            behavior,
+                            wind_direction,
+                            upslope_unit);
+                } else {
+                    const FireFuelSpreadInputs inputs =
+                        make_fire_fuel_spread_inputs(
+                            material.model_id,
+                            material.moisture,
+                            speed_mps,
+                            slope_tangent);
+                    const Anderson13FuelParameters fuel =
+                        make_anderson13_fuel_parameters(
+                            inputs.anderson13_model_number);
+                    const RothermelMulticlassResult behavior =
+                        evaluate_rothermel_multiclass(
+                            fuel,
+                            inputs.rothermel);
+
+                    spread =
+                        make_richards_directional_spread(
+                            behavior,
+                            wind_direction,
+                            upslope_unit);
+                }
             } else {
                 const FireFuelProperties& material =
                     fuel_field_.sample(
                         positions_m[index].x,
                         positions_m[index].y);
-                dead_1h_moisture =
+                const amrex::Real dead_1h_moisture =
                     material.moisture.get(
                         FireFuelMoistureClass::Dead1h);
-                spread_fuel =
-                    &material.single_dead_class;
+                const RothermelResult behavior =
+                    evaluate_rothermel(
+                        material.single_dead_class,
+                        RothermelInputs{
+                            dead_1h_moisture,
+                            speed_mps,
+                            slope_tangent});
+                spread =
+                    make_richards_directional_spread(
+                        behavior,
+                        wind_direction,
+                        upslope_unit);
             }
-
-            const RothermelResult behavior =
-                evaluate_rothermel(
-                    *spread_fuel,
-                    RothermelInputs{
-                        dead_1h_moisture,
-                        speed_mps,
-                        slope_tangent});
-
-            const RichardsDirectionalSpread spread =
-                make_richards_directional_spread(
-                    behavior,
-                    wind_push_unit(
-                        wind_mps,
-                        speed_mps),
-                    upslope_unit);
 
             speeds.push_back(
                 richards_normal_speed_mps(

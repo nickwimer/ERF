@@ -326,6 +326,78 @@ fuel_runtime_spatial_raster(
         state);
 }
 
+FireFuelRaster
+fuel_runtime_anderson_raster(
+    const SpreadConfig& config,
+    FireFuelModelId left_model,
+    FireFuelModelId right_model)
+{
+    FireFuelRasterState state;
+    const auto& geometry = config.raster_geometry;
+
+    const auto set_complete_moisture =
+        [](ERFFire::FireFuelRasterCell& cell) {
+            const auto contract =
+                ERFFire::fire_fuel_model_moisture_contract(
+                    cell.model_id);
+            for (int component = 0;
+                 component
+                     < ERFFire::FireFuelMoisture::component_count;
+                 ++component) {
+                const auto moisture_class =
+                    static_cast<FireFuelMoistureClass>(
+                        component);
+                const unsigned int bit =
+                    ERFFire::fire_fuel_moisture_component_bit(
+                        moisture_class);
+                if ((contract.required_mask & bit) == 0u) {
+                    continue;
+                }
+
+                Real value =
+                    Real(0.08)
+                    + Real(0.01)
+                        * static_cast<Real>(component);
+                if (moisture_class
+                    == FireFuelMoistureClass::LiveHerbaceous) {
+                    value = Real(0.80);
+                } else if (moisture_class
+                           == FireFuelMoistureClass::LiveWoody) {
+                    value = Real(0.65);
+                }
+                cell.moisture.set(
+                    moisture_class,
+                    value);
+            }
+        };
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        state.cells.resize(
+            geometry.nx * geometry.ny);
+
+        for (std::size_t j = 0;
+             j < geometry.ny;
+             ++j) {
+            for (std::size_t i = 0;
+                 i < geometry.nx;
+                 ++i) {
+                auto& cell =
+                    state.cells[
+                        j * geometry.nx + i];
+                cell.model_id =
+                    i < geometry.nx / 2
+                    ? left_model
+                    : right_model;
+                set_complete_moisture(cell);
+            }
+        }
+    }
+
+    return FireFuelRaster::collective_from_io_rank_state(
+        geometry,
+        state);
+}
+
 std::string
 fuel_runtime_state_bytes(const RuntimeState& state)
 {
@@ -889,6 +961,163 @@ TEST(FireFuelRuntime, SpatialMoistureDrivesSpreadAndCombustion)
         EXPECT_TRUE(saw_dry_consumption);
         EXPECT_TRUE(saw_wet_consumption);
     }
+}
+
+TEST(FireFuelRuntime, Anderson13SpatialRuntimeAdvancesSpreadAndCombustion)
+{
+    const auto config =
+        fuel_runtime_config();
+
+    const auto fm1_raster =
+        fuel_runtime_spatial_raster(
+            config,
+            Real(0.08),
+            Real(0.08));
+    const auto fm2_raster =
+        fuel_runtime_anderson_raster(
+            config,
+            FireFuelModelId::FM2,
+            FireFuelModelId::FM2);
+
+    Runtime fm1(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        fm1_raster);
+    Runtime fm2(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        fm2_raster);
+
+    const auto environment =
+        fuel_runtime_environment(
+            config.raster_geometry,
+            {Real(1.0), Real(0.25)});
+    const auto batch =
+        fuel_runtime_batch(environment);
+
+    const auto fm1_diagnostics =
+        fm1.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+    const auto fm2_diagnostics =
+        fm2.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+
+    EXPECT_EQ(fm2.current_time_s(), Real(0.25));
+    EXPECT_GT(
+        fm2_diagnostics.consumed_dry_fuel_kg,
+        Real(0));
+    EXPECT_GT(
+        fm2_diagnostics.sensible_energy_j,
+        Real(0));
+    EXPECT_GT(
+        fm2_diagnostics.water_released_kg,
+        Real(0));
+
+    // FM2 has different published spread parameters from FM1, so identical
+    // wind/terrain/ignition should not produce the same burned-area history.
+    EXPECT_NE(
+        fm2_diagnostics.burned_area_m2,
+        fm1_diagnostics.burned_area_m2);
+
+    const auto combustion =
+        fm2.combustion_raster()
+            .collective_snapshot_state_to_io_rank();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        const auto material =
+            ERFFire::make_anderson13_fire_combustion_accounting(
+                config.combustion_parameters,
+                [&]() {
+                    ERFFire::FireFuelRasterCell cell;
+                    cell.model_id = FireFuelModelId::FM2;
+                    cell.moisture.set(
+                        FireFuelMoistureClass::Dead1h,
+                        Real(0.08));
+                    cell.moisture.set(
+                        FireFuelMoistureClass::Dead10h,
+                        Real(0.09));
+                    cell.moisture.set(
+                        FireFuelMoistureClass::Dead100h,
+                        Real(0.10));
+                    cell.moisture.set(
+                        FireFuelMoistureClass::LiveHerbaceous,
+                        Real(0.80));
+                    return cell;
+                }());
+
+        bool saw_ignited = false;
+        for (const auto& cell : combustion.cells) {
+            if (cell.ignited_area_fraction <= Real(0)) {
+                continue;
+            }
+            saw_ignited = true;
+            const Real represented =
+                cell.remaining_dry_fuel_kg_m2
+                + cell.consumed_dry_fuel_kg_m2;
+            EXPECT_NEAR(
+                represented,
+                cell.ignited_area_fraction
+                    * material.parameters
+                        .dry_fuel_load_kg_m2,
+                Real(2048)
+                    * std::numeric_limits<Real>::epsilon()
+                    * std::max(
+                        Real(1),
+                        std::abs(represented)));
+            EXPECT_NEAR(
+                cell.water_released_kg_m2,
+                cell.consumed_dry_fuel_kg_m2
+                    * (material.parameters
+                           .fuel_moisture_fraction
+                       + material.parameters
+                           .combustion_water_yield_kg_per_kg_dry),
+                Real(2048)
+                    * std::numeric_limits<Real>::epsilon()
+                    * std::max(
+                        Real(1),
+                        std::abs(
+                            cell.water_released_kg_m2)));
+        }
+        EXPECT_TRUE(saw_ignited);
+    }
+}
+
+TEST(FireFuelRuntime, MixedAnderson13ModelsAdvanceTransactionally)
+{
+    const auto config =
+        fuel_runtime_config();
+    const auto spatial_fuel =
+        fuel_runtime_anderson_raster(
+            config,
+            FireFuelModelId::FM2,
+            FireFuelModelId::FM10);
+
+    Runtime runtime(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        spatial_fuel);
+
+    const auto environment =
+        fuel_runtime_environment(
+            config.raster_geometry,
+            {Real(0.75), Real(0.15)});
+    const auto batch =
+        fuel_runtime_batch(environment);
+
+    const auto diagnostics =
+        runtime.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+
+    EXPECT_EQ(runtime.current_time_s(), Real(0.25));
+    EXPECT_GT(diagnostics.burned_area_m2, Real(0));
+    EXPECT_GT(diagnostics.consumed_dry_fuel_kg, Real(0));
+    EXPECT_GT(diagnostics.sensible_energy_j, Real(0));
+    EXPECT_GT(diagnostics.water_released_kg, Real(0));
 }
 
 TEST(FireFuelRuntime, SpatialRuntimeRequiresBatchedAdvanceAndRejectsLegacySnapshots)
