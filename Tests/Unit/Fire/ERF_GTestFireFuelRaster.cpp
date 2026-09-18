@@ -1427,7 +1427,7 @@ TEST(FireFuelRaster, CollectivePointSamplerRejectsInvalidPoints)
         std::invalid_argument);
 }
 
-TEST(FireFuelCombustionRaster, AndersonCellsUseLocalDryMassEnergyAndWater)
+TEST(FireFuelCombustionRaster, SpatialRuntimePreservesFm1AndUsesAndersonAccounting)
 {
     const auto geometry = combustion_geometry();
     const auto fuel_raster =
@@ -1457,7 +1457,7 @@ TEST(FireFuelCombustionRaster, AndersonCellsUseLocalDryMassEnergyAndWater)
             MoistureClass::Dead1h,
             Real(0.08));
         const auto fm1 =
-            ERFFire::make_anderson13_fire_combustion_accounting(
+            ERFFire::make_spatial_fire_combustion_accounting(
                 base,
                 fm1_cell);
 
@@ -1468,9 +1468,20 @@ TEST(FireFuelCombustionRaster, AndersonCellsUseLocalDryMassEnergyAndWater)
         fm2_cell.moisture.set(MoistureClass::Dead100h, Real(0.10));
         fm2_cell.moisture.set(MoistureClass::LiveHerbaceous, Real(0.80));
         const auto fm2 =
+            ERFFire::make_spatial_fire_combustion_accounting(
+                base,
+                fm2_cell);
+        const auto fm2_anderson =
             ERFFire::make_anderson13_fire_combustion_accounting(
                 base,
                 fm2_cell);
+
+        EXPECT_EQ(
+            fm1.parameters.dry_fuel_load_kg_m2,
+            base.dry_fuel_load_kg_m2);
+        EXPECT_EQ(
+            fm2.parameters.dry_fuel_load_kg_m2,
+            fm2_anderson.parameters.dry_fuel_load_kg_m2);
 
         EXPECT_NEAR(
             snapshot.cells[0].remaining_dry_fuel_kg_m2,
@@ -1518,7 +1529,7 @@ TEST(FireFuelCombustionRaster, AndersonCellsUseLocalDryMassEnergyAndWater)
 
         for (int index = 0; index < 2; ++index) {
             const auto local =
-                ERFFire::make_anderson13_fire_combustion_accounting(
+                ERFFire::make_spatial_fire_combustion_accounting(
                     base,
                     cells[index]);
             const auto& state =
