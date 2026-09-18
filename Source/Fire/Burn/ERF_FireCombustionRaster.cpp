@@ -240,6 +240,121 @@ store_combustion_state(
         state.water_released_kg_m2;
 }
 
+#ifdef AMREX_USE_GPU
+amrex::GpuTuple<int, int>
+initialize_combustion_states_on_device(
+    amrex::MultiFab& states,
+    const amrex::MultiFab& burned_fraction,
+    const FireCombustionParameters& parameters,
+    const FireFuelRaster* fuel_raster)
+{
+    const auto state_arrays =
+        states.arrays();
+    const auto burned_arrays =
+        burned_fraction.const_arrays();
+    const int use_spatial_fuel =
+        fuel_raster != nullptr ? 1 : 0;
+    const auto fuel_arrays =
+        use_spatial_fuel != 0
+        ? fuel_raster->distributed_values().const_arrays()
+        : states.const_arrays();
+
+    return amrex::ParReduce(
+        amrex::TypeList<
+            amrex::ReduceOpMax,
+            amrex::ReduceOpMax>{},
+        amrex::TypeList<int, int>{},
+        states,
+        [=] AMREX_GPU_DEVICE (
+            int box_no,
+            int i,
+            int j,
+            int k) noexcept
+            -> amrex::GpuTuple<int, int>
+        {
+            const auto values =
+                state_arrays[box_no];
+            const auto burned =
+                burned_arrays[box_no];
+
+            const FireCombustionState current =
+                load_combustion_state(
+                    values,
+                    i,
+                    j);
+
+            FireCombustionParameters local_parameters =
+                parameters;
+            if (use_spatial_fuel != 0) {
+                FireFuelRasterCell fuel_cell{};
+                if (!detail::try_decode_fire_fuel_raster_cell(
+                        fuel_arrays[box_no],
+                        i,
+                        j,
+                        fuel_cell)) {
+                    return {1, 0};
+                }
+
+                FireFuelCombustionAccounting accounting{};
+                const auto material_status =
+                    try_make_anderson13_fire_combustion_accounting(
+                        parameters,
+                        fuel_cell,
+                        accounting);
+
+                if (material_status
+                    == FireFuelCombustionAccountingStatus::nonburnable) {
+                    const bool canonical_zero =
+                        current.ignited_area_fraction == amrex::Real(0)
+                        && current.remaining_dry_fuel_kg_m2 == amrex::Real(0)
+                        && current.consumed_dry_fuel_kg_m2 == amrex::Real(0)
+                        && current.sensible_energy_j_m2 == amrex::Real(0)
+                        && current.water_released_kg_m2 == amrex::Real(0);
+                    if (!canonical_zero
+                        || burned(i, j, k) != amrex::Real(0)) {
+                        return {1, 0};
+                    }
+                    return {0, 0};
+                }
+
+                if (material_status
+                    == FireFuelCombustionAccountingStatus::overflow_error) {
+                    return {0, 1};
+                }
+                if (material_status
+                    != FireFuelCombustionAccountingStatus::success) {
+                    return {1, 0};
+                }
+                local_parameters = accounting.parameters;
+            }
+
+            FireCombustionState next{};
+            const FireCombustionStatus status =
+                try_add_fire_combustion_ignition(
+                    current,
+                    local_parameters,
+                    burned(i, j, k),
+                    next);
+
+            if (status
+                == FireCombustionStatus::overflow_error) {
+                return {0, 1};
+            }
+            if (status
+                != FireCombustionStatus::success) {
+                return {1, 0};
+            }
+
+            store_combustion_state(
+                values,
+                i,
+                j,
+                next);
+            return {0, 0};
+        });
+}
+#endif
+
 FireCombustionRasterTotals
 local_distributed_totals(
     const amrex::MultiFab& states,
@@ -1136,113 +1251,12 @@ FireCombustionRaster::initialize_from_burned_fraction_impl(
         burned_fraction_mf,
         burned_device);
 
-    const auto state_arrays =
-        next_states.arrays();
-    const auto burned_arrays =
-        burned_device.const_arrays();
-    const FireCombustionParameters
-        device_parameters = parameters_;
-    const int use_spatial_fuel =
-        fuel_raster != nullptr ? 1 : 0;
-    const auto fuel_arrays =
-        use_spatial_fuel != 0
-        ? fuel_raster->distributed_values().const_arrays()
-        : next_states.const_arrays();
-
     const auto initialization_failure =
-        amrex::ParReduce(
-            amrex::TypeList<
-                amrex::ReduceOpMax,
-                amrex::ReduceOpMax>{},
-            amrex::TypeList<int, int>{},
+        initialize_combustion_states_on_device(
             next_states,
-            [=] AMREX_GPU_DEVICE (
-                int box_no,
-                int i,
-                int j,
-                int k) noexcept
-                -> amrex::GpuTuple<int, int>
-            {
-                const auto values =
-                    state_arrays[box_no];
-                const auto burned =
-                    burned_arrays[box_no];
-
-                const FireCombustionState current =
-                    load_combustion_state(
-                        values,
-                        i,
-                        j);
-
-                FireCombustionParameters local_parameters =
-                    device_parameters;
-                if (use_spatial_fuel != 0) {
-                    FireFuelRasterCell fuel_cell{};
-                    if (!try_decode_fire_fuel_raster_cell(
-                            fuel_arrays[box_no],
-                            i,
-                            j,
-                            fuel_cell)) {
-                        return {1, 0};
-                    }
-
-                    FireFuelCombustionAccounting accounting{};
-                    const auto material_status =
-                        try_make_anderson13_fire_combustion_accounting(
-                            device_parameters,
-                            fuel_cell,
-                            accounting);
-
-                    if (material_status
-                        == FireFuelCombustionAccountingStatus::nonburnable) {
-                        const bool canonical_zero =
-                            current.ignited_area_fraction == amrex::Real(0)
-                            && current.remaining_dry_fuel_kg_m2 == amrex::Real(0)
-                            && current.consumed_dry_fuel_kg_m2 == amrex::Real(0)
-                            && current.sensible_energy_j_m2 == amrex::Real(0)
-                            && current.water_released_kg_m2 == amrex::Real(0);
-                        if (!canonical_zero
-                            || burned(i, j, k) != amrex::Real(0)) {
-                            return {1, 0};
-                        }
-                        return {0, 0};
-                    }
-
-                    if (material_status
-                        == FireFuelCombustionAccountingStatus::overflow_error) {
-                        return {0, 1};
-                    }
-                    if (material_status
-                        != FireFuelCombustionAccountingStatus::success) {
-                        return {1, 0};
-                    }
-                    local_parameters = accounting.parameters;
-                }
-
-                FireCombustionState next{};
-                const FireCombustionStatus status =
-                    try_add_fire_combustion_ignition(
-                        current,
-                        local_parameters,
-                        burned(i, j, k),
-                        next);
-
-                if (status
-                    == FireCombustionStatus::overflow_error) {
-                    return {0, 1};
-                }
-                if (status
-                    != FireCombustionStatus::success) {
-                    return {1, 0};
-                }
-
-                store_combustion_state(
-                    values,
-                    i,
-                    j,
-                    next);
-                return {0, 0};
-            });
+            burned_device,
+            parameters_,
+            fuel_raster);
 
     if (amrex::get<1>(
             initialization_failure) != 0) {
@@ -1286,7 +1300,7 @@ FireCombustionRaster::initialize_from_burned_fraction_impl(
                             fuel_raster->distributed_values()
                                 .const_array(mfi);
                         require(
-                            try_decode_fire_fuel_raster_cell(
+                            detail::try_decode_fire_fuel_raster_cell(
                                 fuel_values,
                                 i,
                                 j,
@@ -2085,7 +2099,7 @@ detail::advance_fire_combustion_vertex_sweep(
                         parameters;
                     if (use_spatial_fuel != 0) {
                         FireFuelRasterCell fuel_cell{};
-                        if (!try_decode_fire_fuel_raster_cell(
+                        if (!detail::try_decode_fire_fuel_raster_cell(
                                 fuel_arrays[box_no],
                                 i,
                                 j,
@@ -2259,7 +2273,7 @@ detail::advance_fire_combustion_vertex_sweep(
                             fuel_raster->distributed_values()
                                 .const_array(mfi);
                         require(
-                            try_decode_fire_fuel_raster_cell(
+                            detail::try_decode_fire_fuel_raster_cell(
                                 fuel_values,
                                 i,
                                 j,
