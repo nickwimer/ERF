@@ -5,8 +5,10 @@
 #error "ERF_FireCombustionRasterFuelI.H must be included through ERF_FireCombustionRaster.H"
 #endif
 
+#include <ERF_FireFront.H>
 #include <ERF_FireFuelCombustion.H>
 #include <ERF_FireFuelRaster.H>
+#include <ERF_FirePerimeterSweep.H>
 
 #include <AMReX_Gpu.H>
 #include <AMReX_GpuLaunch.H>
