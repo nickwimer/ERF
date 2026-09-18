@@ -1388,7 +1388,6 @@ FireCombustionRaster::advance_from_topology_event_sweep(
     const FireFront& event_front,
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
-    const FireFuelRaster* fuel_raster,
     amrex::Real dt_s)
 {
     return detail::advance_fire_combustion_vertex_sweep(
@@ -1501,6 +1500,7 @@ detail::advance_fire_combustion_vertex_sweep(
     const std::vector<std::vector<FireVec2>>* front_topology_event_vertices,
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
+    const FireFuelRaster* fuel_raster,
     amrex::Real dt_s)
 {
     auto& geometry_ = raster.geometry_;
