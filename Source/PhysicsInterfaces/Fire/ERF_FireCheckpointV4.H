@@ -569,50 +569,16 @@ collective_restore_erf_fire_checkpoint_v4(
         spatial_fuel,
         true);
 
-    // Feed the existing dynamic-state restore path a base-moisture-equivalent
-    // water component. All other persisted state remains byte-for-byte from
-    // the checkpoint. attach_spatial_fuel_after_checkpoint_restore() then
-    // re-resolves water from immutable spatial material before exposure.
-    const amrex::Real base_water_per_kg_dry =
-        metadata.checkpoint.runtime_state.config
-            .combustion_parameters.fuel_moisture_fraction
-        + metadata.checkpoint.runtime_state.config
-            .combustion_parameters
-            .combustion_water_yield_kg_per_kg_dry;
-
-    for (amrex::MFIter mfi(legacy_raster);
-         mfi.isValid();
-         ++mfi) {
-        const amrex::Box box = mfi.validbox();
-        const auto values = legacy_raster.array(mfi);
-        amrex::ParallelFor(
-            box,
-            [=] AMREX_GPU_DEVICE (
-                int i,
-                int j,
-                int k) noexcept
-            {
-                values(
-                    i,
-                    j,
-                    k,
-                    ERFFireCheckpointRasterComponents::water_released_kg_m2) =
-                    values(
-                        i,
-                        j,
-                        k,
-                        ERFFireCheckpointRasterComponents::consumed_dry_fuel_kg_m2)
-                    * base_water_per_kg_dry;
-            });
-    }
-    amrex::Gpu::streamSynchronize();
-
+    // The raw combustion components have already been validated against the
+    // fingerprint-checked spatial material above. Preserve them byte-for-byte
+    // through dynamic restore and defer uniform-base validation.
     ERFFireSpreadRuntime restored =
         ERFFireSpreadRuntime::
             collective_restore_from_checkpoint_raster(
                 std::move(
                     metadata.checkpoint.runtime_state),
-                legacy_raster);
+                legacy_raster,
+                true);
 
     return ERFFireSpreadRuntime::
         attach_spatial_fuel_after_checkpoint_restore(

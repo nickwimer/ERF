@@ -261,14 +261,15 @@ public:
     [[nodiscard]] static ERFFireSpreadRuntime
     collective_restore_from_checkpoint_raster(
         ERFFireSpreadRuntimeState state,
-        const amrex::MultiFab& checkpoint_raster);
+        const amrex::MultiFab& checkpoint_raster,
+        bool combustion_state_already_validated = false);
 
     /**
      * Attach already validated spatial material to restored dynamic state.
      *
      * Every rank must participate. Geometry and canonical FM1 base physics are
-     * checked, then cumulative combustion-water accounting is re-resolved from
-     * the immutable cellwise moisture before the spatial runtime is exposed.
+     * checked, then the raw restored combustion components are validated
+     * against the immutable cellwise material before the runtime is exposed.
      */
     [[nodiscard]] static ERFFireSpreadRuntime
     attach_spatial_fuel_after_checkpoint_restore(
@@ -334,7 +335,7 @@ public:
         }
 
         restored_runtime.combustion_
-            .restore_spatial_water_accounting(
+            .validate_restored_spatial_accounting(
                 spatial_fuel_raster);
         restored_runtime.spatial_fuel_raster_.emplace(
             std::move(spatial_fuel_raster));

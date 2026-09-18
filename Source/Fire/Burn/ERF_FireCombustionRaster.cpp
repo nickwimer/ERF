@@ -548,7 +548,8 @@ FireCombustionRaster::collective_restore_from_checkpoint_raster(
     FireCombustionRasterOptions options,
     const amrex::MultiFab& checkpoint,
     int source_comp,
-    bool initialized)
+    bool initialized,
+    bool validate_against_base_parameters)
 {
     FireCombustionRaster result(
         geometry, parameters, options);
@@ -588,6 +589,8 @@ FireCombustionRaster::collective_restore_from_checkpoint_raster(
         device_parameters = parameters;
     const int device_initialized =
         initialized_flag;
+    const int device_validate_base =
+        validate_against_base_parameters ? 1 : 0;
 
     const auto validation =
         amrex::ParReduce(
@@ -610,14 +613,35 @@ FireCombustionRaster::collective_restore_from_checkpoint_raster(
                         i,
                         j);
 
-                FireCombustionAdvance checked{};
-                if (try_advance_fire_combustion(
-                        cell,
-                        device_parameters,
-                        amrex::Real(0),
-                        checked)
-                    != FireCombustionStatus::success) {
+                if (!amrex::Math::isfinite(
+                        cell.ignited_area_fraction)
+                    || cell.ignited_area_fraction < amrex::Real(0)
+                    || cell.ignited_area_fraction > amrex::Real(1)
+                    || !amrex::Math::isfinite(
+                        cell.remaining_dry_fuel_kg_m2)
+                    || cell.remaining_dry_fuel_kg_m2 < amrex::Real(0)
+                    || !amrex::Math::isfinite(
+                        cell.consumed_dry_fuel_kg_m2)
+                    || cell.consumed_dry_fuel_kg_m2 < amrex::Real(0)
+                    || !amrex::Math::isfinite(
+                        cell.sensible_energy_j_m2)
+                    || cell.sensible_energy_j_m2 < amrex::Real(0)
+                    || !amrex::Math::isfinite(
+                        cell.water_released_kg_m2)
+                    || cell.water_released_kg_m2 < amrex::Real(0)) {
                     return {1};
+                }
+
+                if (device_validate_base != 0) {
+                    FireCombustionAdvance checked{};
+                    if (try_advance_fire_combustion(
+                            cell,
+                            device_parameters,
+                            amrex::Real(0),
+                            checked)
+                        != FireCombustionStatus::success) {
+                        return {1};
+                    }
                 }
 
                 if (device_initialized == 0
@@ -647,14 +671,36 @@ FireCombustionRaster::collective_restore_from_checkpoint_raster(
             for (int i = box.smallEnd(0); i <= box.bigEnd(0); ++i) {
                 const FireCombustionState cell =
                     load_combustion_state(values, i, j);
-                try {
-                    (void)advance_fire_combustion(
-                        cell,
-                        parameters,
-                        amrex::Real(0));
-                } catch (...) {
+                if (!std::isfinite(
+                        cell.ignited_area_fraction)
+                    || cell.ignited_area_fraction < amrex::Real(0)
+                    || cell.ignited_area_fraction > amrex::Real(1)
+                    || !std::isfinite(
+                        cell.remaining_dry_fuel_kg_m2)
+                    || cell.remaining_dry_fuel_kg_m2 < amrex::Real(0)
+                    || !std::isfinite(
+                        cell.consumed_dry_fuel_kg_m2)
+                    || cell.consumed_dry_fuel_kg_m2 < amrex::Real(0)
+                    || !std::isfinite(
+                        cell.sensible_energy_j_m2)
+                    || cell.sensible_energy_j_m2 < amrex::Real(0)
+                    || !std::isfinite(
+                        cell.water_released_kg_m2)
+                    || cell.water_released_kg_m2 < amrex::Real(0)) {
                     invalid_state = 1;
                     continue;
+                }
+
+                if (validate_against_base_parameters) {
+                    try {
+                        (void)advance_fire_combustion(
+                            cell,
+                            parameters,
+                            amrex::Real(0));
+                    } catch (...) {
+                        invalid_state = 1;
+                        continue;
+                    }
                 }
 
                 if (initialized_flag == 0

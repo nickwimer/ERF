@@ -137,7 +137,8 @@ public:
         FireCombustionRasterOptions options,
         const amrex::MultiFab& checkpoint,
         int source_comp,
-        bool initialized);
+        bool initialized,
+        bool validate_against_base_parameters = true);
 
     /**
      * Re-resolve only cumulative water accounting against immutable spatial
@@ -149,6 +150,16 @@ public:
         const FireFuelRaster& fuel_raster)
     {
         rewrite_water_for_spatial_fuel(fuel_raster);
+    }
+
+    /**
+     * Validate a restored combustion state against authoritative spatial
+     * material without modifying any persisted component.
+     */
+    void validate_restored_spatial_accounting(
+        const FireFuelRaster& fuel_raster) const
+    {
+        validate_spatial_fuel(fuel_raster, true);
     }
 
     FireCombustionRaster(

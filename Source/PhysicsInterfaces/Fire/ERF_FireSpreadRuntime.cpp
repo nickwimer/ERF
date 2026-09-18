@@ -1490,7 +1490,8 @@ ERFFireSpreadRuntime::collective_restore_from_io_rank_state(
 ERFFireSpreadRuntime
 ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
     ERFFireSpreadRuntimeState state,
-    const amrex::MultiFab& checkpoint_raster)
+    const amrex::MultiFab& checkpoint_raster,
+    bool combustion_state_already_validated)
 {
     collective_broadcast_front_state(state);
 
@@ -1525,7 +1526,8 @@ ERFFireSpreadRuntime::collective_restore_from_checkpoint_raster(
                 state.config.combustion_options,
                 checkpoint_raster,
                 ERFFireCheckpointRasterComponents::ignited_area_fraction,
-                state.combustion.initialized);
+                state.combustion.initialized,
+                !combustion_state_already_validated);
 
     const auto& burned_values =
         burned.distributed_burned_fraction();

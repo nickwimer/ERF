@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <ERF_FireCheckpointV4.H>
+#include <ERF_FireFuelCombustion.H>
 #include <ERF_FireRuntimeInit.H>
 #include <ERF_FireRuntimeOptions.H>
 #include <ERF_FireSpreadRuntime.H>
@@ -1171,6 +1172,101 @@ TEST(FireFuelRuntime, SpatialRuntimeRequiresCanonicalFm1Base)
             custom_config,
             spatial_fuel),
         std::invalid_argument);
+}
+
+TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
+{
+    const auto config =
+        fuel_runtime_config();
+    const auto spatial_fuel =
+        fuel_runtime_anderson_raster(
+            config,
+            FireFuelModelId::FM2,
+            FireFuelModelId::FM10);
+
+    Runtime original(
+        fuel_runtime_ignition(),
+        Real(0),
+        config,
+        spatial_fuel);
+
+    const auto environment =
+        fuel_runtime_environment(
+            config.raster_geometry,
+            {Real(0.5), Real(0.125)});
+    const auto batch =
+        fuel_runtime_batch(environment);
+
+    (void)original.advance_direct_reference_wind_batched(
+        batch,
+        Real(0.25));
+
+    const auto before =
+        original.combustion_raster()
+            .collective_snapshot_state_to_io_rank();
+
+    const std::uint64_t fingerprint =
+        ERFFire::collective_fire_fuel_raster_fingerprint_fnv1a64(
+            *original.spatial_fuel_raster());
+    amrex::MultiFab checkpoint =
+        ERFFire::make_erf_fire_checkpoint_v4_raster(
+            original);
+
+    auto options = make_options();
+    options.reference_height_agl_m = Real(0.5);
+    std::stringstream stream;
+    ERFFire::write_erf_fire_checkpoint_v4_metadata(
+        original,
+        options,
+        fingerprint,
+        stream);
+
+    auto metadata =
+        ERFFire::read_erf_fire_checkpoint_v4_metadata(
+            stream);
+    Runtime restored =
+        ERFFire::collective_restore_erf_fire_checkpoint_v4(
+            std::move(metadata),
+            checkpoint);
+
+    const auto after =
+        restored.combustion_raster()
+            .collective_snapshot_state_to_io_rank();
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        ASSERT_EQ(after.cells.size(), before.cells.size());
+        for (std::size_t index = 0;
+             index < before.cells.size();
+             ++index) {
+            EXPECT_EQ(
+                std::memcmp(
+                    &after.cells[index],
+                    &before.cells[index],
+                    sizeof(ERFFire::FireCombustionState)),
+                0);
+        }
+    }
+
+    expect_runtime_distributed_state_equal(
+        restored,
+        original);
+
+    Runtime expected = original;
+    const auto expected_diagnostics =
+        expected.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+    const auto restored_diagnostics =
+        restored.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+
+    expect_step_diagnostics_equal(
+        restored_diagnostics,
+        expected_diagnostics);
+    expect_runtime_distributed_state_equal(
+        restored,
+        expected);
 }
 
 TEST(FireFuelRuntime, SpatialCheckpointV4RoundTripContinuesExactly)
