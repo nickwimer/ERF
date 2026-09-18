@@ -120,7 +120,7 @@ validate_spatial_fuel_impl(
 
                 FireFuelCombustionAccounting accounting{};
                 const auto status =
-                    try_make_anderson13_fire_combustion_accounting(
+                    try_make_spatial_fire_combustion_accounting(
                         base,
                         fuel_cell,
                         accounting);
@@ -294,7 +294,7 @@ rewrite_water_for_spatial_fuel_impl(
                         fuel_cell);
                 const auto status =
                     decoded
-                    ? try_make_anderson13_fire_combustion_accounting(
+                    ? try_make_spatial_fire_combustion_accounting(
                         base,
                         fuel_cell,
                         accounting)
