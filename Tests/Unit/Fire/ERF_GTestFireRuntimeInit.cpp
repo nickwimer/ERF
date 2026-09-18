@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1238,12 +1239,23 @@ TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
         for (std::size_t index = 0;
              index < before.cells.size();
              ++index) {
+            const auto& a = after.cells[index];
+            const auto& b = before.cells[index];
             EXPECT_EQ(
-                std::memcmp(
-                    &after.cells[index],
-                    &before.cells[index],
-                    sizeof(ERFFire::FireCombustionState)),
-                0);
+                a.ignited_area_fraction,
+                b.ignited_area_fraction);
+            EXPECT_EQ(
+                a.remaining_dry_fuel_kg_m2,
+                b.remaining_dry_fuel_kg_m2);
+            EXPECT_EQ(
+                a.consumed_dry_fuel_kg_m2,
+                b.consumed_dry_fuel_kg_m2);
+            EXPECT_EQ(
+                a.sensible_energy_j_m2,
+                b.sensible_energy_j_m2);
+            EXPECT_EQ(
+                a.water_released_kg_m2,
+                b.water_released_kg_m2);
         }
     }
 
