@@ -166,6 +166,38 @@ make_combustion_fuel_raster(
 }
 
 FireFuelRaster
+make_anderson_combustion_fuel_raster()
+{
+    const auto geometry = combustion_geometry();
+    FireFuelRasterState state;
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        state.cells.resize(2);
+
+        state.cells[0].model_id = FireFuelModelId::FM1;
+        state.cells[0].moisture.set(
+            MoistureClass::Dead1h,
+            Real(0.08));
+
+        state.cells[1].model_id = FireFuelModelId::FM2;
+        state.cells[1].moisture.set(
+            MoistureClass::Dead1h,
+            Real(0.08));
+        state.cells[1].moisture.set(
+            MoistureClass::Dead10h,
+            Real(0.09));
+        state.cells[1].moisture.set(
+            MoistureClass::Dead100h,
+            Real(0.10));
+        state.cells[1].moisture.set(
+            MoistureClass::LiveHerbaceous,
+            Real(0.80));
+    }
+    return FireFuelRaster::collective_from_io_rank_state(
+        geometry,
+        state);
+}
+
+FireFuelRaster
 make_invalid_combustion_fuel_raster(bool nonburnable)
 {
     const auto geometry = combustion_geometry();
@@ -1393,6 +1425,127 @@ TEST(FireFuelRaster, CollectivePointSamplerRejectsInvalidPoints)
                     std::numeric_limits<Real>::quiet_NaN(),
                     geometry.ylo_m}}),
         std::invalid_argument);
+}
+
+TEST(FireFuelCombustionRaster, AndersonCellsUseLocalDryMassEnergyAndWater)
+{
+    const auto geometry = combustion_geometry();
+    const auto fuel_raster =
+        make_anderson_combustion_fuel_raster();
+    const auto burned =
+        fully_burned_combustion_raster();
+    const auto base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+
+    FireCombustionRaster combustion(
+        geometry,
+        base,
+        FireCombustionRasterOptions{4});
+    (void)combustion.initialize_from_burned_fraction(
+        burned,
+        fuel_raster);
+
+    auto snapshot =
+        combustion.collective_snapshot_state_to_io_rank();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        ASSERT_EQ(snapshot.cells.size(), 2U);
+
+        FireFuelRasterCell fm1_cell;
+        fm1_cell.model_id = FireFuelModelId::FM1;
+        fm1_cell.moisture.set(
+            MoistureClass::Dead1h,
+            Real(0.08));
+        const auto fm1 =
+            ERFFire::make_anderson13_fire_combustion_accounting(
+                base,
+                fm1_cell);
+
+        FireFuelRasterCell fm2_cell;
+        fm2_cell.model_id = FireFuelModelId::FM2;
+        fm2_cell.moisture.set(MoistureClass::Dead1h, Real(0.08));
+        fm2_cell.moisture.set(MoistureClass::Dead10h, Real(0.09));
+        fm2_cell.moisture.set(MoistureClass::Dead100h, Real(0.10));
+        fm2_cell.moisture.set(MoistureClass::LiveHerbaceous, Real(0.80));
+        const auto fm2 =
+            ERFFire::make_anderson13_fire_combustion_accounting(
+                base,
+                fm2_cell);
+
+        EXPECT_NEAR(
+            snapshot.cells[0].remaining_dry_fuel_kg_m2,
+            fm1.parameters.dry_fuel_load_kg_m2,
+            fuel_accounting_tolerance(
+                fm1.parameters.dry_fuel_load_kg_m2));
+        EXPECT_NEAR(
+            snapshot.cells[1].remaining_dry_fuel_kg_m2,
+            fm2.parameters.dry_fuel_load_kg_m2,
+            fuel_accounting_tolerance(
+                fm2.parameters.dry_fuel_load_kg_m2));
+        EXPECT_GT(
+            snapshot.cells[1].remaining_dry_fuel_kg_m2,
+            snapshot.cells[0].remaining_dry_fuel_kg_m2);
+    }
+
+    const FirePerimeter perimeter =
+        full_combustion_perimeter();
+    const auto update =
+        combustion.advance_from_linear_sweep(
+            perimeter,
+            perimeter,
+            burned,
+            burned,
+            fuel_raster,
+            Real(1.0));
+
+    EXPECT_GT(update.newly_consumed_dry_fuel_kg, Real(0));
+    EXPECT_GT(update.sensible_energy_increment_j, Real(0));
+    EXPECT_GT(update.water_released_increment_kg, Real(0));
+
+    snapshot =
+        combustion.collective_snapshot_state_to_io_rank();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        ASSERT_EQ(snapshot.cells.size(), 2U);
+
+        FireFuelRasterCell cells[2];
+        cells[0].model_id = FireFuelModelId::FM1;
+        cells[0].moisture.set(MoistureClass::Dead1h, Real(0.08));
+        cells[1].model_id = FireFuelModelId::FM2;
+        cells[1].moisture.set(MoistureClass::Dead1h, Real(0.08));
+        cells[1].moisture.set(MoistureClass::Dead10h, Real(0.09));
+        cells[1].moisture.set(MoistureClass::Dead100h, Real(0.10));
+        cells[1].moisture.set(MoistureClass::LiveHerbaceous, Real(0.80));
+
+        for (int index = 0; index < 2; ++index) {
+            const auto local =
+                ERFFire::make_anderson13_fire_combustion_accounting(
+                    base,
+                    cells[index]);
+            const auto& state =
+                snapshot.cells[static_cast<std::size_t>(index)];
+
+            EXPECT_NEAR(
+                state.remaining_dry_fuel_kg_m2
+                    + state.consumed_dry_fuel_kg_m2,
+                local.parameters.dry_fuel_load_kg_m2,
+                fuel_accounting_tolerance(
+                    local.parameters.dry_fuel_load_kg_m2));
+            EXPECT_NEAR(
+                state.sensible_energy_j_m2,
+                state.consumed_dry_fuel_kg_m2
+                    * local.parameters.sensible_heat_release_j_kg_dry,
+                fuel_accounting_tolerance(
+                    state.sensible_energy_j_m2));
+            EXPECT_NEAR(
+                state.water_released_kg_m2,
+                state.consumed_dry_fuel_kg_m2
+                    * (local.parameters.fuel_moisture_fraction
+                       + local.parameters
+                           .combustion_water_yield_kg_per_kg_dry),
+                fuel_accounting_tolerance(
+                    state.water_released_kg_m2));
+        }
+    }
 }
 
 TEST(FireFuelCombustion, Fm1OverridesOnlyDead1hMoisture)

@@ -116,19 +116,21 @@ validate_spatial_fuel_impl(
                     return {1, 0};
                 }
 
-                FireCombustionParameters local{};
+                FireFuelCombustionAccounting accounting{};
                 const auto status =
-                    try_make_fire_combustion_parameters_for_fuel_cell(
+                    try_make_anderson13_fire_combustion_accounting(
                         base,
                         fuel_cell,
-                        local);
+                        accounting);
 
                 if (status
-                        != FireFuelCombustionParameterStatus::success
+                        != FireFuelCombustionAccountingStatus::success
                     && status
-                        != FireFuelCombustionParameterStatus::nonburnable) {
+                        != FireFuelCombustionAccountingStatus::nonburnable) {
                     return {1, 0};
                 }
+                const FireCombustionParameters local =
+                    accounting.parameters;
 
                 if (check_state == 0) {
                     return {0, 0};
@@ -163,7 +165,7 @@ validate_spatial_fuel_impl(
                         FireCombustionRaster::water_released_comp)};
 
                 if (status
-                    == FireFuelCombustionParameterStatus::nonburnable) {
+                    == FireFuelCombustionAccountingStatus::nonburnable) {
                     const bool canonical_zero =
                         state.ignited_area_fraction == amrex::Real(0)
                         && state.remaining_dry_fuel_kg_m2 == amrex::Real(0)
@@ -187,7 +189,7 @@ validate_spatial_fuel_impl(
 
     if (material_failure != 0) {
         throw std::invalid_argument(
-            "Fire spatial combustion requires FM1 with prescribed dead 1-h moisture or NonBurnable cells");
+            "Fire spatial combustion requires complete Anderson-13 material or NonBurnable cells");
     }
     if (state_failure != 0) {
         throw std::invalid_argument(
@@ -281,7 +283,7 @@ rewrite_water_for_spatial_fuel_impl(
                 int k) noexcept
             {
                 FireFuelRasterCell fuel_cell;
-                FireCombustionParameters local{};
+                FireFuelCombustionAccounting accounting{};
                 const bool decoded =
                     try_decode_fire_fuel_raster_cell(
                         fuel,
@@ -290,14 +292,16 @@ rewrite_water_for_spatial_fuel_impl(
                         fuel_cell);
                 const auto status =
                     decoded
-                    ? try_make_fire_combustion_parameters_for_fuel_cell(
+                    ? try_make_anderson13_fire_combustion_accounting(
                         base,
                         fuel_cell,
-                        local)
-                    : FireFuelCombustionParameterStatus::unsupported_model;
+                        accounting)
+                    : FireFuelCombustionAccountingStatus::invalid_model;
+                const FireCombustionParameters local =
+                    accounting.parameters;
 
                 if (status
-                    == FireFuelCombustionParameterStatus::nonburnable) {
+                    == FireFuelCombustionAccountingStatus::nonburnable) {
                     values(
                         i,
                         j,
@@ -308,7 +312,7 @@ rewrite_water_for_spatial_fuel_impl(
                 }
 
                 if (status
-                    != FireFuelCombustionParameterStatus::success) {
+                    != FireFuelCombustionAccountingStatus::success) {
                     values(
                         i,
                         j,
@@ -399,16 +403,10 @@ FireCombustionRaster::initialize_from_burned_fraction(
     const FireBurnedFractionRaster& burned_fraction,
     const FireFuelRaster& fuel_raster)
 {
-    validate_spatial_fuel(fuel_raster, true);
-
-    FireCombustionRaster next(*this);
-    next.rewrite_water_for_base_parameters();
-    (void)next.initialize_from_burned_fraction(burned_fraction);
-    next.rewrite_water_for_spatial_fuel(fuel_raster);
-
-    const FireCombustionRasterTotals result = next.totals_;
-    *this = std::move(next);
-    return result;
+    validate_spatial_fuel(fuel_raster, false);
+    return initialize_from_burned_fraction_impl(
+        burned_fraction,
+        &fuel_raster);
 }
 
 inline FireCombustionRasterAdvance
@@ -421,27 +419,19 @@ FireCombustionRaster::advance_from_linear_sweep(
     amrex::Real dt_s)
 {
     validate_spatial_fuel(fuel_raster, true);
-    const amrex::Real previous_water = totals_.water_released_kg;
-
-    FireCombustionRaster next(*this);
-    next.rewrite_water_for_base_parameters();
-    FireCombustionRasterAdvance result =
-        next.advance_from_linear_sweep(
-            start_perimeter,
-            end_perimeter,
-            burned_before,
-            burned_after,
-            dt_s);
-    next.rewrite_water_for_spatial_fuel(fuel_raster);
-
-    result.totals = next.totals_;
-    result.water_released_increment_kg =
-        detail::fire_spatial_combustion_water_increment(
-            previous_water,
-            next.totals_.water_released_kg);
-
-    *this = std::move(next);
-    return result;
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        start_perimeter,
+        end_perimeter.vertices_m(),
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        &fuel_raster,
+        dt_s);
 }
 
 inline FireCombustionRasterAdvance
@@ -454,27 +444,23 @@ FireCombustionRaster::advance_from_front_linear_sweep(
     amrex::Real dt_s)
 {
     validate_spatial_fuel(fuel_raster, true);
-    const amrex::Real previous_water = totals_.water_released_kg;
-
-    FireCombustionRaster next(*this);
-    next.rewrite_water_for_base_parameters();
-    FireCombustionRasterAdvance result =
-        next.advance_from_front_linear_sweep(
-            start_front,
-            end_front,
-            burned_before,
-            burned_after,
-            dt_s);
-    next.rewrite_water_for_spatial_fuel(fuel_raster);
-
-    result.totals = next.totals_;
-    result.water_released_increment_kg =
-        detail::fire_spatial_combustion_water_increment(
-            previous_water,
-            next.totals_.water_released_kg);
-
-    *this = std::move(next);
-    return result;
+    const FirePerimeter& representative_start =
+        start_front.components().front().perimeter;
+    const FirePerimeter& representative_end =
+        end_front.components().front().perimeter;
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        representative_start,
+        representative_end.vertices_m(),
+        nullptr,
+        &start_front,
+        &end_front,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        &fuel_raster,
+        dt_s);
 }
 
 inline FireCombustionRasterAdvance
@@ -488,28 +474,25 @@ FireCombustionRaster::advance_from_front_topology_event_sweep(
     amrex::Real dt_s)
 {
     validate_spatial_fuel(fuel_raster, true);
-    const amrex::Real previous_water = totals_.water_released_kg;
-
-    FireCombustionRaster next(*this);
-    next.rewrite_water_for_base_parameters();
-    FireCombustionRasterAdvance result =
-        next.advance_from_front_topology_event_sweep(
-            start_front,
-            event_vertices_m,
-            event_front,
-            burned_before,
-            burned_after,
-            dt_s);
-    next.rewrite_water_for_spatial_fuel(fuel_raster);
-
-    result.totals = next.totals_;
-    result.water_released_increment_kg =
-        detail::fire_spatial_combustion_water_increment(
-            previous_water,
-            next.totals_.water_released_kg);
-
-    *this = std::move(next);
-    return result;
+    (void)interpolate_fire_front_topology_event_sweep(
+        start_front,
+        event_vertices_m,
+        amrex::Real(0.0));
+    const FirePerimeter& representative_start =
+        start_front.components().front().perimeter;
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        representative_start,
+        event_vertices_m.front(),
+        &event_front,
+        nullptr,
+        nullptr,
+        &start_front,
+        &event_vertices_m,
+        burned_before,
+        burned_after,
+        &fuel_raster,
+        dt_s);
 }
 
 inline FireCombustionRasterAdvance
@@ -523,28 +506,19 @@ FireCombustionRaster::advance_from_topology_event_sweep(
     amrex::Real dt_s)
 {
     validate_spatial_fuel(fuel_raster, true);
-    const amrex::Real previous_water = totals_.water_released_kg;
-
-    FireCombustionRaster next(*this);
-    next.rewrite_water_for_base_parameters();
-    FireCombustionRasterAdvance result =
-        next.advance_from_topology_event_sweep(
-            start_perimeter,
-            event_vertices_m,
-            event_front,
-            burned_before,
-            burned_after,
-            dt_s);
-    next.rewrite_water_for_spatial_fuel(fuel_raster);
-
-    result.totals = next.totals_;
-    result.water_released_increment_kg =
-        detail::fire_spatial_combustion_water_increment(
-            previous_water,
-            next.totals_.water_released_kg);
-
-    *this = std::move(next);
-    return result;
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        start_perimeter,
+        event_vertices_m,
+        &event_front,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        &fuel_raster,
+        dt_s);
 }
 
 } // namespace ERFFire

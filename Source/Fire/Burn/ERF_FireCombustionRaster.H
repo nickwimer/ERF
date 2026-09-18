@@ -70,6 +70,7 @@ advance_fire_combustion_vertex_sweep(
     const std::vector<std::vector<FireVec2>>* front_topology_event_vertices,
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
+    const FireFuelRaster* fuel_raster,
     amrex::Real dt_s);
 
 } // namespace detail
@@ -241,13 +242,13 @@ public:
         const FireBurnedFractionRaster& burned_fraction);
 
     /**
-     * Spatial-FM1 initialization using the immutable distributed fuel raster.
+     * Spatial Anderson-13 initialization using the immutable distributed fuel raster.
      *
-     * Every represented cell must currently be FM1 with prescribed dead 1-h
-     * moisture. NonBurnable is rejected until front/barrier dynamics can
-     * guarantee such cells never ignite. Dry loading, heat release, burn time,
-     * and combustion-water yield remain the validated base parameters(); only
-     * local fuel moisture changes cell water accounting.
+     * Every burnable represented cell must be one of the original Anderson
+     * models with its required prescribed moisture channels. NonBurnable cells
+     * remain canonical zero state. Dry loading and prescribed water are
+     * resolved cellwise; sensible heat release, burn-time calibration, and
+     * combustion-water yield use the validated base policy.
      */
     [[nodiscard]] FireCombustionRasterTotals
     initialize_from_burned_fraction(
@@ -274,7 +275,7 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
-    /** Spatial-FM1 form of advance_from_linear_sweep(). */
+    /** Spatial Anderson-13 form of advance_from_linear_sweep(). */
     [[nodiscard]] FireCombustionRasterAdvance
     advance_from_linear_sweep(
         const FirePerimeter& start_perimeter,
@@ -292,7 +293,7 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
-    /** Spatial-FM1 form of advance_from_front_linear_sweep(). */
+    /** Spatial Anderson-13 form of advance_from_front_linear_sweep(). */
     [[nodiscard]] FireCombustionRasterAdvance
     advance_from_front_linear_sweep(
         const FireFront& start_front,
@@ -311,7 +312,7 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
-    /** Spatial-FM1 form of advance_from_front_topology_event_sweep(). */
+    /** Spatial Anderson-13 form of advance_from_front_topology_event_sweep(). */
     [[nodiscard]] FireCombustionRasterAdvance
     advance_from_front_topology_event_sweep(
         const FireFront& start_front,
@@ -331,7 +332,7 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
-    /** Spatial-FM1 form of advance_from_topology_event_sweep(). */
+    /** Spatial Anderson-13 form of advance_from_topology_event_sweep(). */
     [[nodiscard]] FireCombustionRasterAdvance
     advance_from_topology_event_sweep(
         const FirePerimeter& start_perimeter,
@@ -355,7 +356,13 @@ private:
         const std::vector<std::vector<FireVec2>>* front_topology_event_vertices,
         const FireBurnedFractionRaster& burned_before,
         const FireBurnedFractionRaster& burned_after,
+        const FireFuelRaster* fuel_raster,
         amrex::Real dt_s);
+
+    [[nodiscard]] FireCombustionRasterTotals
+    initialize_from_burned_fraction_impl(
+        const FireBurnedFractionRaster& burned_fraction,
+        const FireFuelRaster* fuel_raster);
 
     [[nodiscard]] std::size_t flat_index(
         std::size_t i,
