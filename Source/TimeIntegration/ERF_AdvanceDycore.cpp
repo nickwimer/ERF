@@ -2,7 +2,6 @@
 #include <AMReX_TimeIntegrator.H>
 
 #include <ERF.H>
-
 #include <ERF_MRI.H>
 #include <ERF_EddyViscosity.H>
 #include <ERF_EOS.H>
