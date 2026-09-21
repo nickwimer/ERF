@@ -1,3 +1,4 @@
+#include <ERF.H>
 #include <ERF_FirePlotfile2D.H>
 
 #include <ERF_FireContext.H>
@@ -282,3 +283,88 @@ ERFFireContext::fill_plotfile2d_diagnostics(
 }
 
 } // namespace ERFFire
+
+
+#ifdef ERF_USE_FIRE
+
+void
+ERF::append_fire_plotfile2d_available_names (
+    amrex::Vector<std::string>& available_names) const
+{
+    if (!m_fire) {
+        return;
+    }
+
+    const ERFFire::ERFFirePlotfile2DAvailabilityInputs inputs{
+        available_names
+    };
+
+    m_fire->append_available_plotfile2d_diagnostics(inputs);
+}
+
+void
+ERF::build_fire_plotfile2d_output_descriptors (
+    int which,
+    const amrex::Vector<std::string>& plot_var_names,
+    amrex::Vector<plotfile2d::Plotfile2DOutputDescriptor>&
+        output_descriptors) const
+{
+    const auto selection =
+        ERFFire::select_fire_plotfile2d_output_descriptors(
+            plot_var_names);
+
+    output_descriptors =
+        plotfile2d::build_sampled_level_output_descriptors(
+            pp_prefix,
+            which,
+            selection.non_fire_plot_var_names,
+            solverChoice);
+
+    const auto insert_position =
+        output_descriptors.begin()
+        + static_cast<std::ptrdiff_t>(
+            selection.non_fire_plot_var_names.size());
+
+    output_descriptors.insert(
+        insert_position,
+        selection.fire_descriptors.begin(),
+        selection.fire_descriptors.end());
+}
+
+void
+ERF::fill_fire_plotfile2d_diagnostics (
+    const amrex::Vector<std::string>& plot_var_names,
+    int level,
+    amrex::MultiFab& output,
+    int& output_component) const
+{
+    if (!m_fire) {
+        return;
+    }
+
+    const ERFFire::ERFFirePlotfile2DPrepareInputs
+        prepare_inputs{
+            plot_var_names,
+            geom[0],
+            istep[0],
+            static_cast<amrex::Real>(t_new[0])
+        };
+
+    const auto state =
+        m_fire->prepare_plotfile2d_diagnostics(
+            prepare_inputs);
+
+    const ERFFire::ERFFirePlotfile2DFillInputs
+        fill_inputs{
+            plot_var_names,
+            state,
+            level,
+            output,
+            output_component
+        };
+
+    m_fire->fill_plotfile2d_diagnostics(
+        fill_inputs);
+}
+
+#endif

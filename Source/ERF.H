@@ -91,6 +91,11 @@ namespace ERFFire
 {
 class ERFFireContext;
 }
+
+namespace plotfile2d
+{
+struct Plotfile2DOutputDescriptor;
+}
 #endif
 
 #include <iostream>
@@ -1031,6 +1036,21 @@ private:
         const std::string& checkpoint_directory) const;
     void restore_fire_checkpoint (
         const std::string& checkpoint_directory);
+
+    void append_fire_plotfile2d_available_names (
+        amrex::Vector<std::string>& available_names) const;
+
+    void build_fire_plotfile2d_output_descriptors (
+        int which,
+        const amrex::Vector<std::string>& plot_var_names,
+        amrex::Vector<plotfile2d::Plotfile2DOutputDescriptor>&
+            output_descriptors) const;
+
+    void fill_fire_plotfile2d_diagnostics (
+        const amrex::Vector<std::string>& plot_var_names,
+        int level,
+        amrex::MultiFab& output,
+        int& output_component) const;
 #endif
 
     // advance a single level for a single time step
