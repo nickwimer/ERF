@@ -84,6 +84,26 @@ function(run_identity_case mode label checkpoint_var)
         "enabled one-way Fire combustion raster header does not match expected schema: ${raster_header}")
     endif()
 
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E compare_files
+              "${case_dir}/fire_output/perimeter_000000.csv"
+              "${case_dir}/fire_output/perimeter_000005.csv"
+      RESULT_VARIABLE perimeter_evolution_compare)
+    if(perimeter_evolution_compare EQUAL 0)
+      message(FATAL_ERROR
+        "enabled one-way Fire perimeter did not evolve across five coarse steps")
+    endif()
+
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E compare_files
+              "${case_dir}/fire_output/raster_000000.csv"
+              "${case_dir}/fire_output/raster_000005.csv"
+      RESULT_VARIABLE raster_evolution_compare)
+    if(raster_evolution_compare EQUAL 0)
+      message(FATAL_ERROR
+        "enabled one-way Fire raster/combustion state did not evolve across five coarse steps")
+    endif()
+
     if(DEFINED IDENTITY_EXPECTED_RASTER_CELLS)
       file(STRINGS
         "${case_dir}/fire_output/raster_000005.csv"

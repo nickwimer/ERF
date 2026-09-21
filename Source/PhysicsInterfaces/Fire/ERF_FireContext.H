@@ -29,7 +29,6 @@ struct ERFFirePlotfile2DState;
  * ERFFireSpreadRuntime remains coupling-neutral. This context owns the
  * adapter state needed to connect that runtime to ERF.
  *
- * Read-only accessors below support ERF's Fire observation API.
  * Mutation remains internal to subsystem-level Fire interface methods.
  */
 class ERFFireContext
@@ -76,40 +75,10 @@ public:
     void fill_plotfile2d_diagnostics(
         const ERFFirePlotfile2DFillInputs& inputs) const;
 
-    [[nodiscard]] const ERFFireRuntimeOptions&
-    runtime_options() const noexcept
+    [[nodiscard]] bool
+    enabled() const noexcept
     {
-        return runtime_options_;
-    }
-
-    [[nodiscard]] double
-    environment_snapshot_time() const noexcept
-    {
-        return environment_snapshot_time_;
-    }
-
-    [[nodiscard]] double
-    environment_reference_height_agl_m() const noexcept
-    {
-        return environment_reference_height_agl_m_;
-    }
-
-    [[nodiscard]] const std::unique_ptr<ERFFireSpreadRuntime>&
-    spread_runtime() const noexcept
-    {
-        return spread_runtime_;
-    }
-
-    [[nodiscard]] const std::unique_ptr<amrex::MultiFab>&
-    atmospheric_source_tendency() const noexcept
-    {
-        return atmospheric_source_tendency_;
-    }
-
-    [[nodiscard]] double
-    atmospheric_source_time() const noexcept
-    {
-        return atmospheric_source_time_;
+        return runtime_options_.enabled;
     }
 
 private:

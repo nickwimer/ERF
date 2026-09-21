@@ -254,7 +254,7 @@ ERFFireContext::advance_level0(
 void
 ERF::advance_fire_level0 (int lev, double time)
 {
-    if (lev != 0 || !FireEnabled()) {
+    if (lev != 0 || !m_fire || !m_fire->enabled()) {
         return;
     }
 
