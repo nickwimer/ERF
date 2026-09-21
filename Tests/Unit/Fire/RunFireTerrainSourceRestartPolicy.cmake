@@ -17,6 +17,16 @@ foreach(required_path IN ITEMS
   endif()
 endforeach()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_response_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireTerrainSourceRestartPolicy.cmake")
+list(APPEND _response_command "${RESPONSE_EXE}")
+
 file(REAL_PATH "." test_root)
 set(case_dir "${test_root}/fire_terrain_source_restart_policy")
 set(source_dir "${case_dir}/source")
@@ -29,7 +39,7 @@ configure_file("${TERRAIN_SOURCE}" "${source_file}" COPYONLY)
 
 function(run_success description)
   execute_process(
-    COMMAND "${RESPONSE_EXE}"
+    COMMAND ${_response_command}
             "${RESPONSE_INPUT}"
             "erf.terrain_file_name=${source_file}"
             ${ARGN}
@@ -81,7 +91,7 @@ run_success(
 file(APPEND "${source_file}" "\n")
 
 execute_process(
-  COMMAND "${RESPONSE_EXE}"
+  COMMAND ${_response_command}
           "${RESPONSE_INPUT}"
           "erf.terrain_file_name=${source_file}"
           "amr.restart=${restart_checkpoint}"

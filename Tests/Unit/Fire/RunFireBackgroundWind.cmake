@@ -17,6 +17,24 @@ if(NOT DEFINED IGNITION_Y_M OR "${IGNITION_Y_M}" STREQUAL "")
   message(FATAL_ERROR "IGNITION_Y_M is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_response_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireBackgroundWind.cmake")
+list(APPEND _response_command "${RESPONSE_EXE}")
+
+erf_mpi_launcher_command(_analysis_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireBackgroundWind.cmake")
+list(APPEND _analysis_command "${ANALYSIS_EXE}")
+
 file(REAL_PATH "." test_root)
 
 function(run_case mode label output_var)
@@ -28,7 +46,7 @@ function(run_case mode label output_var)
   set(output_dir "fire_output_${label}")
 
   execute_process(
-    COMMAND "${RESPONSE_EXE}"
+    COMMAND ${_response_command}
             "${RESPONSE_INPUT}"
             "fire.coupling_mode=${mode}"
             "fire.output_dir=${output_dir}"
@@ -97,7 +115,7 @@ foreach(diverged_name IN ITEMS
 endforeach()
 
 execute_process(
-  COMMAND "${ANALYSIS_EXE}"
+  COMMAND ${_analysis_command}
           "analysis.one_way_perimeter=${one_way_fire_output}/perimeter_000200.csv"
           "analysis.two_way_perimeter=${two_way_fire_output}/perimeter_000200.csv"
           "analysis.ignition_x_m=${IGNITION_X_M}"

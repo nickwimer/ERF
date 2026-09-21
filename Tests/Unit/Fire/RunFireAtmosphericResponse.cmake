@@ -8,6 +8,24 @@ if(NOT DEFINED RESPONSE_INPUT OR "${RESPONSE_INPUT}" STREQUAL "")
   message(FATAL_ERROR "RESPONSE_INPUT is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_response_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireAtmosphericResponse.cmake")
+list(APPEND _response_command "${RESPONSE_EXE}")
+
+erf_mpi_launcher_command(_analysis_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireAtmosphericResponse.cmake")
+list(APPEND _analysis_command "${ANALYSIS_EXE}")
+
 file(REAL_PATH "." test_root)
 
 function(run_case mode label plot_var output_var)
@@ -18,7 +36,7 @@ function(run_case mode label plot_var output_var)
   set(output_dir "fire_output_${label}")
 
   execute_process(
-    COMMAND "${RESPONSE_EXE}"
+    COMMAND ${_response_command}
             "${RESPONSE_INPUT}"
             "fire.coupling_mode=${mode}"
             "fire.output_dir=${output_dir}"
@@ -85,7 +103,7 @@ if(NOT raster_compare EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND "${ANALYSIS_EXE}"
+  COMMAND ${_analysis_command}
           "analysis.one_way_plot=${one_way_plot}"
           "analysis.two_way_plot=${two_way_plot}"
   WORKING_DIRECTORY "${test_root}"

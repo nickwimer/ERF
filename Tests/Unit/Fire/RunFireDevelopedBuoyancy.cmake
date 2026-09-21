@@ -8,6 +8,24 @@ if(NOT DEFINED RESPONSE_INPUT OR "${RESPONSE_INPUT}" STREQUAL "")
   message(FATAL_ERROR "RESPONSE_INPUT is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_response_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireDevelopedBuoyancy.cmake")
+list(APPEND _response_command "${RESPONSE_EXE}")
+
+erf_mpi_launcher_command(_analysis_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireDevelopedBuoyancy.cmake")
+list(APPEND _analysis_command "${ANALYSIS_EXE}")
+
 file(REAL_PATH "." test_root)
 
 function(run_case mode label early_plot_var late_plot_var)
@@ -19,7 +37,7 @@ function(run_case mode label early_plot_var late_plot_var)
   set(output_dir "fire_output_${label}")
 
   execute_process(
-    COMMAND "${RESPONSE_EXE}"
+    COMMAND ${_response_command}
             "${RESPONSE_INPUT}"
             "fire.coupling_mode=${mode}"
             "fire.output_dir=${output_dir}"
@@ -144,7 +162,7 @@ foreach(diverged_name IN ITEMS
 endforeach()
 
 execute_process(
-  COMMAND "${ANALYSIS_EXE}"
+  COMMAND ${_analysis_command}
           "analysis.early_one_way=${early_one_way}"
           "analysis.early_two_way=${early_two_way}"
           "analysis.late_one_way=${late_one_way}"

@@ -8,6 +8,24 @@ if(NOT DEFINED RESPONSE_INPUT OR "${RESPONSE_INPUT}" STREQUAL "")
   message(FATAL_ERROR "RESPONSE_INPUT is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_response_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireAtmosphericVerticalSensitivity.cmake")
+list(APPEND _response_command "${RESPONSE_EXE}")
+
+erf_mpi_launcher_command(_analysis_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireAtmosphericVerticalSensitivity.cmake")
+list(APPEND _analysis_command "${ANALYSIS_EXE}")
+
 file(REAL_PATH "." test_root)
 
 file(READ "${RESPONSE_INPUT}" base_input_text)
@@ -47,7 +65,7 @@ function(run_case input_path mode label plot_var output_var)
   set(output_dir "fire_output_${label}")
 
   execute_process(
-    COMMAND "${RESPONSE_EXE}"
+    COMMAND ${_response_command}
             "${input_path}"
             "fire.coupling_mode=${mode}"
             "fire.reference_height_agl_m=10.0"
@@ -147,7 +165,7 @@ compare_first_step(
   "fine resolution")
 
 execute_process(
-  COMMAND "${ANALYSIS_EXE}"
+  COMMAND ${_analysis_command}
           "analysis.one_way_coarse=${coarse_one_way_plot}"
           "analysis.two_way_coarse=${coarse_two_way_plot}"
           "analysis.one_way_medium=${medium_one_way_plot}"

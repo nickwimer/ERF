@@ -8,6 +8,24 @@ if(NOT DEFINED RESPONSE_INPUT OR "${RESPONSE_INPUT}" STREQUAL "")
   message(FATAL_ERROR "RESPONSE_INPUT is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_response_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireAtmosphericResponseSensitivity.cmake")
+list(APPEND _response_command "${RESPONSE_EXE}")
+
+erf_mpi_launcher_command(_analysis_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireAtmosphericResponseSensitivity.cmake")
+list(APPEND _analysis_command "${ANALYSIS_EXE}")
+
 file(REAL_PATH "." test_root)
 
 function(run_case mode label H_m plot_var output_var)
@@ -19,7 +37,7 @@ function(run_case mode label H_m plot_var output_var)
   set(output_dir "fire_output_${label}")
 
   execute_process(
-    COMMAND "${RESPONSE_EXE}"
+    COMMAND ${_response_command}
             "${RESPONSE_INPUT}"
             "fire.coupling_mode=${mode}"
             "fire.feedback_extinction_depth_m=${H_m}"
@@ -97,7 +115,7 @@ compare_first_step("${one_way_output}" "${h50_output}" "H=50 m")
 compare_first_step("${one_way_output}" "${h100_output}" "H=100 m")
 
 execute_process(
-  COMMAND "${ANALYSIS_EXE}"
+  COMMAND ${_analysis_command}
           "analysis.one_way_plot=${one_way_plot}"
           "analysis.two_way_plot_h10=${h10_plot}"
           "analysis.two_way_plot_h25=${h25_plot}"

@@ -5,6 +5,16 @@ if(NOT DEFINED RESPONSE_INPUT OR "${RESPONSE_INPUT}" STREQUAL "")
   message(FATAL_ERROR "RESPONSE_INPUT is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_response_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireRestart.cmake")
+list(APPEND _response_command "${RESPONSE_EXE}")
+
 file(REAL_PATH "." test_root)
 set(continuous_dir "${test_root}/fire_restart_continuous")
 set(split_dir "${test_root}/fire_restart_split")
@@ -14,7 +24,7 @@ file(MAKE_DIRECTORY "${continuous_dir}" "${split_dir}")
 
 function(run_erf working_dir description)
   execute_process(
-    COMMAND "${RESPONSE_EXE}" "${RESPONSE_INPUT}" ${ARGN}
+    COMMAND ${_response_command} "${RESPONSE_INPUT}" ${ARGN}
     WORKING_DIRECTORY "${working_dir}"
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE run_output

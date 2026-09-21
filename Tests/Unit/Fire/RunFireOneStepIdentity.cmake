@@ -8,6 +8,16 @@ if(NOT DEFINED IDENTITY_CASE_PREFIX OR "${IDENTITY_CASE_PREFIX}" STREQUAL "")
   set(IDENTITY_CASE_PREFIX "fire_identity")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_identity_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireOneStepIdentity.cmake")
+list(APPEND _identity_command "${IDENTITY_EXE}")
+
 file(REAL_PATH "." identity_root)
 
 function(run_identity_case mode label checkpoint_var)
@@ -16,7 +26,7 @@ function(run_identity_case mode label checkpoint_var)
   file(MAKE_DIRECTORY "${case_dir}")
 
   execute_process(
-    COMMAND "${IDENTITY_EXE}"
+    COMMAND ${_identity_command}
             "${IDENTITY_INPUT}"
             "fire.enabled=${mode}"
             "erf.check_file=chk"

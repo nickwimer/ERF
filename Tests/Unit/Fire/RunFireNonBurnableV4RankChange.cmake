@@ -15,19 +15,7 @@ if(NOT DEFINED MPIEXEC_NUMPROC_FLAG OR
   message(FATAL_ERROR "MPIEXEC_NUMPROC_FLAG is required")
 endif()
 
-set(mpiexec_preflags)
-if(DEFINED MPIEXEC_PREFLAGS_CSV AND
-   NOT "${MPIEXEC_PREFLAGS_CSV}" STREQUAL "")
-  string(REPLACE "," ";" mpiexec_preflags
-    "${MPIEXEC_PREFLAGS_CSV}")
-endif()
-
-set(mpiexec_postflags)
-if(DEFINED MPIEXEC_POSTFLAGS_CSV AND
-   NOT "${MPIEXEC_POSTFLAGS_CSV}" STREQUAL "")
-  string(REPLACE "," ";" mpiexec_postflags
-    "${MPIEXEC_POSTFLAGS_CSV}")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
 
 file(REAL_PATH "." test_root)
 set(reference_dir "${test_root}/fire_nonburnable_v4_reference")
@@ -80,15 +68,16 @@ function(run_fire ranks working_dir description use_source)
     list(APPEND extra_args "fire.fuel_raster_file=${fuel_source}")
   endif()
 
+  erf_mpi_launcher_command(run_command
+    LAUNCHER "${MPIEXEC}"
+    NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+    NRANKS "${ranks}"
+    PREFLAGS "${MPIEXEC_PREFLAGS}"
+    CONTEXT "RunFireNonBurnableV4RankChange.cmake")
+  list(APPEND run_command "${RESPONSE_EXE}" "${RESPONSE_INPUT}" ${extra_args})
+
   execute_process(
-    COMMAND
-      "${MPIEXEC}"
-      "${MPIEXEC_NUMPROC_FLAG}" "${ranks}"
-      ${mpiexec_preflags}
-      "${RESPONSE_EXE}"
-      ${mpiexec_postflags}
-      "${RESPONSE_INPUT}"
-      ${extra_args}
+    COMMAND ${run_command}
     WORKING_DIRECTORY "${working_dir}"
     INPUT_FILE "/dev/null"
     RESULT_VARIABLE run_result
@@ -261,13 +250,16 @@ if(NOT IS_DIRECTORY "${reference_plot}" OR
     "NonBurnable v4 runs did not create final plotfiles")
 endif()
 
+erf_mpi_launcher_command(analysis_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireNonBurnableV4RankChange.cmake")
+list(APPEND analysis_command "${ANALYSIS_EXE}")
+
 execute_process(
-  COMMAND
-    "${MPIEXEC}"
-    "${MPIEXEC_NUMPROC_FLAG}" "1"
-    ${mpiexec_preflags}
-    "${ANALYSIS_EXE}"
-    ${mpiexec_postflags}
+  COMMAND ${analysis_command}
     "analysis.reference_plot=${reference_plot}"
     "analysis.comparison_plot=${rank_change_plot}"
   WORKING_DIRECTORY "${test_root}"

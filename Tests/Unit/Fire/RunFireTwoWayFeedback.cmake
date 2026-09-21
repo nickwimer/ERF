@@ -5,6 +5,16 @@ if(NOT DEFINED TWO_WAY_INPUT OR "${TWO_WAY_INPUT}" STREQUAL "")
   message(FATAL_ERROR "TWO_WAY_INPUT is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_identity_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireTwoWayFeedback.cmake")
+list(APPEND _identity_command "${IDENTITY_EXE}")
+
 file(REAL_PATH "." test_root)
 
 if(NOT DEFINED TWO_WAY_CASE_PREFIX OR "${TWO_WAY_CASE_PREFIX}" STREQUAL "")
@@ -19,7 +29,7 @@ function(run_case mode label checkpoint_var output_var)
   set(output_dir "fire_output_${label}")
 
   execute_process(
-    COMMAND "${IDENTITY_EXE}"
+    COMMAND ${_identity_command}
             "${TWO_WAY_INPUT}"
             "fire.coupling_mode=${mode}"
             "fire.output_dir=${output_dir}"

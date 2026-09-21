@@ -13,57 +13,6 @@ include(${PROJECT_SOURCE_DIR}/CMake/SetERFCompileFlags.cmake)
 # execute_process() calls. On Slurm/Cray MPICH those children must enter through
 # the configured MPI launcher even for a single rank; a direct fork/exec lacks
 # the PMI job context and fails or hangs in MPI_Init.
-function(erf_fire_make_serial_test_launcher target output_var)
-  if(NOT ERF_ENABLE_MPI)
-    set(${output_var} "$<TARGET_FILE:${target}>" PARENT_SCOPE)
-    return()
-  endif()
-
-  if(NOT MPIEXEC_EXECUTABLE OR NOT MPIEXEC_NUMPROC_FLAG)
-    message(FATAL_ERROR
-      "MPIEXEC_EXECUTABLE and MPIEXEC_NUMPROC_FLAG are required for "
-      "MPI-enabled ERF-Fire integration tests")
-  endif()
-
-  if(NOT UNIX)
-    message(FATAL_ERROR
-      "MPI-enabled ERF-Fire serial test launchers currently require a "
-      "POSIX shell")
-  endif()
-
-  set(_fire_quote_args)
-  foreach(_arg IN LISTS MPIEXEC_PREFLAGS)
-    string(REPLACE "'" "'\"'\"'" _escaped "${_arg}")
-    string(APPEND _fire_quote_args " '${_escaped}'")
-  endforeach()
-
-  set(_fire_post_args)
-  foreach(_arg IN LISTS MPIEXEC_POSTFLAGS)
-    string(REPLACE "'" "'\"'\"'" _escaped "${_arg}")
-    string(APPEND _fire_post_args " '${_escaped}'")
-  endforeach()
-
-  string(REPLACE "'" "'\"'\"'" _fire_mpiexec "${MPIEXEC_EXECUTABLE}")
-  string(REPLACE "'" "'\"'\"'" _fire_numproc "${MPIEXEC_NUMPROC_FLAG}")
-
-  set(_fire_launcher
-      "${CMAKE_CURRENT_BINARY_DIR}/${target}_serial_$<CONFIG>.sh")
-
-  file(GENERATE
-    OUTPUT "${_fire_launcher}"
-    CONTENT
-"#!/usr/bin/env bash
-exec '${_fire_mpiexec}' '${_fire_numproc}' '1'${_fire_quote_args} \"$<TARGET_FILE:${target}>\"${_fire_post_args} \"$@\"
-"
-    FILE_PERMISSIONS
-      OWNER_READ OWNER_WRITE OWNER_EXECUTE
-      GROUP_READ GROUP_EXECUTE
-      WORLD_READ WORLD_EXECUTE
-  )
-
-  set(${output_var} "${_fire_launcher}" PARENT_SCOPE)
-endfunction()
-
 if(ERF_ENABLE_CUDA)
   set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseAnalysis.cpp
@@ -174,14 +123,14 @@ add_executable(erf_fire_timestep_identity
 
 build_erf_exe(erf_fire_timestep_identity NO_ERF_MAIN)
 add_dependencies(erf_fire_unit_tests erf_fire_timestep_identity)
-erf_fire_make_serial_test_launcher(
-  erf_fire_timestep_identity
-  erf_fire_timestep_identity_test_exe)
 
 add_test(
   NAME FireTimeStepIntegration.OneWaySpreadPreservesPrognosticBits
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
 )
@@ -196,7 +145,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.OneWayIndependentFireGridPreservesPrognosticBits
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIndependentGrid.inputs
     -DIDENTITY_CASE_PREFIX=fire_independent_grid_identity
     -DIDENTITY_EXPECTED_RASTER_CELLS=256
@@ -213,7 +165,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.TwoWayFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedback.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
 )
@@ -228,7 +183,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.TwoWayFineFireGridFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackFineFire.inputs
     -DTWO_WAY_CASE_PREFIX=fire_two_way_fine_fire
     -DTWO_WAY_EXPECTED_RASTER_CELLS=256
@@ -245,7 +203,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.TwoWayCoarseFireGridFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackCoarseFire.inputs
     -DTWO_WAY_CASE_PREFIX=fire_two_way_coarse_fire
     -DTWO_WAY_EXPECTED_RASTER_CELLS=16
@@ -262,7 +223,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.OneWayTerrainSpreadPreservesPrognosticBits
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
     -DIDENTITY_CASE_PREFIX=fire_terrain_identity
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
@@ -278,7 +242,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.TwoWayTerrainFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrain.inputs
     -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
@@ -294,7 +261,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.TwoWayTerrainIndependentFireGridFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrainIndependentGrid.inputs
     -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain_independent_grid
     -DTWO_WAY_EXPECTED_RASTER_CELLS=256
@@ -310,7 +280,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.IndependentTerrainSourceChangesFireOnly
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceResolution.inputs
     -DFLAT_TERRAIN=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFlat.txt
     -DFINE_TERRAIN=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFine.txt
@@ -326,7 +299,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.OneWayExplicitWafPreservesPrognosticBits
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
     -DIDENTITY_CASE_PREFIX=fire_waf_identity
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
@@ -342,7 +318,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.TwoWayExplicitWafFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayFeedbackWaf.inputs
     -DTWO_WAY_CASE_PREFIX=fire_two_way_waf
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
@@ -358,7 +337,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.OneWayTerrainExplicitWafPreservesPrognosticBits
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DIDENTITY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrainWaf.inputs
     -DIDENTITY_CASE_PREFIX=fire_terrain_waf_identity
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireOneStepIdentity.cmake
@@ -374,7 +356,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.TwoWayTerrainExplicitWafFeedbackChangesAtmosphere
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DTWO_WAY_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTwoWayTerrainWaf.inputs
     -DTWO_WAY_CASE_PREFIX=fire_two_way_terrain_waf
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTwoWayFeedback.cmake
@@ -390,7 +375,10 @@ set_tests_properties(
 add_test(
   NAME FireWindModeIntegration.FlatIdentityAndReduction
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
     -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
     -DWIND_MODE_CASE_PREFIX=fire_wind_mode_flat
@@ -407,7 +395,10 @@ set_tests_properties(
 add_test(
   NAME FireWindModeIntegration.TerrainIdentityAndReduction
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrain.inputs
     -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepTerrainWaf.inputs
     -DWIND_MODE_CASE_PREFIX=fire_wind_mode_terrain
@@ -424,7 +415,10 @@ set_tests_properties(
 add_test(
   NAME FireWindModeIntegration.RuntimeInputValidation
   COMMAND ${CMAKE_COMMAND}
-    -DIDENTITY_EXE=${erf_fire_timestep_identity_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DIDENTITY_EXE=$<TARGET_FILE:erf_fire_timestep_identity>
     -DDIRECT_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentity.inputs
     -DWAF_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireOneStepIdentityWaf.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireWindModeValidation.cmake
@@ -444,9 +438,6 @@ add_executable(erf_fire_atmospheric_response
 )
 build_erf_exe(erf_fire_atmospheric_response)
 add_dependencies(erf_fire_unit_tests erf_fire_atmospheric_response)
-erf_fire_make_serial_test_launcher(
-  erf_fire_atmospheric_response
-  erf_fire_atmospheric_response_test_exe)
 
 add_executable(erf_fire_atmospheric_response_analysis
   ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponseAnalysis.cpp
@@ -458,16 +449,16 @@ target_link_libraries(
 )
 set_erf_compile_flags(erf_fire_atmospheric_response_analysis)
 add_dependencies(erf_fire_unit_tests erf_fire_atmospheric_response_analysis)
-erf_fire_make_serial_test_launcher(
-  erf_fire_atmospheric_response_analysis
-  erf_fire_atmospheric_response_analysis_test_exe)
 
 
 add_test(
   NAME FireAtmosphericResponse.FlatGravityOnCheckpoint
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
-    -DANALYSIS_EXE=${erf_fire_atmospheric_response_analysis_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_response_analysis>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericResponse.cmake
 )
@@ -495,16 +486,16 @@ set_erf_compile_flags(
 add_dependencies(
   erf_fire_unit_tests
   erf_fire_atmospheric_response_sensitivity_analysis)
-erf_fire_make_serial_test_launcher(
-  erf_fire_atmospheric_response_sensitivity_analysis
-  erf_fire_atmospheric_response_sensitivity_analysis_test_exe)
 
 
 add_test(
   NAME FireAtmosphericResponse.ExtinctionDepthSensitivity
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
-    -DANALYSIS_EXE=${erf_fire_atmospheric_response_sensitivity_analysis_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_response_sensitivity_analysis>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericResponseSensitivity.cmake
 )
@@ -532,16 +523,16 @@ set_erf_compile_flags(
 add_dependencies(
   erf_fire_unit_tests
   erf_fire_atmospheric_vertical_sensitivity_analysis)
-erf_fire_make_serial_test_launcher(
-  erf_fire_atmospheric_vertical_sensitivity_analysis
-  erf_fire_atmospheric_vertical_sensitivity_analysis_test_exe)
 
 
 add_test(
   NAME FireAtmosphericResponse.VerticalResolutionSensitivity
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
-    -DANALYSIS_EXE=${erf_fire_atmospheric_vertical_sensitivity_analysis_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_atmospheric_vertical_sensitivity_analysis>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireAtmosphericResponse.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireAtmosphericVerticalSensitivity.cmake
 )
@@ -574,16 +565,16 @@ set_erf_compile_flags(erf_fire_developed_buoyancy_analysis)
 add_dependencies(
   erf_fire_unit_tests
   erf_fire_developed_buoyancy_analysis)
-erf_fire_make_serial_test_launcher(
-  erf_fire_developed_buoyancy_analysis
-  erf_fire_developed_buoyancy_analysis_test_exe)
 
 
 add_test(
   NAME FireAtmosphericResponse.DevelopedBuoyantAcceleration
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
-    -DANALYSIS_EXE=${erf_fire_developed_buoyancy_analysis_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_developed_buoyancy_analysis>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireDevelopedBuoyancy.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireDevelopedBuoyancy.cmake
 )
@@ -608,16 +599,16 @@ set_erf_compile_flags(erf_fire_background_wind_analysis)
 add_dependencies(
   erf_fire_unit_tests
   erf_fire_background_wind_analysis)
-erf_fire_make_serial_test_launcher(
-  erf_fire_background_wind_analysis
-  erf_fire_background_wind_analysis_test_exe)
 
 
 add_test(
   NAME FireAtmosphericResponse.BackgroundWindClosedLoop
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
-    -DANALYSIS_EXE=${erf_fire_background_wind_analysis_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_background_wind_analysis>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWind.inputs
     -DCASE_PREFIX=fire_background_wind
     -DIGNITION_X_M=32.0
@@ -635,8 +626,11 @@ set_tests_properties(
 add_test(
   NAME FireAtmosphericResponse.TerrainBackgroundWindClosedLoop
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
-    -DANALYSIS_EXE=${erf_fire_background_wind_analysis_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
+    -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_background_wind_analysis>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainBackgroundWind.inputs
     -DCASE_PREFIX=fire_terrain_background_wind
     -DIGNITION_X_M=20.0
@@ -654,7 +648,10 @@ set_tests_properties(
 add_test(
   NAME FireRestartIntegration.TerrainSourcePolicy
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceResolution.inputs
     -DTERRAIN_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTerrainSourceFine.txt
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireTerrainSourceRestartPolicy.cmake
@@ -670,7 +667,10 @@ set_tests_properties(
 add_test(
   NAME FireTimeStepIntegration.RestartPreservesCoupledState
   COMMAND ${CMAKE_COMMAND}
-    -DRESPONSE_EXE=${erf_fire_atmospheric_response_test_exe}
+    "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+    "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+    "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
+    -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
     -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireRestart.inputs
     -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireRestart.cmake
 )
@@ -705,21 +705,15 @@ if(ERF_ENABLE_MPI)
     erf_fire_mpi_decomposition_analysis
   )
 
-  string(REPLACE ";" "," fire_mpi_preflags_csv
-    "${MPIEXEC_PREFLAGS}")
-  string(REPLACE ";" "," fire_mpi_postflags_csv
-    "${MPIEXEC_POSTFLAGS}")
-
   add_test(
     NAME FireTimeStepIntegration.MpiDecompositionInvariant
     COMMAND ${CMAKE_COMMAND}
+      "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+      "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+      "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
       -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
       -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_mpi_decomposition_analysis>
       -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecomposition.inputs
-      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
-      -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
-      -DMPIEXEC_PREFLAGS_CSV=${fire_mpi_preflags_csv}
-      -DMPIEXEC_POSTFLAGS_CSV=${fire_mpi_postflags_csv}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireMpiDecomposition.cmake
   )
   set_tests_properties(
@@ -734,13 +728,12 @@ if(ERF_ENABLE_MPI)
   add_test(
     NAME FireTimeStepIntegration.NonBurnableV4RankChangeInvariant
     COMMAND ${CMAKE_COMMAND}
+      "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+      "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+      "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
       -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
       -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_mpi_decomposition_analysis>
       -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecomposition.inputs
-      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
-      -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
-      -DMPIEXEC_PREFLAGS_CSV=${fire_mpi_preflags_csv}
-      -DMPIEXEC_POSTFLAGS_CSV=${fire_mpi_postflags_csv}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireNonBurnableV4RankChange.cmake
   )
   set_tests_properties(
@@ -755,13 +748,12 @@ if(ERF_ENABLE_MPI)
   add_test(
     NAME FireTimeStepIntegration.MpiTerrainRestartInvariant
     COMMAND ${CMAKE_COMMAND}
+      "-DMPIEXEC=${MPIEXEC_EXECUTABLE}"
+      "-DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}"
+      "-DMPIEXEC_PREFLAGS=${MPIEXEC_PREFLAGS}"
       -DRESPONSE_EXE=$<TARGET_FILE:erf_fire_atmospheric_response>
       -DANALYSIS_EXE=$<TARGET_FILE:erf_fire_mpi_decomposition_analysis>
       -DRESPONSE_INPUT=${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiTerrainRestart.inputs
-      -DMPIEXEC=${MPIEXEC_EXECUTABLE}
-      -DMPIEXEC_NUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG}
-      -DMPIEXEC_PREFLAGS_CSV=${fire_mpi_preflags_csv}
-      -DMPIEXEC_POSTFLAGS_CSV=${fire_mpi_postflags_csv}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/RunFireMpiTerrainRestart.cmake
   )
   set_tests_properties(

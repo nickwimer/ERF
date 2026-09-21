@@ -11,6 +11,16 @@ if(NOT DEFINED WIND_MODE_CASE_PREFIX OR "${WIND_MODE_CASE_PREFIX}" STREQUAL "")
   set(WIND_MODE_CASE_PREFIX "fire_wind_mode")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_identity_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireWindModeComparison.cmake")
+list(APPEND _identity_command "${IDENTITY_EXE}")
+
 file(REAL_PATH "." test_root)
 
 function(run_wind_case input_file label mode factor output_var)
@@ -33,7 +43,7 @@ function(run_wind_case input_file label mode factor output_var)
   endif()
 
   execute_process(
-    COMMAND "${IDENTITY_EXE}"
+    COMMAND ${_identity_command}
             "${input_file}"
             "fire.coupling_mode=one_way"
             ${wind_args}

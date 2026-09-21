@@ -8,6 +8,16 @@ if(NOT DEFINED WAF_INPUT OR "${WAF_INPUT}" STREQUAL "")
   message(FATAL_ERROR "WAF_INPUT is required")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_identity_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireWindModeValidation.cmake")
+list(APPEND _identity_command "${IDENTITY_EXE}")
+
 file(REAL_PATH "." test_root)
 
 function(expect_failure label input_file expected_text)
@@ -16,7 +26,7 @@ function(expect_failure label input_file expected_text)
   file(MAKE_DIRECTORY "${case_dir}")
 
   execute_process(
-    COMMAND "${IDENTITY_EXE}"
+    COMMAND ${_identity_command}
             "${input_file}"
             ${ARGN}
     WORKING_DIRECTORY "${case_dir}"

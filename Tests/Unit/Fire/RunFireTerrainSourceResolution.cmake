@@ -21,6 +21,16 @@ foreach(required_path IN ITEMS
   endif()
 endforeach()
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
+
+erf_mpi_launcher_command(_identity_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireTerrainSourceResolution.cmake")
+list(APPEND _identity_command "${IDENTITY_EXE}")
+
 file(REAL_PATH "." test_root)
 
 function(run_terrain_case label terrain_file case_var checkpoint_var)
@@ -29,7 +39,7 @@ function(run_terrain_case label terrain_file case_var checkpoint_var)
   file(MAKE_DIRECTORY "${case_dir}")
 
   execute_process(
-    COMMAND "${IDENTITY_EXE}"
+    COMMAND ${_identity_command}
             "${IDENTITY_INPUT}"
             "erf.terrain_file_name=${terrain_file}"
             "fire.output_dir=fire_output"

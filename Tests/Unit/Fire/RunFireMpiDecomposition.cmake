@@ -15,19 +15,7 @@ if(NOT DEFINED MPIEXEC_NUMPROC_FLAG OR
   message(FATAL_ERROR "MPIEXEC_NUMPROC_FLAG is required")
 endif()
 
-set(mpiexec_preflags)
-if(DEFINED MPIEXEC_PREFLAGS_CSV AND
-   NOT "${MPIEXEC_PREFLAGS_CSV}" STREQUAL "")
-  string(REPLACE "," ";" mpiexec_preflags
-    "${MPIEXEC_PREFLAGS_CSV}")
-endif()
-
-set(mpiexec_postflags)
-if(DEFINED MPIEXEC_POSTFLAGS_CSV AND
-   NOT "${MPIEXEC_POSTFLAGS_CSV}" STREQUAL "")
-  string(REPLACE "," ";" mpiexec_postflags
-    "${MPIEXEC_POSTFLAGS_CSV}")
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../../MPILauncher.cmake")
 
 file(REAL_PATH "." test_root)
 set(one_rank_dir "${test_root}/fire_mpi_one_rank")
@@ -44,15 +32,16 @@ file(MAKE_DIRECTORY
   "${rank_change_dir}")
 
 function(run_parallel ranks working_dir description)
+  erf_mpi_launcher_command(run_command
+    LAUNCHER "${MPIEXEC}"
+    NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+    NRANKS "${ranks}"
+    PREFLAGS "${MPIEXEC_PREFLAGS}"
+    CONTEXT "RunFireMpiDecomposition.cmake")
+  list(APPEND run_command "${RESPONSE_EXE}" "${RESPONSE_INPUT}" ${ARGN})
+
   execute_process(
-    COMMAND
-      "${MPIEXEC}"
-      "${MPIEXEC_NUMPROC_FLAG}" "${ranks}"
-      ${mpiexec_preflags}
-      "${RESPONSE_EXE}"
-      ${mpiexec_postflags}
-      "${RESPONSE_INPUT}"
-      ${ARGN}
+    COMMAND ${run_command}
     WORKING_DIRECTORY "${working_dir}"
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE run_output
@@ -118,6 +107,14 @@ function(compare_tree expected_dir actual_dir description)
   endforeach()
 endfunction()
 
+erf_mpi_launcher_command(analysis_command
+  LAUNCHER "${MPIEXEC}"
+  NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+  NRANKS 1
+  PREFLAGS "${MPIEXEC_PREFLAGS}"
+  CONTEXT "RunFireMpiDecomposition.cmake")
+list(APPEND analysis_command "${ANALYSIS_EXE}")
+
 run_parallel(1 "${one_rank_dir}" "one-rank decomposed Fire run")
 run_parallel(2 "${two_rank_dir}" "two-rank decomposed Fire run")
 
@@ -138,12 +135,7 @@ compare_tree(
   "Fire output history")
 
 execute_process(
-  COMMAND
-    "${MPIEXEC}"
-    "${MPIEXEC_NUMPROC_FLAG}" "1"
-    ${mpiexec_preflags}
-    "${ANALYSIS_EXE}"
-    ${mpiexec_postflags}
+  COMMAND ${analysis_command}
     "analysis.reference_plot=${one_plot}"
     "analysis.comparison_plot=${two_plot}"
   WORKING_DIRECTORY "${test_root}"
@@ -202,12 +194,7 @@ if(NOT IS_DIRECTORY "${rank_change_plot}")
 endif()
 
 execute_process(
-  COMMAND
-    "${MPIEXEC}"
-    "${MPIEXEC_NUMPROC_FLAG}" "1"
-    ${mpiexec_preflags}
-    "${ANALYSIS_EXE}"
-    ${mpiexec_postflags}
+  COMMAND ${analysis_command}
     "analysis.reference_plot=${two_plot}"
     "analysis.comparison_plot=${rank_change_plot}"
   WORKING_DIRECTORY "${test_root}"
@@ -240,15 +227,19 @@ file(REMOVE_RECURSE "${spatial_v4_root}")
 file(MAKE_DIRECTORY "${spatial_v4_root}")
 
 function(run_spatial_v4 ranks mode description)
+  erf_mpi_launcher_command(spatial_command
+    LAUNCHER "${MPIEXEC}"
+    NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+    NRANKS "${ranks}"
+    PREFLAGS "${MPIEXEC_PREFLAGS}"
+    CONTEXT "RunFireMpiDecomposition.cmake")
+  list(APPEND spatial_command
+    "${spatial_v4_exe}"
+    "fire_spatial_v4_test.mode=${mode}"
+    "fire_spatial_v4_test.root=${spatial_v4_root}")
+
   execute_process(
-    COMMAND
-      "${MPIEXEC}"
-      "${MPIEXEC_NUMPROC_FLAG}" "${ranks}"
-      ${mpiexec_preflags}
-      "${spatial_v4_exe}"
-      ${mpiexec_postflags}
-      "fire_spatial_v4_test.mode=${mode}"
-      "fire_spatial_v4_test.root=${spatial_v4_root}"
+    COMMAND ${spatial_command}
     WORKING_DIRECTORY "${test_root}"
     RESULT_VARIABLE spatial_result
     OUTPUT_VARIABLE spatial_output
