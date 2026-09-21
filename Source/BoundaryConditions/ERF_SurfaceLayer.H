@@ -54,6 +54,7 @@ public:
    * @param[in]     a_mesh_type         mesh type
    * @param[in]     a_terrain_type      terrain representation
    * @param[in]     a_turb_choice       turbulence-model options
+   * @param[in]     a_rdOcp             configured Rd/cp exponent for T-theta conversions
    * @param[in]     start_low_time      first available low-boundary-data time
    * @param[in]     final_low_time      final available low-boundary-data time
    * @param[in]     low_time_interval   low-boundary-data time interval
@@ -69,6 +70,7 @@ public:
                          const MeshType& a_mesh_type,
                          const TerrainType& a_terrain_type,
                          const TurbChoice& a_turb_choice,
+                         amrex::Real a_rdOcp,
                          double start_low_time,
                          double final_low_time,
                          double low_time_interval = 0.0,
@@ -82,6 +84,7 @@ public:
     m_low_time_interval(low_time_interval),
     m_eb_vec(eb_vec),
     m_terrain_type(a_terrain_type),
+    m_rdOcp(a_rdOcp),
     m_ma(face, geom, (z_phys_nd[0] != nullptr), a_pp_prefix, a_mesh_type, a_terrain_type,
          zlevels_stag, eb_vec)
   {
@@ -475,7 +478,8 @@ public:
       m_eddyDiffs_lev[lev] = eddyDiffs;
 
       // Text-file driven surface forcing modes. The file always contains at
-      // least time(day) and sst(K); prescribed-flux mode also uses H, LE, USTAR.
+      // least time(day) and absolute sst(K); the value is normalized to the
+      // canonical SurfaceLayer theta field at the z-low surface.
       pp.queryAdd("most.use_sfc_fluxes", m_use_sfc_fluxes);
       pp.queryAdd("most.use_sfc_sst", m_use_sfc_sst);
       if (m_use_sfc_fluxes && m_use_sfc_sst) {
@@ -809,6 +813,22 @@ public:
   void fill_planar_boundary (const int& lev, amrex::MultiFab& mf);
 
   /**
+   * Sum a planar field over the valid cells of the surface, counting each surface cell once.
+   *
+   * On a level whose grids are split in the surface-normal direction the planar BoxArray holds
+   * one duplicate box per stacked 3D box (see PlanarBoundary), so a plain sum over the planar
+   * MultiFab counts every surface cell once per stacked box.  Only the computed surface copies
+   * are read here, so the duplicates need not have been filled by fill_planar_boundary, and the
+   * gather needs no communication.  On EB terrain the fields are 3D without duplicates, and the
+   * lowest plane of the domain is summed.  Only for a surface layer on a z face.
+   *
+   * @param[in] lev  level index
+   * @param[in] mf   cell-centered planar MultiFab on this surface's planar BoxArray
+   * @param[in] comp component to sum
+   */
+  amrex::Real surface_sum (const int& lev, const amrex::MultiFab& mf, int comp = 0) const;
+
+  /**
    * Impose surface-layer boundary conditions for planar terrain.
    *
    * @param[in]     lev        level index
@@ -935,7 +955,9 @@ public:
    * @param[in] time interpolation time
    */
   void fill_tsurf_with_sfc_sst (const int& lev,
-                                const double& time);
+                                const double& time,
+                                const amrex::MultiFab& cons_in,
+                                const std::unique_ptr<amrex::MultiFab>& z_phys_nd);
 
   /**
    * Overwrite surface temperature with coupled ocean SST where the coupler
@@ -947,7 +969,9 @@ public:
    *
    * @param[in] lev level index
    */
-  void fill_tsurf_with_coupled_sst (const int& lev);
+  void fill_tsurf_with_coupled_sst (const int& lev,
+                                    const amrex::MultiFab& cons_in,
+                                    const std::unique_ptr<amrex::MultiFab>& z_phys_nd);
 
   /**
    * Fill surface moisture from saturation specific humidity.
@@ -1453,11 +1477,11 @@ private:
   amrex::Real m_Cd = zero;
   amrex::Real m_Ch = zero;
   amrex::Real m_Cq = zero;
-
   bool m_ignore_sst = false;
 
   amrex::Vector<const eb_*> m_eb_vec;
   TerrainType m_terrain_type;
+  amrex::Real m_rdOcp = RdoCp;
   MOSTAverage m_ma;
   amrex::Vector<std::unique_ptr<amrex::MultiFab>> u_star;
   amrex::Vector<std::unique_ptr<amrex::MultiFab>> w_star;
@@ -1472,6 +1496,27 @@ private:
   // this for u*, w* (only when it is computed), t*, q*, L, t_surf, q_surf, pblh and the
   // diagnostic source, after each is computed on the surface copies.
   amrex::Vector<PlanarBoundary> m_planar_bndry;
+  // Columns for the PBL-height estimator.  The estimator scans each box it is given from its
+  // lowest cell to its highest, so the box must start at the ground.  When some box of a
+  // level does not (grids stacked in z, or a refined region aloft), compute_pblh runs the
+  // estimator on these boxes instead: the runs of cells that start at the ground, each joined
+  // into one box that ends where the grids above that ground end.  Built by
+  // define_pblh_columns when the grids of the level change.
+  struct PBLHColumns
+  {
+      amrex::BoxArray ba;                 // Grids the columns were built for ...
+      amrex::DistributionMapping dm;      // ... and their ranks
+      bool needed = false;                // Whether some box does not start at the ground
+      amrex::BoxArray ba_col;             // The columns; empty on a level entirely aloft
+      amrex::BoxArray ba_col2d;           // Their ground plane
+      amrex::DistributionMapping dm_col;
+      amrex::MultiFab hold_col;           // No data; keep the copy metadata alive
+      amrex::MultiFab hold_col2d;
+  };
+  amrex::Vector<PBLHColumns> m_pblh_columns;
+  void define_pblh_columns (const int& lev,
+                            const amrex::BoxArray& ba,
+                            const amrex::DistributionMapping& dm);
   // Diagnostic-only provenance mask. This records the cell-centered source
   // path used by the SurfaceLayer scalar diagnostic path. It must not feed
   // back into flux calculations, boundary conditions, or model state.
