@@ -1,3 +1,4 @@
+#include <ERF.H>
 #include <ERF_FireCheckpoint.H>
 #include <ERF_FireCheckpointV4.H>
 #include <ERF_FireFuelSource.H>
@@ -839,3 +840,46 @@ validate_fire_checkpoint_policy(
 }
 
 } // namespace ERFFire
+
+
+#ifdef ERF_USE_FIRE
+
+void
+ERF::write_fire_checkpoint (
+    const std::string& checkpoint_directory) const
+{
+    if (!m_fire) {
+        return;
+    }
+
+    const ERFFire::ERFFireCheckpointWriteInputs inputs{
+        checkpoint_directory,
+        geom[0],
+        solverChoice,
+        istep[0],
+        static_cast<amrex::Real>(t_new[0])
+    };
+
+    m_fire->write_checkpoint(inputs);
+}
+
+void
+ERF::restore_fire_checkpoint (
+    const std::string& checkpoint_directory)
+{
+    if (!m_fire) {
+        return;
+    }
+
+    const ERFFire::ERFFireCheckpointRestoreInputs inputs{
+        checkpoint_directory,
+        geom[0],
+        solverChoice,
+        istep[0],
+        static_cast<amrex::Real>(t_new[0])
+    };
+
+    m_fire->restore_checkpoint(inputs);
+}
+
+#endif

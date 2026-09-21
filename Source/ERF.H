@@ -1022,10 +1022,15 @@ private:
 #ifdef ERF_USE_FIRE
     // Thin ERF-to-Fire integration hooks. Fire-specific argument construction
     // remains owned by Source/PhysicsInterfaces/Fire.
+    void initialize_fire ();
     void advance_fire_level0 (int lev, double time);
     void add_fire_atmospheric_source (
         int level,
         amrex::MultiFab& conserved_source) const;
+    void write_fire_checkpoint (
+        const std::string& checkpoint_directory) const;
+    void restore_fire_checkpoint (
+        const std::string& checkpoint_directory);
 #endif
 
     // advance a single level for a single time step

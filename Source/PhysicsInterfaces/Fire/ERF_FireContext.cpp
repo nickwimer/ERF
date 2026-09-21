@@ -1,3 +1,4 @@
+#include <ERF.H>
 #include <ERF_FireContext.H>
 #include <ERF_FireTerrainSource.H>
 
@@ -52,5 +53,27 @@ ERFFireContext::configure_from_inputs(
 }
 
 } // namespace ERFFire
+
+void
+ERF::initialize_fire ()
+{
+    m_fire =
+        std::make_unique<ERFFire::ERFFireContext>();
+
+    ERFFire::ERFFireHostCapabilities fire_host{};
+    fire_host.max_level = max_level;
+    fire_host.variable_dz =
+        solverChoice.mesh_type == MeshType::VariableDz;
+    fire_host.static_fitted_mesh =
+        solverChoice.terrain_type
+            == TerrainType::StaticFittedMesh;
+    fire_host.moist_no_condensation =
+        solverChoice.moisture_type
+            == MoistureType::MoistNoCondensation;
+    fire_host.anelastic_level0 =
+        solverChoice.anelastic[0] != 0;
+
+    m_fire->configure_from_inputs(fire_host);
+}
 
 #endif

@@ -12,10 +12,6 @@
 
 #include "ERF.H"
 
-#ifdef ERF_USE_FIRE
-#include <ERF_FireCheckpoint.H>
-#include <ERF_FireContext.H>
-#endif
 #include "AMReX_PlotFileUtil.H"
 #include "ERF_ReadFromERFBdy.H"
 #include "ERF_Provenance.H"
@@ -713,17 +709,7 @@ ERF::WriteCheckpointFile () const
 #endif
 
 #ifdef ERF_USE_FIRE
-    const ERFFire::ERFFireCheckpointWriteInputs
-        fire_checkpoint_inputs{
-            checkpointname,
-            geom[0],
-            solverChoice,
-            istep[0],
-            static_cast<Real>(t_new[0])
-        };
-
-    m_fire->write_checkpoint(
-        fire_checkpoint_inputs);
+    write_fire_checkpoint(checkpointname);
 #endif
 
 #if 0
@@ -1690,17 +1676,7 @@ ERF::ReadCheckpointFile ()
 #endif
 
 #ifdef ERF_USE_FIRE
-    const ERFFire::ERFFireCheckpointRestoreInputs
-        fire_restore_inputs{
-            restart_chkfile,
-            geom[0],
-            solverChoice,
-            istep[0],
-            static_cast<Real>(t_new[0])
-        };
-
-    m_fire->restore_checkpoint(
-        fire_restore_inputs);
+    restore_fire_checkpoint(restart_chkfile);
 #endif
 }
 
