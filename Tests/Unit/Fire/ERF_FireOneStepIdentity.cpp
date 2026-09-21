@@ -632,6 +632,16 @@ main (int argc, char** argv)
 {
     amrex::Initialize(argc, argv);
 
+    // This NO_ERF_MAIN test driver bypasses Source/main.cpp::add_par(), where
+    // ERF installs its AMR defaults. Mirror the vertical box-splitting default
+    // required by implicit acoustic substepping while preserving any explicit
+    // value supplied by the test input or command line.
+    {
+        amrex::ParmParse pp_amr("amr");
+        int no_box_split_dir = 2;
+        pp_amr.queryAdd("no_box_split_dir", no_box_split_dir);
+    }
+
     int result = 0;
     try {
         amrex::ParmParse pp_spatial_v4("fire_spatial_v4_test");
