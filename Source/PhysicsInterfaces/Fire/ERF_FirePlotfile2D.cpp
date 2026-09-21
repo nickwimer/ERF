@@ -143,7 +143,8 @@ select_fire_plotfile2d_output_descriptors(
         descriptor.name = fire_descriptor->name;
         descriptor.long_name = fire_descriptor->long_name;
         descriptor.units = fire_descriptor->units;
-        descriptor.category_name_override = "Fire";
+        descriptor.category =
+            plotfile2d::DiagnosticCategory::SurfaceState;
         descriptor.missing_policy =
             plotfile2d::MissingPolicy::AlwaysAvailable;
         descriptor.missing_value = amrex::Real(0.0);

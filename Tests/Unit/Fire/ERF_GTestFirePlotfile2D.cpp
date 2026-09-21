@@ -47,8 +47,8 @@ TEST(FirePlotfile2D, ProviderOwnsDiagnosticMetadata)
             descriptor.units.empty());
 
         EXPECT_EQ(
-            descriptor.category_name_override,
-            "Fire");
+            descriptor.category,
+            plotfile2d::DiagnosticCategory::SurfaceState);
 
         EXPECT_EQ(
             descriptor.missing_policy,
@@ -67,7 +67,7 @@ TEST(FirePlotfile2D, ProviderOwnsDiagnosticMetadata)
             selection.fire_descriptors);
 
     EXPECT_NE(
-        json.find("\"category\": \"Fire\""),
+        json.find("\"category\": \"SurfaceState\""),
         std::string::npos);
 }
 

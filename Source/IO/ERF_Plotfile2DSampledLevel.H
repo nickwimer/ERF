@@ -58,9 +58,6 @@ struct Plotfile2DOutputDescriptor
     std::string long_name;
     std::string units;
     DiagnosticCategory category = DiagnosticCategory::SampledLevel;
-    // Optional provider-owned metadata category. Empty means use the
-    // built-in DiagnosticCategory string.
-    std::string category_name_override;
     MissingPolicy missing_policy = MissingPolicy::FillMinus999WhenUnavailable;
     amrex::Real missing_value = amrex::Real(-999.0);
     const DiagnosticDescriptor* static_diagnostic = nullptr;
