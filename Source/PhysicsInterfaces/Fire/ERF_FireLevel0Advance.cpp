@@ -1,3 +1,4 @@
+#include <ERF.H>
 #include <ERF_FireContext.H>
 #include <ERF_FireLevel0Advance.H>
 
@@ -247,3 +248,38 @@ ERFFireContext::advance_level0(
 }
 
 } // namespace ERFFire
+
+#ifdef ERF_USE_FIRE
+
+void
+ERF::advance_fire_level0 (int lev, double time)
+{
+    if (lev != 0 || !FireEnabled()) {
+        return;
+    }
+
+    ERFFire::ERFFireLevel0AdvanceInputs fire_inputs{
+        {
+            geom[lev],
+            vars_new[lev][Vars::xvel],
+            vars_new[lev][Vars::yvel],
+            *z_phys_cc[lev],
+            *z_phys_nd[lev],
+            solverChoice.mesh_type,
+            solverChoice.terrain_type,
+            solverChoice.buildings_type,
+            max_level
+        },
+        vars_new[lev][Vars::cons],
+        solverChoice.mesh_type == MeshType::VariableDz
+            ? detJ_cc[lev].get()
+            : nullptr,
+        solverChoice.moisture_type,
+        time,
+        static_cast<amrex::Real>(dt[lev])
+    };
+
+    m_fire->advance_level0(fire_inputs);
+}
+
+#endif

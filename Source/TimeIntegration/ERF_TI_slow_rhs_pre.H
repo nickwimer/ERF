@@ -139,7 +139,7 @@
         }
 
 #ifdef ERF_USE_FIRE
-        m_fire->add_atmospheric_source(level, cc_src);
+        add_fire_atmospheric_source(level, cc_src);
 #endif
 
         // *****************************************************************************

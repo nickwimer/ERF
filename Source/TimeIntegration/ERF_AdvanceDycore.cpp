@@ -3,10 +3,6 @@
 
 #include <ERF.H>
 
-#ifdef ERF_USE_FIRE
-#include <ERF_FireContext.H>
-#endif
-
 #include <ERF_MRI.H>
 #include <ERF_EddyViscosity.H>
 #include <ERF_EOS.H>

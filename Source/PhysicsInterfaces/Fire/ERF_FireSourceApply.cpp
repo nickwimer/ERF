@@ -1,3 +1,4 @@
+#include <ERF.H>
 #include <ERF_FireContext.H>
 
 #include <AMReX.H>
@@ -41,3 +42,19 @@ ERFFireContext::add_atmospheric_source(
 }
 
 } // namespace ERFFire
+
+#ifdef ERF_USE_FIRE
+
+void
+ERF::add_fire_atmospheric_source (
+    int level,
+    amrex::MultiFab& conserved_source) const
+{
+    if (m_fire) {
+        m_fire->add_atmospheric_source(
+            level,
+            conserved_source);
+    }
+}
+
+#endif
