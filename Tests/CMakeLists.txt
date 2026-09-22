@@ -125,4 +125,7 @@ endif()
 
 if(ERF_ENABLE_UNIT_TESTS)
   add_subdirectory(Unit)
+  if(TARGET erf_fire_unit_tests)
+    add_subdirectory(Unit/Fire/ScientificCorrections)
+  endif()
 endif()

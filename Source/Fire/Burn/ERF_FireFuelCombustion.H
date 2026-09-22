@@ -2,6 +2,7 @@
 #define ERF_FIRE_FUEL_COMBUSTION_H_
 
 #include <ERF_FireCombustion.H>
+#include <ERF_FireFuelBurnTime.H>
 #include <ERF_FireFuelRaster.H>
 #include <ERF_RothermelFuel.H>
 
@@ -18,8 +19,8 @@ namespace ERFFire
  * combustion parameterization.
  *
  * NonBurnable remains a distinct no-combustion material. UnsupportedModel
- * keeps this production resolver fail-closed for FM2-FM13 until the runtime
- * explicitly adopts the separate Anderson-13 accounting policy above.
+ * keeps the compatibility FM1 resolver narrow. The production spatial
+ * resolver below handles FM2-FM13 with explicit model-dependent burn times.
  */
 enum class FireFuelCombustionParameterStatus : int
 {
@@ -32,8 +33,8 @@ enum class FireFuelCombustionParameterStatus : int
 
 /**
  * Status for resolving an original-13 cell into the scalar semi-empirical
- * combustion reservoir. This API is intentionally separate from the current
- * production FM1-only resolver below.
+ * combustion reservoir. Accounting alone does not select the production
+ * burn-time policy; the spatial resolver below does so explicitly.
  */
 enum class FireFuelCombustionAccountingStatus : int
 {
@@ -76,7 +77,7 @@ fire_combustion_required_moisture_or_zero(
 
 /**
  * Resolve an Anderson/Albini material cell into conservative scalar combustion
- * accounting without enabling it in the production runtime.
+ * accounting with the caller's explicit burn-time policy.
  *
  * The scalar reservoir cannot retain separate particle classes. Therefore its
  * dry load is the sum of the published 1-h, 10-h, 100-h, and live dry loads,
@@ -325,7 +326,10 @@ make_fire_combustion_parameters_for_fuel_cell(
  * dry load, sensible heat, burn time, and combustion-water yield remain
  * authoritative, while only prescribed dead 1-h moisture varies spatially.
  * FM2-FM13 use the conservative Anderson-13 dry-load and moisture accounting
- * above. NonBurnable remains a canonical zero-combustion material.
+ * above, but select the fuel-dependent SFIRE burn time, not FM1's grass time.
+ * Heat per dry mass and water yield still inherit base. These defaults are
+ * semi-empirical, not validation of class-resolved combustion. NonBurnable
+ * remains a canonical zero-combustion material.
  */
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 FireFuelCombustionAccountingStatus
@@ -374,10 +378,20 @@ try_make_spatial_fire_combustion_accounting(
         break;
     }
 
-    return try_make_anderson13_fire_combustion_accounting(
+    const auto status = try_make_anderson13_fire_combustion_accounting(
         base,
         fuel_cell,
         result);
+    if (status == FireFuelCombustionAccountingStatus::success) {
+        const amrex::Real tau = anderson13_sfire_burn_time_s(
+            fire_fuel_model_number(fuel_cell.model_id));
+        if (!(tau > amrex::Real(0))) {
+            result = {};
+            return FireFuelCombustionAccountingStatus::invalid_model;
+        }
+        result.parameters.burn_time_constant_s = tau;
+    }
+    return status;
 }
 
 /** Host convenience wrapper for the production spatial accounting policy. */
