@@ -1,6 +1,7 @@
 set(_fire_science_sources
   ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireFuelBurnTime.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireTerrainMetric.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_GTestFireMaterialEvents.cpp
 )
 if(ERF_ENABLE_CUDA)
   set_source_files_properties(${_fire_science_sources}
