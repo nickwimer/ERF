@@ -2,12 +2,14 @@
 
 #include <ERF_FireFuelBarrierRemesher.H>
 #include <ERF_FireFuelBarrierSweep.H>
+#include <ERF_FireMaterialAdvance.H>
 #include <ERF_FireFuelSpread.H>
 #include <ERF_FireSpreadOutput.H>
 #include <ERF_FireWindAdjustment.H>
 #include <ERF_FireFrontPropagator.H>
 #include <ERF_FireFrontTopology.H>
 #include <ERF_RichardsDirectionalSpread.H>
+#include <ERF_FireTerrainMetric.H>
 #include <ERF_RothermelModel.H>
 #include <ERF_VectorPerimeterPropagator.H>
 
@@ -1757,6 +1759,7 @@ ERFFireSpreadRuntime::advance_wind_impl(
                 "fire spread sampled terrain slope magnitude is not finite");
         }
 
+        const FireTerrainMetric terrain_metric(terrain_gradient_m_per_m);
         const FireVec2 upslope_unit =
             terrain_upslope_unit(
                 terrain_gradient_m_per_m,
@@ -1776,12 +1779,12 @@ ERFFireSpreadRuntime::advance_wind_impl(
         const RichardsDirectionalSpread spread =
             make_richards_directional_spread(
                 behavior,
-                wind_push_unit(
+                terrain_metric.surface_unit_direction(wind_push_unit(
                     wind_mps,
-                    speed_mps),
+                    speed_mps)),
                 upslope_unit);
 
-        return richards_normal_speed_mps(
+        return terrain_metric.normal_speed_mps(
             spread.ellipse, outward_normal);
     };
 
@@ -1964,9 +1967,13 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             "fire spread end time must be finite and representably later");
     }
 
+    // Material is held on the departure side during each RK trial. The
+    // material-event integrator owns changes at raster interfaces.
+    std::vector<FireFuelRasterCell> stage_materials;
     const auto normal_speeds =
         [this,
          &environment,
+         &stage_materials,
          wind_input_mode,
          wind_adjustment_factor](
             const std::vector<FireVec2>& positions_m,
@@ -1985,9 +1992,8 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
 
         std::vector<FireFuelRasterCell> spatial_materials;
         if (spatial_fuel_raster_) {
-            spatial_materials =
-                spatial_fuel_raster_->collective_sample_points(
-                    positions_m);
+            spatial_materials = stage_materials;
+
             require(
                 spatial_materials.size() == positions_m.size(),
                 "fire spatial material sampler returned the wrong size");
@@ -2038,10 +2044,11 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     terrain_gradient_m_per_m,
                     slope_tangent);
 
+            const FireTerrainMetric terrain_metric(terrain_gradient_m_per_m);
             const FireVec2 wind_direction =
-                wind_push_unit(
+                terrain_metric.surface_unit_direction(wind_push_unit(
                     wind_mps,
-                    speed_mps);
+                    speed_mps));
 
             RichardsDirectionalSpread spread{};
 
@@ -2121,7 +2128,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             }
 
             speeds.push_back(
-                richards_normal_speed_mps(
+                terrain_metric.normal_speed_mps(
                     spread.ellipse,
                     outward_normals[index]));
         }
@@ -2155,8 +2162,16 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
         amrex::Real segment_start_time_s =
             start_time_s;
 
+        std::size_t segment_count = 0;
         while (segment_start_time_s
                < end_time_s) {
+            if (++segment_count > 100000) {
+                throw std::runtime_error("Fire material/topology subcycling exceeded its safety limit");
+            }
+            if (spatial_fuel_raster_) {
+                working_front = resolve_fire_front_material_edges(
+                    working_front, *spatial_fuel_raster_);
+            }
             const amrex::Real segment_dt_s =
                 end_time_s
                 - segment_start_time_s;
@@ -2170,12 +2185,13 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             FireFrontTopologyAdvanceResult
                 topology_advance =
                     spatial_fuel_raster_
-                    ? advance_front_rk2_batched_until_topology_event_constrained_by_nonburnable(
+                    ? advance_fire_front_material_segment(
                         working_front,
                         segment_start_time_s,
                         segment_dt_s,
                         normal_speeds,
-                        *spatial_fuel_raster_)
+                        *spatial_fuel_raster_,
+                        stage_materials)
                     : advance_front_rk2_batched_until_topology_event(
                         working_front,
                         segment_start_time_s,
@@ -2306,11 +2322,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     .completed_front.has_value(),
                 "fire topology-aware advance returned no result");
 
+            const amrex::Real completed_dt_s = topology_advance.advanced_dt_s;
             require(
-                topology_advance.advanced_dt_s
-                    == segment_dt_s,
-                "fire topology-aware completed segment consumed "
-                "the wrong dt");
+                completed_dt_s > amrex::Real(0) && completed_dt_s <= segment_dt_s,
+                "fire completed segment consumed an invalid dt");
+            const amrex::Real completed_time_s = completed_dt_s == segment_dt_s
+                ? end_time_s : segment_start_time_s + completed_dt_s;
+            require(completed_time_s > segment_start_time_s && completed_time_s <= end_time_s,
+                    "fire material segment made no representable progress");
 
             FireFront completed_front =
                 std::move(
@@ -2328,11 +2347,11 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             working_front,
                             completed_front,
                             segment_start_time_s,
-                            end_time_s,
+                            completed_time_s,
                             std::min(
                                 config_
                                     .arrival_time_tolerance_s,
-                                segment_dt_s),
+                                completed_dt_s),
                             config_
                                 .combustion_options
                                 .temporal_substeps);
@@ -2357,14 +2376,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             burned_before_segment,
                             next_burned,
                             *spatial_fuel_raster_,
-                            segment_dt_s)
+                            completed_dt_s)
                     : next_combustion
                         .advance_from_front_linear_sweep(
                             working_front,
                             completed_front,
                             burned_before_segment,
                             next_burned,
-                            segment_dt_s);
+                            completed_dt_s);
 
             newly_arrived_cell_count +=
                 arrival_update
@@ -2386,7 +2405,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             working_front =
                 std::move(completed_front);
             segment_start_time_s =
-                end_time_s;
+                completed_time_s;
         }
 
         FireFront advanced_front =

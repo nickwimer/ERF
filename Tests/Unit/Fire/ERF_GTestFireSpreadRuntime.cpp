@@ -254,12 +254,16 @@ make_terrain_exact_wavelet(
     FireVec2 ignition_m,
     Real age_s)
 {
+    // Independent 3-D geometry for z = 0.20*y: the contour tangent
+    // projects unchanged; the uphill tangent projects by 1/sqrt(1.04).
+    // These are projected basis vectors, deliberately NOT unit map vectors.
+    const Real uphill_projection = Real(1) / std::sqrt(Real(1.04));
     const FireVec2 heading{
         terrain_reference_heading_x,
-        terrain_reference_heading_y};
+        terrain_reference_heading_y * uphill_projection};
     const FireVec2 flank{
-        -heading.y,
-        heading.x};
+        -terrain_reference_heading_y,
+        terrain_reference_heading_x * uphill_projection};
     const FireVec2 center =
         ignition_m
         + heading
@@ -293,12 +297,16 @@ exact_terrain_support(
     Real age_s,
     FireVec2 direction)
 {
+    // Independent 3-D geometry for z = 0.20*y: the contour tangent
+    // projects unchanged; the uphill tangent projects by 1/sqrt(1.04).
+    // These are projected basis vectors, deliberately NOT unit map vectors.
+    const Real uphill_projection = Real(1) / std::sqrt(Real(1.04));
     const FireVec2 heading{
         terrain_reference_heading_x,
-        terrain_reference_heading_y};
+        terrain_reference_heading_y * uphill_projection};
     const FireVec2 flank{
-        -heading.y,
-        heading.x};
+        -terrain_reference_heading_y,
+        terrain_reference_heading_x * uphill_projection};
 
     const Real center =
         ERFFire::dot(ignition_m, direction)
