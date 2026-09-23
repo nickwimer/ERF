@@ -389,7 +389,9 @@ expect_same_runtime_state(
                 relative_roundoff_tolerance * scale);
         };
 
-    expect_real(lhs.current_time_s(), rhs.current_time_s());
+    // The coupling clock is authoritative double metadata. Do not narrow it
+    // through the amrex::Real comparator, especially in SINGLE builds.
+    EXPECT_EQ(lhs.current_time_s(), rhs.current_time_s());
 
     ASSERT_EQ(
         lhs.perimeter().vertices_m().size(),
