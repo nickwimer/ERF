@@ -78,7 +78,7 @@ ERFFireContext::advance_level0(
             make_erf_fire_spread_runtime(
                 runtime_options_,
                 environment_inputs.geometry,
-                static_cast<Real>(inputs.time_s));
+                inputs.time_s);
 
         step_index_ = 0;
 
@@ -121,7 +121,7 @@ ERFFireContext::advance_level0(
     }
 
     if (spread_runtime_->current_time_s()
-        != static_cast<Real>(inputs.time_s)) {
+        != inputs.time_s) {
         Error(
             "ERF-Fire runtime clock is not synchronized with level-0 t^n");
     }

@@ -3278,3 +3278,38 @@ TEST(FireSpreadRuntime, StateRestoreRejectsCorruptPersistentHistory)
             std::invalid_argument);
     }
 }
+
+
+TEST(FireSpreadRuntime, AuthoritativeClockAccumulatesInDoublePrecision)
+{
+    const FireCartesianRasterGeometry2D geometry{
+        16, 16,
+        Real(0), Real(0),
+        Real(1), Real(1)};
+    constexpr double initial_time_s =
+        0.123456789012345;
+    const Real dt_s = Real(0.001);
+
+    ERFFireSpreadRuntime runtime(
+        make_circle(
+            64,
+            FireVec2{Real(8), Real(8)},
+            Real(1)),
+        initial_time_s,
+        make_config(geometry));
+
+    const auto environment =
+        make_uniform_sampler(
+            Real(0), Real(0),
+            Real(1), Real(1),
+            16, 16,
+            FireVec2{Real(0), Real(0)});
+
+    double expected = initial_time_s;
+    for (int step = 0; step < 10; ++step) {
+        (void)runtime.advance_direct_reference_wind(
+            environment, dt_s);
+        expected += static_cast<double>(dt_s);
+        EXPECT_EQ(runtime.current_time_s(), expected);
+    }
+}

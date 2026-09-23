@@ -94,11 +94,11 @@ fraction_equal(amrex::Real a, amrex::Real b) noexcept
 void
 validate_runtime_scalars(
     const ERFFireSpreadConfig& config,
-    amrex::Real current_time_s)
+    double current_time_s)
 {
     require(
         std::isfinite(current_time_s)
-            && current_time_s >= amrex::Real(0.0),
+            && current_time_s >= 0.0,
         "fire spread time must be finite and nonnegative");
 
     require(
@@ -785,7 +785,7 @@ collective_broadcast_front_state(
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     FirePerimeter initial_perimeter,
-    amrex::Real initial_time_s,
+    double initial_time_s,
     ERFFireSpreadConfig config)
     : config_(std::move(config)),
       fuel_field_(
@@ -816,7 +816,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     front_ = std::move(initial_remesh.front);
 
     (void)first_arrival_.initialize_from_perimeter(
-        perimeter(), current_time_s_);
+        perimeter(), static_cast<amrex::Real>(current_time_s_));
     (void)burned_fraction_.update_from_perimeter(perimeter());
     (void)combustion_.initialize_from_burned_fraction(
         burned_fraction_);
@@ -824,7 +824,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     FireFront initial_front,
-    amrex::Real initial_time_s,
+    double initial_time_s,
     ERFFireSpreadConfig config)
     : config_(std::move(config)),
       fuel_field_(
@@ -852,7 +852,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 
     (void)first_arrival_.initialize_from_front(
         front_,
-        current_time_s_);
+        static_cast<amrex::Real>(current_time_s_));
     (void)burned_fraction_.update_from_front(
         front_);
     (void)combustion_.initialize_from_burned_fraction(
@@ -861,7 +861,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     FirePerimeter initial_perimeter,
-    amrex::Real initial_time_s,
+    double initial_time_s,
     ERFFireSpreadConfig config,
     FireFuelRaster spatial_fuel_raster)
     : config_(std::move(config)),
@@ -900,7 +900,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     front_ = std::move(initial_remesh.front);
 
     (void)first_arrival_.initialize_from_perimeter(
-        perimeter(), current_time_s_);
+        perimeter(), static_cast<amrex::Real>(current_time_s_));
     (void)burned_fraction_.update_from_perimeter(perimeter());
     (void)combustion_.initialize_from_burned_fraction(
         burned_fraction_,
@@ -909,7 +909,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 
 ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     FireFront initial_front,
-    amrex::Real initial_time_s,
+    double initial_time_s,
     ERFFireSpreadConfig config,
     FireFuelRaster spatial_fuel_raster)
     : config_(std::move(config)),
@@ -943,7 +943,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 
     (void)first_arrival_.initialize_from_front(
         front_,
-        current_time_s_);
+        static_cast<amrex::Real>(current_time_s_));
     (void)burned_fraction_.update_from_front(
         front_);
     (void)combustion_.initialize_from_burned_fraction(
@@ -995,12 +995,12 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     if (first_arrival_.has_committed_sweep()) {
         require(
             first_arrival_.last_sweep_end_time_s()
-                == current_time_s_,
+                == static_cast<amrex::Real>(current_time_s_),
             "restored fire runtime clock does not match first-arrival history");
     } else {
         require(
             first_arrival_.initial_condition_time_s()
-                == current_time_s_,
+                == static_cast<amrex::Real>(current_time_s_),
             "restored fire runtime initial clock does not match first-arrival history");
     }
 
@@ -1041,7 +1041,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
     FireBurnedFractionRaster burned_fraction,
     FireFirstArrivalRaster first_arrival,
     FireCombustionRaster combustion,
-    amrex::Real current_time_s,
+    double current_time_s,
     CollectiveRestoreStateTag)
     : config_(std::move(config)),
       fuel_field_(
@@ -1062,11 +1062,13 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         "restored fire runtime requires initialized first-arrival history");
     if (first_arrival_.has_committed_sweep()) {
         require(
-            first_arrival_.last_sweep_end_time_s() == current_time_s_,
+            first_arrival_.last_sweep_end_time_s()
+                == static_cast<amrex::Real>(current_time_s_),
             "restored fire runtime clock does not match first-arrival history");
     } else {
         require(
-            first_arrival_.initial_condition_time_s() == current_time_s_,
+            first_arrival_.initial_condition_time_s()
+                == static_cast<amrex::Real>(current_time_s_),
             "restored fire runtime initial clock does not match first-arrival history");
     }
     require(
@@ -1703,11 +1705,22 @@ ERFFireSpreadRuntime::advance_wind_impl(
         config_.arrival_time_tolerance_s <= dt_s,
         "fire spread arrival tolerance must not exceed the fire dt");
 
-    const amrex::Real start_time_s = current_time_s_;
+    const double start_time_exact_s = current_time_s_;
+    const double end_time_exact_s =
+        start_time_exact_s + static_cast<double>(dt_s);
+    if (!std::isfinite(end_time_exact_s)
+        || !(end_time_exact_s > start_time_exact_s)) {
+        throw std::overflow_error(
+            "fire spread authoritative end time must be finite and representably later");
+    }
+    const amrex::Real start_time_s =
+        first_arrival_.has_committed_sweep()
+        ? first_arrival_.last_sweep_end_time_s()
+        : first_arrival_.initial_condition_time_s();
     const amrex::Real end_time_s = start_time_s + dt_s;
     if (!std::isfinite(end_time_s) || !(end_time_s > start_time_s)) {
         throw std::overflow_error(
-            "fire spread end time must be finite and representably later");
+            "fire spread history end time must be finite and representably later");
     }
 
     const auto normal_speed =
@@ -1839,8 +1852,8 @@ ERFFireSpreadRuntime::advance_wind_impl(
         remesh_perimeter(advanced, config_.remesh_options);
 
     ERFFireStepDiagnostics diagnostics{
-        start_time_s,
-        end_time_s,
+        start_time_exact_s,
+        end_time_exact_s,
         pre_remesh_vertex_count,
         remeshed.perimeter.size(),
         remeshed.stats.vertices_removed,
@@ -1868,7 +1881,7 @@ ERFFireSpreadRuntime::advance_wind_impl(
     first_arrival_ = std::move(next_arrival);
     burned_fraction_ = std::move(next_burned);
     combustion_ = std::move(next_combustion);
-    current_time_s_ = end_time_s;
+    current_time_s_ = end_time_exact_s;
 
     return diagnostics;
 }
@@ -1971,12 +1984,23 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
         config_.arrival_time_tolerance_s <= dt_s,
         "fire spread arrival tolerance must not exceed the fire dt");
 
-    const amrex::Real start_time_s = current_time_s_;
+    const double start_time_exact_s = current_time_s_;
+    const double end_time_exact_s =
+        start_time_exact_s + static_cast<double>(dt_s);
+    if (!std::isfinite(end_time_exact_s)
+        || !(end_time_exact_s > start_time_exact_s)) {
+        throw std::overflow_error(
+            "fire spread authoritative end time must be finite and representably later");
+    }
+    const amrex::Real start_time_s =
+        first_arrival_.has_committed_sweep()
+        ? first_arrival_.last_sweep_end_time_s()
+        : first_arrival_.initial_condition_time_s();
     const amrex::Real end_time_s = start_time_s + dt_s;
     if (!std::isfinite(end_time_s)
         || !(end_time_s > start_time_s)) {
         throw std::overflow_error(
-            "fire spread end time must be finite and representably later");
+            "fire spread history end time must be finite and representably later");
     }
 
     // Material is held on the departure side during each RK trial. The
@@ -2516,7 +2540,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
         combustion_ =
             std::move(next_combustion);
         current_time_s_ =
-            end_time_s;
+            end_time_exact_s;
 
         return diagnostics;
     }

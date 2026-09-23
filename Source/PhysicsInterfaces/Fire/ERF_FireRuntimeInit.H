@@ -40,7 +40,7 @@ make_erf_fire_uniform_fuel_field(const ERFFireSpreadConfig& config);
 make_erf_fire_spread_runtime(
     const ERFFireRuntimeOptions& options,
     const amrex::Geometry& geometry,
-    amrex::Real initial_time_s);
+    double initial_time_s);
 
 } // namespace ERFFire
 

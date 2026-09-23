@@ -737,7 +737,7 @@ write_erf_fire_checkpoint_distributed_metadata(
 
     stream
         << std::setprecision(
-            std::numeric_limits<amrex::Real>::max_digits10);
+            std::numeric_limits<double>::max_digits10);
 
     stream << "ERF_FIRE_RUNTIME_STATE " << version << "\n";
     stream
@@ -1233,7 +1233,7 @@ write_erf_fire_checkpoint_state(
 
     stream
         << std::setprecision(
-            std::numeric_limits<amrex::Real>::max_digits10);
+            std::numeric_limits<double>::max_digits10);
 
     stream << "ERF_FIRE_RUNTIME_STATE 1\n";
     stream

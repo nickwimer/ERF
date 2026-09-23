@@ -55,14 +55,14 @@ struct ERFFireSpreadRuntimeState
     FireBurnedFractionRasterState burned_fraction;
     FireFirstArrivalRasterState first_arrival;
     FireCombustionRasterState combustion;
-    amrex::Real current_time_s{};
+    double current_time_s{};
     std::vector<ERFFireFrontComponentState> front_components;
 };
 
 struct ERFFireStepDiagnostics
 {
-    amrex::Real start_time_s{};
-    amrex::Real end_time_s{};
+    double start_time_s{};
+    double end_time_s{};
 
     std::size_t pre_remesh_vertex_count{};
     std::size_t post_remesh_vertex_count{};
@@ -111,12 +111,12 @@ class ERFFireSpreadRuntime
 public:
     ERFFireSpreadRuntime(
         FirePerimeter initial_perimeter,
-        amrex::Real initial_time_s,
+        double initial_time_s,
         ERFFireSpreadConfig config);
 
     ERFFireSpreadRuntime(
         FireFront initial_front,
-        amrex::Real initial_time_s,
+        double initial_time_s,
         ERFFireSpreadConfig config);
 
     /**
@@ -130,13 +130,13 @@ public:
      */
     ERFFireSpreadRuntime(
         FirePerimeter initial_perimeter,
-        amrex::Real initial_time_s,
+        double initial_time_s,
         ERFFireSpreadConfig config,
         FireFuelRaster spatial_fuel_raster);
 
     ERFFireSpreadRuntime(
         FireFront initial_front,
-        amrex::Real initial_time_s,
+        double initial_time_s,
         ERFFireSpreadConfig config,
         FireFuelRaster spatial_fuel_raster);
 
@@ -174,7 +174,7 @@ public:
         return combustion_;
     }
 
-    [[nodiscard]] amrex::Real current_time_s() const noexcept
+    [[nodiscard]] double current_time_s() const noexcept
     {
         return current_time_s_;
     }
@@ -446,7 +446,7 @@ private:
         FireBurnedFractionRaster burned_fraction,
         FireFirstArrivalRaster first_arrival,
         FireCombustionRaster combustion,
-        amrex::Real current_time_s,
+        double current_time_s,
         CollectiveRestoreStateTag);
 
     enum class WindInputMode
@@ -481,7 +481,7 @@ private:
     FireBurnedFractionRaster burned_fraction_;
     FireFirstArrivalRaster first_arrival_;
     FireCombustionRaster combustion_;
-    amrex::Real current_time_s_{};
+    double current_time_s_{};
 };
 
 } // namespace ERFFire
