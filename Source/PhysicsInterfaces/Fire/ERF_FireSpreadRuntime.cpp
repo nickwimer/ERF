@@ -2522,9 +2522,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             working_front,
                             topology_advance.rk2_midpoint_vertices_m,
                             completed_front,
-                            config_
-                                .combustion_options
-                                .temporal_substeps);
+                            history_temporal_substeps);
 
             const FireCombustionRasterAdvance
                 combustion_update =
