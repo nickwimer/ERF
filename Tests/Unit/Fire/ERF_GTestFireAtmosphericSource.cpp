@@ -661,7 +661,7 @@ TEST(FireAtmosphericSource, ReportsFiniteColumnExponentialTailWithoutChangingPol
 
 TEST(FireAtmosphericSource, ConservativeProjectionClosesEnergyAndWaterBudget)
 {
-    const FireSurfaceFeedbackCell release{
+    const ERFFire::FireSurfaceFeedbackCell release{
         Real(0),
         Real(7.25e6),
         Real(2.75)};
