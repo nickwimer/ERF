@@ -299,6 +299,7 @@ make_fire_barrier_topology_event_result(
     return {
         std::nullopt,
         requested_dt_s * full_step_fraction,
+        {},
         std::move(event_vertices_m),
         FireFrontComponentTopologyEvent{
             component_index,
@@ -401,6 +402,7 @@ advance_front_rk2_batched_until_topology_event_avoiding_nonburnable(
         return {
             front,
             amrex::Real(0),
+            initial_vertices_m,
             initial_vertices_m,
             std::nullopt
         };
@@ -553,6 +555,7 @@ advance_front_rk2_batched_until_topology_event_avoiding_nonburnable(
     return {
         std::move(final_front),
         dt_s,
+        std::move(midpoint_vertices_m),
         std::move(final_vertices_m),
         std::nullopt
     };
