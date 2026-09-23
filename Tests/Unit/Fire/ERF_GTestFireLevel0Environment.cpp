@@ -303,6 +303,25 @@ TEST(
 
 TEST(
     FireLevel0Environment,
+    MinimumModelTopAglUsesActualNodalColumnGeometry)
+{
+    FlatAtmosphereFixture fixture;
+
+    EXPECT_EQ(
+        ERFFire::erf_fire_level0_min_column_top_agl(
+            fixture.inputs()),
+        Real(34));
+
+    FlatAtmosphereFixture raised_ground(true);
+    EXPECT_NEAR(
+        ERFFire::erf_fire_level0_min_column_top_agl(
+            raised_ground.inputs()),
+        Real(34) - Real(0.25) / Real(4),
+        scaled_tolerance(Real(34)));
+}
+
+TEST(
+    FireLevel0Environment,
     FlatStretchedSnapshotMatchesAnalyticNativeStaggeredWind)
 {
     FlatAtmosphereFixture fixture;
