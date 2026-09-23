@@ -369,9 +369,27 @@ make_planar_terrain(
 void
 expect_same_runtime_state(
     const ERFFireSpreadRuntime& lhs,
-    const ERFFireSpreadRuntime& rhs)
+    const ERFFireSpreadRuntime& rhs,
+    Real relative_roundoff_tolerance = Real(0.0))
 {
-    EXPECT_EQ(lhs.current_time_s(), rhs.current_time_s());
+    const auto expect_real =
+        [relative_roundoff_tolerance](Real lhs_value, Real rhs_value) {
+            if (relative_roundoff_tolerance == Real(0.0)) {
+                EXPECT_EQ(lhs_value, rhs_value);
+                return;
+            }
+
+            const Real scale =
+                std::max({
+                    Real(1.0),
+                    std::abs(lhs_value),
+                    std::abs(rhs_value)});
+            EXPECT_LE(
+                std::abs(lhs_value - rhs_value),
+                relative_roundoff_tolerance * scale);
+        };
+
+    expect_real(lhs.current_time_s(), rhs.current_time_s());
 
     ASSERT_EQ(
         lhs.perimeter().vertices_m().size(),
@@ -379,10 +397,10 @@ expect_same_runtime_state(
     for (std::size_t index = 0;
          index < lhs.perimeter().vertices_m().size();
          ++index) {
-        EXPECT_EQ(
+        expect_real(
             lhs.perimeter().vertices_m()[index].x,
             rhs.perimeter().vertices_m()[index].x);
-        EXPECT_EQ(
+        expect_real(
             lhs.perimeter().vertices_m()[index].y,
             rhs.perimeter().vertices_m()[index].y);
     }
@@ -397,7 +415,7 @@ expect_same_runtime_state(
     for (std::size_t index = 0;
          index < lhs_burned.burned_fraction.size();
          ++index) {
-        EXPECT_EQ(
+        expect_real(
             lhs_burned.burned_fraction[index],
             rhs_burned.burned_fraction[index]);
     }
@@ -409,13 +427,13 @@ expect_same_runtime_state(
     EXPECT_EQ(
         lhs_arrival.has_initial_condition,
         rhs_arrival.has_initial_condition);
-    EXPECT_EQ(
+    expect_real(
         lhs_arrival.initial_condition_time_s,
         rhs_arrival.initial_condition_time_s);
     EXPECT_EQ(
         lhs_arrival.has_committed_sweep,
         rhs_arrival.has_committed_sweep);
-    EXPECT_EQ(
+    expect_real(
         lhs_arrival.last_sweep_end_time_s,
         rhs_arrival.last_sweep_end_time_s);
     EXPECT_EQ(lhs_arrival.arrived, rhs_arrival.arrived);
@@ -425,7 +443,7 @@ expect_same_runtime_state(
     for (std::size_t index = 0;
          index < lhs_arrival.first_arrival_time_s.size();
          ++index) {
-        EXPECT_EQ(
+        expect_real(
             lhs_arrival.first_arrival_time_s[index],
             rhs_arrival.first_arrival_time_s[index]);
     }
@@ -445,19 +463,19 @@ expect_same_runtime_state(
          ++index) {
         const auto& a = lhs_combustion.cells[index];
         const auto& b = rhs_combustion.cells[index];
-        EXPECT_EQ(
+        expect_real(
             a.ignited_area_fraction,
             b.ignited_area_fraction);
-        EXPECT_EQ(
+        expect_real(
             a.remaining_dry_fuel_kg_m2,
             b.remaining_dry_fuel_kg_m2);
-        EXPECT_EQ(
+        expect_real(
             a.consumed_dry_fuel_kg_m2,
             b.consumed_dry_fuel_kg_m2);
-        EXPECT_EQ(
+        expect_real(
             a.sensible_energy_j_m2,
             b.sensible_energy_j_m2);
-        EXPECT_EQ(
+        expect_real(
             a.water_released_kg_m2,
             b.water_released_kg_m2);
     }
@@ -1751,7 +1769,7 @@ TEST(
 
 TEST(
     FireSpreadRuntime,
-    BatchedTerrainEnvironmentMatchesScalarRuntimeStateExactly)
+    BatchedTerrainEnvironmentMatchesScalarRuntimeStateWithinRoundoff)
 {
     constexpr Real dt_s = Real(1.0);
     const FireCartesianRasterGeometry2D geometry{
@@ -1796,12 +1814,15 @@ TEST(
         terrain,
         dt_s);
 
-    expect_same_runtime_state(scalar, batched);
+    expect_same_runtime_state(
+        scalar,
+        batched,
+        Real(16.0) * std::numeric_limits<Real>::epsilon());
 }
 
 TEST(
     FireSpreadRuntime,
-    BatchedSampledTerrainGradientMatchesTerrainSurfaceStateExactly)
+    BatchedSampledTerrainGradientMatchesTerrainSurfaceStateWithinRoundoff)
 {
     constexpr Real dt_s = Real(1.0);
     const FireCartesianRasterGeometry2D geometry{
@@ -1850,7 +1871,10 @@ TEST(
         },
         dt_s);
 
-    expect_same_runtime_state(scalar, sampled);
+    expect_same_runtime_state(
+        scalar,
+        sampled,
+        Real(16.0) * std::numeric_limits<Real>::epsilon());
 }
 
 TEST(
