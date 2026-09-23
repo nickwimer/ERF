@@ -23,6 +23,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|IntelLLVM")
 endif()
 
 include(GoogleTest)
+include(${PROJECT_SOURCE_DIR}/Tests/MPILauncher.cmake)
 
 set(ERF_GTEST_REPORT_ROOT
     "${PROJECT_BINARY_DIR}/test-results/gtest")
@@ -78,6 +79,32 @@ function(erf_register_gtest_suite target)
   string(REPLACE ";" "\\;" _erf_gtest_labels_property
          "${_erf_gtest_labels}")
 
+  # Every ERF GoogleTest executable initializes AMReX/MPI for actual test
+  # execution. On Cray/Slurm a direct CTest exec lacks PMI context even for
+  # one rank. CMake >= 3.29's TEST_LAUNCHER is honored by
+  # gtest_discover_tests for both discovery and execution. Use PRE_TEST so an
+  # MPI-enabled test target can still be built outside an active allocation;
+  # the launcher is entered only when CTest is actually invoked.
+  set(_erf_gtest_discovery_mode POST_BUILD)
+  if(ERF_ENABLE_MPI
+      AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.29
+      AND NOT "${MPIEXEC_EXECUTABLE}" STREQUAL "")
+    erf_mpi_launcher_command(
+      _erf_gtest_launcher
+      LAUNCHER "${MPIEXEC_EXECUTABLE}"
+      NUMPROC_FLAG "${MPIEXEC_NUMPROC_FLAG}"
+      NRANKS 1
+      PREFLAGS "${MPIEXEC_PREFLAGS}"
+      CONTEXT "erf_register_gtest_suite(${target})"
+    )
+    if(_erf_gtest_launcher)
+      set_property(
+        TARGET ${target}
+        PROPERTY TEST_LAUNCHER "${_erf_gtest_launcher}")
+      set(_erf_gtest_discovery_mode PRE_TEST)
+    endif()
+  endif()
+
   set(_erf_gtest_discover_extra_args)
   if(DEFINED ERF_GTEST_TEST_PREFIX AND NOT "${ERF_GTEST_TEST_PREFIX}" STREQUAL "")
     list(APPEND _erf_gtest_discover_extra_args
@@ -89,7 +116,7 @@ function(erf_register_gtest_suite target)
   endif()
 
   gtest_discover_tests(${target}
-    DISCOVERY_MODE POST_BUILD
+    DISCOVERY_MODE ${_erf_gtest_discovery_mode}
     WORKING_DIRECTORY ${ERF_GTEST_WORKING_DIRECTORY}
     DISCOVERY_TIMEOUT ${ERF_GTEST_DISCOVERY_TIMEOUT}
     XML_OUTPUT_DIR "${ERF_GTEST_XML_OUTPUT_DIR}"
