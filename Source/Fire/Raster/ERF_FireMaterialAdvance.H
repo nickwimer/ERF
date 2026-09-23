@@ -144,7 +144,7 @@ inline std::size_t fire_material_rk2_dense_substeps(
             std::hypot(quadratic.x, quadratic.y));
     }
     const amrex::Real tolerance =
-        amrex::Real(1.e-6) * std::min(g.dx_m, g.dy_m);
+        amrex::Real(1.e-4) * std::min(g.dx_m, g.dy_m);
     if (!(tolerance > amrex::Real(0))) {
         throw std::logic_error("Fire RK2 material path has invalid raster spacing");
     }
@@ -154,7 +154,7 @@ inline std::size_t fire_material_rk2_dense_substeps(
         : amrex::Real(1);
     const std::size_t substeps = std::max<std::size_t>(
         1, static_cast<std::size_t>(std::ceil(required)));
-    if (substeps > 4096) {
+    if (substeps > 2048) {
         throw std::runtime_error(
             "Fire RK2 material trajectory is too curved for raster-safe event localization; reduce the timestep");
     }
@@ -174,26 +174,58 @@ inline amrex::Real first_fire_material_change_rk2(
     const std::size_t substeps =
         fire_material_rk2_dense_substeps(
             starts, midpoint_stage, ends, raster.geometry());
-    std::vector<FireVec2> previous = starts;
-    std::vector<FireVec2> next(starts.size());
-    for (std::size_t step = 1; step <= substeps; ++step) {
-        const amrex::Real alpha =
+
+    std::vector<FireVec2> queries;
+    std::vector<FireFuelBarrierInterval> intervals;
+    std::vector<std::size_t> segment_vertex;
+    std::vector<std::size_t> segment_step;
+    segment_vertex.reserve(starts.size() * substeps);
+    segment_step.reserve(starts.size() * substeps);
+
+    for (std::size_t step = 0; step < substeps; ++step) {
+        const amrex::Real a0 =
             static_cast<amrex::Real>(step)
             / static_cast<amrex::Real>(substeps);
+        const amrex::Real a1 =
+            static_cast<amrex::Real>(step + 1)
+            / static_cast<amrex::Real>(substeps);
         for (std::size_t i = 0; i < starts.size(); ++i) {
-            next[i] = fire_material_rk2_dense_point(
-                starts[i], midpoint_stage[i], ends[i], alpha);
+            const FireVec2 p0 = fire_material_rk2_dense_point(
+                starts[i], midpoint_stage[i], ends[i], a0);
+            const FireVec2 p1 = fire_material_rk2_dense_point(
+                starts[i], midpoint_stage[i], ends[i], a1);
+            const std::size_t segment = segment_vertex.size();
+            segment_vertex.push_back(i);
+            segment_step.push_back(step);
+            append_fire_fuel_barrier_segment_intervals(
+                raster.geometry(), segment, p0, p1, queries, intervals);
         }
-        const amrex::Real local =
-            first_fire_material_change(
-                raster, previous, next, initial);
-        if (local < amrex::Real(1)) {
-            return (static_cast<amrex::Real>(step - 1) + local)
-                / static_cast<amrex::Real>(substeps);
-        }
-        previous = next;
     }
-    return amrex::Real(1);
+
+    const auto materials = raster.collective_sample_points(queries);
+    if (materials.size() != queries.size()) {
+        throw std::logic_error("Fire RK2 material traversal returned the wrong batch size");
+    }
+
+    amrex::Real first = amrex::Real(1);
+    for (const auto& interval : intervals) {
+        const std::size_t segment = interval.segment_index;
+        const std::size_t vertex = segment_vertex[segment];
+        bool same_side = false;
+        for (std::size_t n = 0; n < interval.sample_count; ++n) {
+            same_side = same_side || same_fire_spread_material(
+                initial[vertex],
+                materials[interval.sample_begin + n]);
+        }
+        if (!same_side) {
+            const amrex::Real alpha =
+                (static_cast<amrex::Real>(segment_step[segment])
+                 + interval.entry_fraction)
+                / static_cast<amrex::Real>(substeps);
+            first = std::min(first, alpha);
+        }
+    }
+    return first;
 }
 
 inline void require_fire_material_sweep_not_extinguished(
@@ -266,29 +298,71 @@ inline void require_fire_material_rk2_sweep_not_extinguished(
         fire_material_rk2_dense_substeps(
             starts, mids, ends, raster.geometry());
 
-    FireFront previous = start;
-    for (std::size_t step = 1; step <= substeps; ++step) {
-        const amrex::Real alpha =
+    std::vector<FireVec2> queries;
+    std::vector<FireCartesianRasterIndex2D> cells;
+    std::vector<FireFuelBarrierSweptEnvelope> envelopes;
+
+    const auto& components = start.components();
+    std::vector<std::size_t> component_offsets;
+    component_offsets.reserve(components.size());
+    std::size_t total = 0;
+    for (const auto& component : components) {
+        component_offsets.push_back(total);
+        total += component.perimeter.size();
+    }
+
+    for (std::size_t step = 0; step < substeps; ++step) {
+        const amrex::Real a0 =
             static_cast<amrex::Real>(step)
             / static_cast<amrex::Real>(substeps);
-        std::vector<FireVec2> flat(starts.size());
-        for (std::size_t i = 0; i < starts.size(); ++i) {
-            flat[i] = fire_material_rk2_dense_point(
-                starts[i], mids[i], ends[i], alpha);
+        const amrex::Real a1 =
+            static_cast<amrex::Real>(step + 1)
+            / static_cast<amrex::Real>(substeps);
+
+        for (std::size_t cidx = 0; cidx < components.size(); ++cidx) {
+            const std::size_t count = components[cidx].perimeter.size();
+            const std::size_t offset = component_offsets[cidx];
+            for (std::size_t i = 0; i < count; ++i) {
+                const std::size_t j = (i + 1) % count;
+                const FireVec2 a0i = fire_material_rk2_dense_point(
+                    starts[offset+i], mids[offset+i], ends[offset+i], a0);
+                const FireVec2 a0j = fire_material_rk2_dense_point(
+                    starts[offset+j], mids[offset+j], ends[offset+j], a0);
+                const FireVec2 a1i = fire_material_rk2_dense_point(
+                    starts[offset+i], mids[offset+i], ends[offset+i], a1);
+                const FireVec2 a1j = fire_material_rk2_dense_point(
+                    starts[offset+j], mids[offset+j], ends[offset+j], a1);
+                append_fire_barrier_swept_envelope_samples(
+                    raster,
+                    {cidx, i, components[cidx].role},
+                    a0i, a0j, a1i, a1j,
+                    queries, cells, envelopes);
+            }
         }
-        std::vector<std::vector<FireVec2>> nested;
-        nested.reserve(start.components().size());
-        std::size_t offset = 0;
-        for (const auto& component : start.components()) {
-            const std::size_t count = component.perimeter.size();
-            nested.emplace_back(
-                flat.begin() + static_cast<std::ptrdiff_t>(offset),
-                flat.begin() + static_cast<std::ptrdiff_t>(offset + count));
-            offset += count;
+    }
+
+    if (envelopes.empty()) { return; }
+    const auto materials = raster.collective_sample_points(queries);
+    if (materials.size() != queries.size()) {
+        throw std::logic_error("Fire RK2 material sweep returned the wrong batch size");
+    }
+    for (const auto& envelope : envelopes) {
+        for (std::size_t i = 0; i < envelope.sample_count; ++i) {
+            const std::size_t q = envelope.sample_begin + i;
+            if (!fire_material_has_zero_spread(materials[q])) { continue; }
+            const auto cell = fire_cartesian_raster_cell_bounds(
+                raster.geometry(), cells[q].i, cells[q].j);
+            const amrex::Real area = fire_perimeter_cell_intersection_area_m2(
+                envelope.perimeter, cell);
+            const amrex::Real tolerance_area = amrex::Real(1024)
+                * std::numeric_limits<amrex::Real>::epsilon()
+                * fire_cartesian_cell_area_m2(cell);
+            if (area > tolerance_area) {
+                throw std::runtime_error(
+                    "Fire RK2 edge sweep enters zero-spread material; refine the front or timestep. "
+                    "Barrier sliding/rerouting is not implemented");
+            }
         }
-        require_fire_material_sweep_not_extinguished(
-            previous, nested, raster);
-        previous = fire_barrier_rebuild_front(previous, flat);
     }
 }
 

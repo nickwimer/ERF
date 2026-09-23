@@ -314,21 +314,21 @@ TEST(FirePropagation, ExplicitMidpointDenseOutputUsesStageAndEndpoint)
     const FireFront start(
         std::vector<FireFrontComponent>{
             {FireFrontRole::Outer,
-             FirePerimeter(
-                 std::vector<FireVec2>{
+             ERFFire::FirePerimeter(
+                 std::vector<ERFFire::FireVec2>{
                      {amrex::Real(0), amrex::Real(0)},
                      {amrex::Real(2), amrex::Real(0)},
                      {amrex::Real(0), amrex::Real(2)}})}
         });
-    const std::vector<std::vector<FireVec2>> stage{{
+    const std::vector<std::vector<ERFFire::FireVec2>> stage{{
         {amrex::Real(1), amrex::Real(0)},
         {amrex::Real(3), amrex::Real(0)},
         {amrex::Real(1), amrex::Real(2)}}};
     const FireFront end(
         std::vector<FireFrontComponent>{
             {FireFrontRole::Outer,
-             FirePerimeter(
-                 std::vector<FireVec2>{
+             ERFFire::FirePerimeter(
+                 std::vector<ERFFire::FireVec2>{
                      {amrex::Real(3), amrex::Real(0)},
                      {amrex::Real(5), amrex::Real(0)},
                      {amrex::Real(3), amrex::Real(2)}})}

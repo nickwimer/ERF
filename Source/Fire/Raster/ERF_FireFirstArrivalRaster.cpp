@@ -1991,8 +1991,9 @@ FireFirstArrivalRaster::update_from_front_rk2_sweep (
                     }
 
                     const FireFront middle_front =
-                        interpolate_fire_front_linear_sweep(
+                        interpolate_fire_front_rk2_sweep(
                             start_front,
+                            midpoint_vertices_m,
                             end_front,
                             middle_alpha);
 
