@@ -91,6 +91,27 @@ fraction_equal(amrex::Real a, amrex::Real b) noexcept
             std::max(std::abs(a), std::abs(b)));
 }
 
+bool
+runtime_clock_matches_history(
+    double runtime_time_s,
+    amrex::Real history_time_s) noexcept
+{
+    const amrex::Real projected =
+        static_cast<amrex::Real>(runtime_time_s);
+    const amrex::Real scale =
+        std::max(
+            amrex::Real(1),
+            std::max(
+                std::abs(projected),
+                std::abs(history_time_s)));
+    const amrex::Real tolerance =
+        amrex::Real(8)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * scale;
+    return std::abs(projected - history_time_s)
+        <= tolerance;
+}
+
 void
 validate_runtime_scalars(
     const ERFFireSpreadConfig& config,
@@ -994,13 +1015,15 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
 
     if (first_arrival_.has_committed_sweep()) {
         require(
-            first_arrival_.last_sweep_end_time_s()
-                == static_cast<amrex::Real>(current_time_s_),
+            runtime_clock_matches_history(
+                current_time_s_,
+                first_arrival_.last_sweep_end_time_s()),
             "restored fire runtime clock does not match first-arrival history");
     } else {
         require(
-            first_arrival_.initial_condition_time_s()
-                == static_cast<amrex::Real>(current_time_s_),
+            runtime_clock_matches_history(
+                current_time_s_,
+                first_arrival_.initial_condition_time_s()),
             "restored fire runtime initial clock does not match first-arrival history");
     }
 
@@ -1062,13 +1085,15 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
         "restored fire runtime requires initialized first-arrival history");
     if (first_arrival_.has_committed_sweep()) {
         require(
-            first_arrival_.last_sweep_end_time_s()
-                == static_cast<amrex::Real>(current_time_s_),
+            runtime_clock_matches_history(
+                current_time_s_,
+                first_arrival_.last_sweep_end_time_s()),
             "restored fire runtime clock does not match first-arrival history");
     } else {
         require(
-            first_arrival_.initial_condition_time_s()
-                == static_cast<amrex::Real>(current_time_s_),
+            runtime_clock_matches_history(
+                current_time_s_,
+                first_arrival_.initial_condition_time_s()),
             "restored fire runtime initial clock does not match first-arrival history");
     }
     require(
@@ -2514,8 +2539,8 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 next_combustion.totals();
 
         ERFFireStepDiagnostics diagnostics{
-            start_time_s,
-            end_time_s,
+            start_time_exact_s,
+            end_time_exact_s,
             pre_remesh_vertex_count,
             post_remesh_vertex_count,
             remeshed.stats.vertices_removed,
