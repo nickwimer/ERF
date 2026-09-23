@@ -473,7 +473,8 @@ FireCombustionRaster::advance_from_front_rk2_sweep(
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
     const FireFuelRaster& fuel_raster,
-    amrex::Real dt_s)
+    amrex::Real dt_s,
+    std::size_t temporal_substeps_override)
 {
     validate_spatial_fuel(fuel_raster, true);
     (void)interpolate_fire_front_rk2_sweep(
@@ -495,7 +496,8 @@ FireCombustionRaster::advance_from_front_rk2_sweep(
         burned_after,
         &fuel_raster,
         dt_s,
-        &midpoint_vertices_m);
+        &midpoint_vertices_m,
+        temporal_substeps_override);
 }
 
 inline FireCombustionRasterAdvance

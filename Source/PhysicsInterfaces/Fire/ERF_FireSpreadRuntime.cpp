@@ -112,6 +112,90 @@ runtime_clock_matches_history(
         <= tolerance;
 }
 
+std::size_t
+adaptive_rk2_history_substeps(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    const FireCartesianRasterGeometry2D& geometry,
+    std::size_t minimum_substeps)
+{
+    if (minimum_substeps == 0) {
+        throw std::invalid_argument(
+            "Fire history minimum temporal substeps must be positive");
+    }
+    const amrex::Real max_sample_travel_m =
+        amrex::Real(0.25)
+        * std::min(geometry.dx_m, geometry.dy_m);
+    if (!std::isfinite(max_sample_travel_m)
+        || !(max_sample_travel_m > amrex::Real(0))) {
+        throw std::invalid_argument(
+            "Fire history raster spacing must be finite and positive");
+    }
+
+    const auto& start_components = start_front.components();
+    const auto& end_components = end_front.components();
+    if (start_components.size() != end_components.size()
+        || start_components.size() != midpoint_vertices_m.size()) {
+        throw std::invalid_argument(
+            "Fire RK2 history geometry has mismatched component counts");
+    }
+
+    amrex::Real max_dense_derivative_m =
+        amrex::Real(0);
+    for (std::size_t component = 0;
+         component < start_components.size();
+         ++component) {
+        const auto& start =
+            start_components[component].perimeter.vertices_m();
+        const auto& end =
+            end_components[component].perimeter.vertices_m();
+        const auto& midpoint =
+            midpoint_vertices_m[component];
+        if (start.size() != end.size()
+            || start.size() != midpoint.size()) {
+            throw std::invalid_argument(
+                "Fire RK2 history geometry has mismatched vertex counts");
+        }
+        for (std::size_t i = 0; i < start.size(); ++i) {
+            const FireVec2 derivative_at_start =
+                amrex::Real(2) * (midpoint[i] - start[i]);
+            const FireVec2 derivative_at_end =
+                amrex::Real(2) * (end[i] - midpoint[i]);
+            max_dense_derivative_m =
+                std::max(
+                    max_dense_derivative_m,
+                    std::max(
+                        std::hypot(
+                            derivative_at_start.x,
+                            derivative_at_start.y),
+                        std::hypot(
+                            derivative_at_end.x,
+                            derivative_at_end.y)));
+        }
+    }
+
+    if (!std::isfinite(max_dense_derivative_m)) {
+        throw std::overflow_error(
+            "Fire RK2 history motion is not finite");
+    }
+
+    const std::size_t motion_substeps =
+        std::max<std::size_t>(
+            1,
+            static_cast<std::size_t>(
+                std::ceil(
+                    max_dense_derivative_m
+                    / max_sample_travel_m)));
+    const std::size_t selected =
+        std::max(minimum_substeps, motion_substeps);
+    if (selected > 4096) {
+        throw std::runtime_error(
+            "Fire history integration requires more than 4096 temporal samples; reduce the timestep");
+    }
+    return selected;
+}
+
 void
 validate_runtime_scalars(
     const ERFFireSpreadConfig& config,
@@ -1842,6 +1926,13 @@ ERFFireSpreadRuntime::advance_wind_impl(
             {FireFrontRole::Outer, advanced}});
     const std::vector<std::vector<FireVec2>> midpoint_vertices_m{
         std::move(rk2_advance.midpoint_vertices_m)};
+    const std::size_t history_temporal_substeps =
+        adaptive_rk2_history_substeps(
+            front_,
+            midpoint_vertices_m,
+            advanced_front,
+            config_.raster_geometry,
+            config_.combustion_options.temporal_substeps);
 
     FireFirstArrivalRaster next_arrival = first_arrival_;
     const FireFirstArrivalRasterUpdate arrival_update =
@@ -1852,7 +1943,7 @@ ERFFireSpreadRuntime::advance_wind_impl(
             start_time_s,
             end_time_s,
             config_.arrival_time_tolerance_s,
-            config_.combustion_options.temporal_substeps);
+            history_temporal_substeps);
 
     FireBurnedFractionRaster next_burned = burned_fraction_;
     const FireRasterBurnedAreaUpdate burned_update =
@@ -1860,7 +1951,7 @@ ERFFireSpreadRuntime::advance_wind_impl(
             front_,
             midpoint_vertices_m,
             advanced_front,
-            config_.combustion_options.temporal_substeps);
+            history_temporal_substeps);
 
     FireCombustionRaster next_combustion = combustion_;
     const FireCombustionRasterAdvance combustion_update =
@@ -1870,7 +1961,8 @@ ERFFireSpreadRuntime::advance_wind_impl(
             advanced_front,
             burned_fraction_,
             next_burned,
-            dt_s);
+            dt_s,
+            history_temporal_substeps);
 
     const std::size_t pre_remesh_vertex_count = advanced.size();
     FirePerimeterRemeshResult remeshed =
@@ -2396,6 +2488,13 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 std::move(
                     *topology_advance
                         .completed_front);
+            const std::size_t history_temporal_substeps =
+                adaptive_rk2_history_substeps(
+                    working_front,
+                    topology_advance.rk2_midpoint_vertices_m,
+                    completed_front,
+                    config_.raster_geometry,
+                    config_.combustion_options.temporal_substeps);
 
             const FireBurnedFractionRaster
                 burned_before_segment =
@@ -2414,9 +2513,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                                 config_
                                     .arrival_time_tolerance_s,
                                 completed_dt_s),
-                            config_
-                                .combustion_options
-                                .temporal_substeps);
+                            history_temporal_substeps);
 
             const FireRasterBurnedAreaUpdate
                 burned_update =
@@ -2440,7 +2537,8 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             burned_before_segment,
                             next_burned,
                             *spatial_fuel_raster_,
-                            completed_dt_s)
+                            completed_dt_s,
+                            history_temporal_substeps)
                     : next_combustion
                         .advance_from_front_rk2_sweep(
                             working_front,
@@ -2448,7 +2546,8 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             completed_front,
                             burned_before_segment,
                             next_burned,
-                            completed_dt_s);
+                            completed_dt_s,
+                            history_temporal_substeps);
 
             newly_arrived_cell_count +=
                 arrival_update

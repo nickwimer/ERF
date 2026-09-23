@@ -1486,7 +1486,8 @@ FireCombustionRaster::advance_from_front_rk2_sweep(
     const FireFront& end_front,
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
-    amrex::Real dt_s)
+    amrex::Real dt_s,
+    std::size_t temporal_substeps_override)
 {
     (void)interpolate_fire_front_rk2_sweep(
         start_front, midpoint_vertices_m, end_front, amrex::Real(0));
@@ -1507,7 +1508,8 @@ FireCombustionRaster::advance_from_front_rk2_sweep(
         burned_after,
         nullptr,
         dt_s,
-        &midpoint_vertices_m);
+        &midpoint_vertices_m,
+        temporal_substeps_override);
 }
 
 FireCombustionRasterAdvance
@@ -1548,7 +1550,8 @@ detail::advance_fire_combustion_vertex_sweep(
     const FireFuelRaster* fuel_raster,
     amrex::Real dt_s,
     const std::vector<std::vector<FireVec2>>*
-        front_sweep_midpoint_vertices)
+        front_sweep_midpoint_vertices,
+    std::size_t temporal_substeps_override)
 {
     auto& geometry_ = raster.geometry_;
     auto& parameters_ = raster.parameters_;
@@ -1669,9 +1672,18 @@ detail::advance_fire_combustion_vertex_sweep(
         std::isfinite(dt_s) && dt_s > amrex::Real(0),
         "fire combustion raster dt must be finite and positive");
 
+    const std::size_t selected_temporal_substeps =
+        temporal_substeps_override > 0
+        ? temporal_substeps_override
+        : options_.temporal_substeps;
+    if (selected_temporal_substeps == 0) {
+        throw std::invalid_argument(
+            "fire combustion raster temporal substeps must be positive");
+    }
+
     const amrex::Real substep_dt_s =
         dt_s
-        / static_cast<amrex::Real>(options_.temporal_substeps);
+        / static_cast<amrex::Real>(selected_temporal_substeps);
     const amrex::Real half_substep_dt_s =
         amrex::Real(0.5) * substep_dt_s;
 
@@ -1681,14 +1693,14 @@ detail::advance_fire_combustion_vertex_sweep(
         throw std::invalid_argument(
             "fire combustion raster temporal substep is not representable");
     }
-    if (options_.temporal_substeps
+    if (selected_temporal_substeps
         > static_cast<std::size_t>(
             std::numeric_limits<int>::max())) {
         throw std::invalid_argument(
             "fire combustion raster temporal substep count exceeds int");
     }
     const int temporal_substeps =
-        static_cast<int>(options_.temporal_substeps);
+        static_cast<int>(selected_temporal_substeps);
 
     amrex::MultiFab next_states(
         surface_layout_.box_array(),
