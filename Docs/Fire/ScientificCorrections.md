@@ -95,8 +95,11 @@ rates to test wet half-spaces, thin wet strips, fast-to-slow travel, reflection
 of propagation direction, and contact timing. In the contact case the front
 travels 0.2 m at 1 m/s before stopping. A cell entrance 0.1 m from its starting
 position must be reached at 0.1 s, not halfway through a 1 s atmospheric step.
-These tests exercise the new integration primitive; native runtime/coupling
-regressions remain necessary in addition to those focused tests.
+These tests exercise the integration primitive; native runtime/coupling
+regressions remain necessary in addition to those focused tests. A later
+re-audit added a curved RK2 dense-trajectory case in which the start/end chord
+returns to its original material while the true explicit-midpoint continuous
+extension enters a thin wet strip.
 
 This is not a general solution of obstacle sliding or discontinuous
 anisotropic corner propagation. Corner events that make no representable
@@ -105,6 +108,91 @@ a folded motion larger than its exact swept region. Accuracy and performance
 for complicated material boundaries require front-resolution and timestep
 studies. The previous unsupported topology combinations are not enabled by
 this change.
+
+## RK2-consistent physical histories
+
+A second adversarial pass found that the propagated front endpoint used
+explicit-midpoint/RK2, while first arrival, burned area, and combustion
+ignition cohorts were still reconstructed from a straight start-to-end front
+interpolation. In spatially varying wind or terrain that straight chord is not
+the trajectory represented by the RK2 stages.
+
+Completed fixed-topology advances now retain the explicit-midpoint stage
+geometry and use the order-2 continuous extension
+
+    x(a) = x_n
+         + 2*a*(1-a)*(x_stage - x_n)
+         + a*a*(x_{n+1} - x_n),    0 <= a <= 1.
+
+Arrival-time bisection, burned-area sampling, combustion ignition cohorts, and
+ordinary material-interface traversal all use this same dense trajectory.
+Material traversal approximates each quadratic vertex path by sufficiently
+fine chords and batches all raster samples into one collective query. The
+chord subdivision is a safety/localization approximation, not a claim of an
+exact analytic raster/quadratic intersection.
+
+Topology-changing events retain their separately localized event geometry.
+General discontinuous obstacle sliding/corner rerouting remains unsupported.
+
+## Authoritative coupling clock precision
+
+ERF owns the coupling time as `double`. The Fire runtime previously accumulated
+its authoritative clock in `amrex::Real` and compared it exactly with ERF's
+`double` time after narrowing. That is safe in the tested DOUBLE build but can
+desynchronize in a SINGLE build after ordinary repeated timesteps.
+
+The Fire runtime/checkpoint metadata clock and step diagnostic start/end times
+are now `double`. Geometry, rates, burned fractions, and first-arrival raster
+values remain `amrex::Real`. The first-arrival history clock therefore remains
+a representational `amrex::Real` clock and restart validation compares it with
+the authoritative double clock using a precision-scaled tolerance. This change
+prevents coupling-clock drift; it does not turn all Fire history fields into
+double precision.
+
+## Motion-adaptive history resolution
+
+`fire.combustion_temporal_substeps` remains the persisted/configured minimum
+number of ignition-history bins for restart compatibility. It is no longer
+assumed to be sufficient by itself for front-history geometry.
+
+For each completed RK2 segment the runtime estimates the largest derivative
+of the explicit-midpoint dense trajectory at the two interval endpoints and
+increases the history sample count until the maximum per-sample front travel
+is at most one quarter of the minimum Fire-raster cell spacing. The same
+selected count is used by first arrival, burned fraction, and combustion
+cohorts. A request above 4096 history samples fails closed and asks for a
+smaller timestep.
+
+This is Fire-local history quadrature control. It does not replace ERF's
+atmospheric CFL timestep and it does not introduce atmosphere/Fire
+predictor-corrector coupling.
+
+## Feedback-column truncation diagnostic
+
+The production atmospheric source continues to normalize the exponential
+vertical deposition shape over the finite represented ERF column, preserving
+the existing conservative policy that deposits all step-integrated Fire
+release into the model atmosphere.
+
+The source API now exposes the corresponding finite-column diagnostic:
+
+    represented = 1 - exp(-z_top/H)
+    tail        = exp(-z_top/H)
+    amplification = 1 / represented.
+
+On the first two-way source construction, ERF-Fire computes the minimum
+physical model-top AGL height from the actual level-0 nodal geometry and prints
+the represented fraction, the unresolved exponential tail above model top,
+and the normalization amplification. A tail above 5 percent is explicitly
+flagged. This is a diagnostic, not a silent switch to the WRF-SFIRE
+flux-divergence policy.
+
+A projector budget oracle independently reconstructs sensible energy from
+`rho*theta` tendency using local Exner/volume/dt and reconstructs released
+water from `rho*q_v` tendency. Both must close to the step-integrated Fire
+feedback for a nonuniform pressure/volume column. This verifies the source
+projection budget itself; it is not an observational heat-flux validation or
+a proof that every ERF dycore process preserves that budget in a coupled run.
 
 ## Coupled time accuracy is unchanged
 
@@ -117,25 +205,46 @@ iteration is added here, and no second-order coupled-accuracy claim is made.
 
 ## Verification status and use
 
-The new native test sources are registered in the existing
+The native test sources are registered in the existing
 `erf_fire_unit_tests` target and use precision-scaled tolerances where
-appropriate. The GNU Make header manifest includes the added headers.
+appropriate. For MPI-enabled builds using CMake 3.29 or newer, registered
+GoogleTest executables now use the configured one-rank MPI `TEST_LAUNCHER`
+and `PRE_TEST` discovery. This avoids direct Cray/Slurm execution without a
+PMI context while still allowing the target to be built outside a running
+test allocation.
 
-During preparation, isolated C++ terrain tests were run in float and double
-with the production Richards ellipse implementation and minimal local type/
-test-runner shims. The six material-event examples were also run in float and
-double with AddressSanitizer/UndefinedBehaviorSanitizer, using local test
-doubles for raster storage, traversal, topology and arrival dependencies.
-Those isolated checks are not executions of native AMReX, MPI, CUDA, or the
-complete ERF runtime. A native ERF build and its registered tests were not run
-in that environment. Do not infer native integration success from the local
-component checks.
+Before the second re-audit series described above, commit
+`f1c5a3665804ed1efa81d5a5e98663b685155d10` was exercised natively on
+Kestrel H100 GPUs. The evidence at that point included:
 
-Before a production stress test, rebuild the configured Fire-enabled target
-and run `FireScientific*`, the existing `FireSpreadRuntime*`, combustion,
-terrain-coupling, barrier and restart regressions through the platform's
-configured MPI/Slurm launcher. Then perform timestep/front-resolution studies.
-The changes do not add spatial-fuel checkpoint persistence where the runtime
-already rejects it. Use fresh runs for corrected-physics comparisons: old
-terrain or heavy-fuel histories were generated with a different model and
-must not be treated as equivalent corrected-physics baselines.
+- native CUDA/H100 compilation and link of `erf_fire_unit_tests`;
+- 14/14 targeted `FireScientific*` tests;
+- 118/118 supporting Fire physics/history tests;
+- 31/31 `FireSpreadRuntime.*` tests;
+- two-rank CUDA/MPI smoke, decomposition invariance, and 1->2-rank restart;
+- spatial-fuel/NonBurnable v4 rank-change restart;
+- three coupled terrain/restart integration cases; and
+- all 21 remaining Fire integration regressions in the selected suite.
+
+A CFL-controlled two-way terrain/background-wind study at CFL 0.8, 0.4, 0.2,
+and 0.1 showed monotonically decreasing Fire and atmospheric differences.
+The thermodynamic `theta` and `rhoQ1` max-norm differences were close to
+first-order under the later refinements; velocity max norms converged more
+slowly but continued to decrease. This is numerical timestep-refinement
+evidence for the explicit outer coupling, not physical validation.
+
+The later RK2-dense-history, double-clock, adaptive-history, feedback-column,
+budget-oracle, and CTest-launcher commits were source-reviewed but had NOT yet
+been rebuilt or executed on Kestrel when this document was updated. They must
+therefore pass a fresh native CUDA/MPI regression gate before being treated as
+verified implementation.
+
+The original isolated float/double terrain and material-event harnesses remain
+useful component evidence, but they are weaker than the native Kestrel tests
+and are not observational validation.
+
+Use fresh runs for corrected-physics comparisons: old terrain or heavy-fuel
+histories generated before these corrections are not equivalent baselines.
+General obstacle sliding/rerouting, atmosphere AMR levels above zero,
+prognostic fuel moisture, and observational fire/heat-flux validation remain
+outside the established capability.
