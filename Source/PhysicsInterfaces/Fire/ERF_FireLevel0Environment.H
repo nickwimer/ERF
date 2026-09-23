@@ -98,6 +98,17 @@ private:
  * immersed forcing, buildings, and configured AMR levels above zero remain
  * outside the current scope.
  */
+/**
+ * Minimum physical model-top AGL height over all level-0 horizontal cells.
+ *
+ * The bottom and top faces are taken directly from z_phys_nd and reduced with
+ * the same four-corner cell-face average used by terrain source projection.
+ * This is a diagnostic geometry query; it does not alter terrain or sources.
+ */
+[[nodiscard]] amrex::Real
+erf_fire_level0_min_column_top_agl(
+    const ERFFireLevel0EnvironmentInputs& inputs);
+
 [[nodiscard]] FireTerrainSurface
 make_erf_level0_terrain_surface (
     const ERFFireLevel0EnvironmentInputs& inputs);

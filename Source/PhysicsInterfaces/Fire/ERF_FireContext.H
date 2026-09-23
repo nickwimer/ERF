@@ -103,6 +103,8 @@ private:
     double atmospheric_source_time_ =
         std::numeric_limits<double>::quiet_NaN();
 
+    bool feedback_column_diagnostic_emitted_{false};
+
     int step_index_ = 0;
 };
 

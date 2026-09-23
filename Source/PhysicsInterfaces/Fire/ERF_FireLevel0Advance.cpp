@@ -193,6 +193,34 @@ ERFFireContext::advance_level0(
         const ERFFireAtmosphericSourceOptions source_options{
             runtime_options_.feedback_extinction_depth_m};
 
+        if (!feedback_column_diagnostic_emitted_) {
+            const Real min_top_agl_m =
+                erf_fire_level0_min_column_top_agl(
+                    environment_inputs);
+            const auto coverage =
+                erf_fire_exponential_column_coverage(
+                    min_top_agl_m,
+                    source_options.extinction_depth_m);
+
+            amrex::Print()
+                << "ERF-Fire feedback-column diagnostic:"
+                << " min_model_top_agl_m=" << min_top_agl_m
+                << " represented_exponential_fraction="
+                << coverage.represented_fraction
+                << " unrepresented_tail_fraction="
+                << coverage.unrepresented_tail_fraction
+                << " finite_column_normalization_amplification="
+                << coverage.normalization_amplification;
+            if (coverage.unrepresented_tail_fraction
+                > Real(0.05)) {
+                amrex::Print()
+                    << " WARNING=finite-column normalization materially "
+                       "amplifies the represented exponential profile";
+            }
+            amrex::Print() << "\n";
+            feedback_column_diagnostic_emitted_ = true;
+        }
+
         if (environment_inputs.mesh_type
             == MeshType::VariableDz) {
             if (inputs.detJ_cc == nullptr) {

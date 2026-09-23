@@ -800,6 +800,71 @@ validate_terrain_surface_scope_and_layout (
 } // namespace
 
 
+amrex::Real
+erf_fire_level0_min_column_top_agl(
+    const ERFFireLevel0EnvironmentInputs& inputs)
+{
+    validate_terrain_surface_scope_and_layout(inputs);
+
+    const amrex::Box& domain = inputs.geometry.Domain();
+    const amrex::Box nodal_domain =
+        amrex::convert(
+            domain,
+            amrex::IntVect(1, 1, 1));
+
+    amrex::Box bottom(nodal_domain);
+    bottom.setRange(2, nodal_domain.smallEnd(2));
+    amrex::Box top(nodal_domain);
+    top.setRange(2, nodal_domain.bigEnd(2));
+
+    const amrex::FArrayBox bottom_host =
+        replicated_host_copy(inputs.z_phys_nd, bottom, 0);
+    const amrex::FArrayBox top_host =
+        replicated_host_copy(inputs.z_phys_nd, top, 0);
+
+    const auto zlo = bottom_host.const_array();
+    const auto zhi = top_host.const_array();
+    const int kb = bottom.smallEnd(2);
+    const int kt = top.smallEnd(2);
+
+    amrex::Real minimum =
+        std::numeric_limits<amrex::Real>::max();
+
+    for (int j = domain.smallEnd(1);
+         j <= domain.bigEnd(1);
+         ++j) {
+        for (int i = domain.smallEnd(0);
+             i <= domain.bigEnd(0);
+             ++i) {
+            const amrex::Real ground =
+                amrex::Real(0.25)
+                * (zlo(i, j, kb)
+                   + zlo(i + 1, j, kb)
+                   + zlo(i, j + 1, kb)
+                   + zlo(i + 1, j + 1, kb));
+            const amrex::Real ceiling =
+                amrex::Real(0.25)
+                * (zhi(i, j, kt)
+                   + zhi(i + 1, j, kt)
+                   + zhi(i, j + 1, kt)
+                   + zhi(i + 1, j + 1, kt));
+            const amrex::Real top_agl =
+                ceiling - ground;
+            require(
+                std::isfinite(top_agl)
+                    && top_agl > amrex::Real(0),
+                "Fire feedback diagnostic requires positive finite model-top AGL height");
+            minimum = std::min(minimum, top_agl);
+        }
+    }
+
+    require(
+        std::isfinite(minimum)
+            && minimum > amrex::Real(0),
+        "Fire feedback diagnostic model-top AGL minimum is invalid");
+    return minimum;
+}
+
 FireTerrainSurface
 make_erf_level0_terrain_surface (
     const ERFFireLevel0EnvironmentInputs& inputs)

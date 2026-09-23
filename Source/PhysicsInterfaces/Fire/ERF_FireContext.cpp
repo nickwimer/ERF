@@ -50,6 +50,7 @@ ERFFireContext::configure_from_inputs(
     const ERFFireHostCapabilities& host)
 {
     runtime_options_ = read_erf_fire_runtime_options(host);
+    feedback_column_diagnostic_emitted_ = false;
 }
 
 } // namespace ERFFire
