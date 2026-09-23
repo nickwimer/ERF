@@ -1835,6 +1835,308 @@ FireFirstArrivalRaster::update_from_front_linear_sweep (
 }
 
 FireFirstArrivalRasterUpdate
+FireFirstArrivalRaster::update_from_front_rk2_sweep (
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    amrex::Real start_time_s,
+    amrex::Real end_time_s,
+    amrex::Real time_tolerance_s,
+    std::size_t temporal_substeps)
+{
+    if (has_committed_sweep_
+        && start_time_s != last_sweep_end_time_s_) {
+        throw std::invalid_argument(
+            "Fire first-arrival raster sweeps must be contiguous in time");
+    }
+    if (!has_committed_sweep_
+        && has_initial_condition_
+        && start_time_s != initial_condition_time_s_) {
+        throw std::invalid_argument(
+            "Fire first-arrival first sweep must start at the initial-condition time");
+    }
+
+    if (temporal_substeps == 0) {
+        throw std::invalid_argument(
+            "Fire first-arrival front RK2 sweep temporal_substeps must be positive");
+    }
+    if (!std::isfinite(start_time_s)
+        || !std::isfinite(end_time_s)
+        || !std::isfinite(time_tolerance_s)) {
+        throw std::invalid_argument(
+            "Fire first-arrival front sweep times and tolerance must be finite");
+    }
+    if (!(end_time_s > start_time_s)) {
+        throw std::invalid_argument(
+            "Fire first-arrival front sweep end time must exceed start time");
+    }
+
+    const amrex::Real duration_s =
+        end_time_s - start_time_s;
+
+    if (!std::isfinite(duration_s)
+        || !(duration_s > amrex::Real(0.0))) {
+        throw std::overflow_error(
+            "Fire first-arrival front sweep duration is not finite and positive");
+    }
+    if (!(time_tolerance_s > amrex::Real(0.0))
+        || time_tolerance_s > duration_s) {
+        throw std::invalid_argument(
+            "Fire first-arrival front sweep tolerance must lie in (0,duration]");
+    }
+    if (!(start_time_s + time_tolerance_s
+          > start_time_s)) {
+        throw std::invalid_argument(
+            "Fire first-arrival front sweep tolerance is not representable");
+    }
+
+    (void)interpolate_fire_front_rk2_sweep(
+        start_front,
+        midpoint_vertices_m,
+        end_front,
+        amrex::Real(0.0));
+
+    std::vector<FireFront> sampled_fronts;
+    sampled_fronts.reserve(
+        temporal_substeps + 1);
+    sampled_fronts.push_back(start_front);
+
+    for (std::size_t sample = 1;
+         sample <= temporal_substeps;
+         ++sample) {
+        const amrex::Real alpha =
+            static_cast<amrex::Real>(sample)
+            / static_cast<amrex::Real>(
+                temporal_substeps);
+
+        sampled_fronts.push_back(
+            interpolate_fire_front_rk2_sweep(
+                start_front,
+                midpoint_vertices_m,
+                end_front,
+                alpha));
+    }
+
+    const auto has_positive_coverage =
+        [](const FireFront& sample_front,
+           const FireCartesianCell2D& cell) {
+            return fire_front_cell_intersection_area_m2(
+                       sample_front,
+                       cell)
+                > amrex::Real(0.0);
+        };
+
+    const auto first_arrival_for_cell =
+        [&](const FireCartesianCell2D& cell)
+            -> FireCellArrivalResult {
+            if (has_positive_coverage(
+                    sampled_fronts.front(),
+                    cell)) {
+                return {
+                    true,
+                    start_time_s
+                };
+            }
+
+            for (std::size_t sample = 1;
+                 sample <= temporal_substeps;
+                 ++sample) {
+                if (!has_positive_coverage(
+                        sampled_fronts[sample],
+                        cell)) {
+                    continue;
+                }
+
+                amrex::Real lower_alpha =
+                    static_cast<amrex::Real>(
+                        sample - 1)
+                    / static_cast<amrex::Real>(
+                        temporal_substeps);
+                amrex::Real upper_alpha =
+                    static_cast<amrex::Real>(
+                        sample)
+                    / static_cast<amrex::Real>(
+                        temporal_substeps);
+
+                amrex::Real lower_time_s =
+                    start_time_s
+                    + lower_alpha * duration_s;
+                amrex::Real upper_time_s =
+                    start_time_s
+                    + upper_alpha * duration_s;
+
+                for (;;) {
+                    if (upper_time_s - lower_time_s
+                        <= time_tolerance_s) {
+                        break;
+                    }
+
+                    const amrex::Real middle_alpha =
+                        amrex::Real(0.5)
+                        * (lower_alpha
+                           + upper_alpha);
+
+                    if (middle_alpha == lower_alpha
+                        || middle_alpha == upper_alpha) {
+                        break;
+                    }
+
+                    const amrex::Real middle_time_s =
+                        start_time_s
+                        + middle_alpha * duration_s;
+
+                    if (middle_time_s == lower_time_s
+                        || middle_time_s == upper_time_s) {
+                        break;
+                    }
+
+                    const FireFront middle_front =
+                        interpolate_fire_front_linear_sweep(
+                            start_front,
+                            end_front,
+                            middle_alpha);
+
+                    if (has_positive_coverage(
+                            middle_front,
+                            cell)) {
+                        upper_alpha =
+                            middle_alpha;
+                        upper_time_s =
+                            middle_time_s;
+                    } else {
+                        lower_alpha =
+                            middle_alpha;
+                        lower_time_s =
+                            middle_time_s;
+                    }
+                }
+
+                return {
+                    true,
+                    upper_time_s
+                };
+            }
+
+            return {
+                false,
+                amrex::Real(0.0)
+            };
+        };
+
+    amrex::iMultiFab next_arrived(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        1,
+        0,
+        fire_surface_mf_info());
+    amrex::MultiFab next_first_arrival_time_s(
+        surface_layout_.box_array(),
+        surface_layout_.distribution_map(),
+        1,
+        0,
+        fire_surface_mf_info());
+
+    copy_distributed_state(
+        arrived_mf_,
+        first_arrival_time_mf_,
+        next_arrived,
+        next_first_arrival_time_s);
+
+    amrex::Long local_newly_arrived_cell_count = 0;
+    std::string local_error;
+
+    try {
+        for (amrex::MFIter mfi(next_arrived);
+             mfi.isValid();
+             ++mfi) {
+            const amrex::Box& box =
+                mfi.validbox();
+            const auto next_mask =
+                next_arrived.array(mfi);
+            const auto next_times =
+                next_first_arrival_time_s.array(mfi);
+
+            for (int j = box.smallEnd(1);
+                 j <= box.bigEnd(1);
+                 ++j) {
+                for (int i = box.smallEnd(0);
+                     i <= box.bigEnd(0);
+                     ++i) {
+                    if (next_mask(i, j, 0) != 0) {
+                        continue;
+                    }
+
+                    const FireCellArrivalResult query =
+                        first_arrival_for_cell(
+                            cell_bounds(
+                                static_cast<std::size_t>(i),
+                                static_cast<std::size_t>(j)));
+
+                    if (!query.arrived) {
+                        continue;
+                    }
+
+                    next_mask(i, j, 0) = 1;
+                    next_times(i, j, 0) =
+                        query.arrival_time_s;
+                    ++local_newly_arrived_cell_count;
+                }
+            }
+        }
+    } catch (const std::exception& error) {
+        local_error = error.what();
+    } catch (...) {
+        local_error =
+            "unknown local Fire first-arrival front RK2 sweep error";
+    }
+
+    int failed =
+        local_error.empty() ? 0 : 1;
+    amrex::ParallelDescriptor::ReduceIntMax(
+        failed);
+
+    if (failed != 0) {
+        if (!local_error.empty()) {
+            throw std::runtime_error(
+                "distributed Fire first-arrival front RK2 sweep failed: "
+                + local_error);
+        }
+
+        throw std::runtime_error(
+            "distributed Fire first-arrival front RK2 sweep failed on another MPI rank");
+    }
+
+    amrex::ParallelDescriptor::ReduceLongSum(
+        local_newly_arrived_cell_count);
+
+    const std::size_t newly_arrived_cell_count =
+        static_cast<std::size_t>(
+            local_newly_arrived_cell_count);
+
+    if (arrived_cell_count_ > cell_count()
+        || newly_arrived_cell_count
+            > cell_count() - arrived_cell_count_) {
+        throw std::logic_error(
+            "Fire first-arrival count exceeds raster cell count");
+    }
+
+    arrived_mf_ =
+        std::move(next_arrived);
+    first_arrival_time_mf_ =
+        std::move(next_first_arrival_time_s);
+    arrived_cell_count_ +=
+        newly_arrived_cell_count;
+    has_committed_sweep_ = true;
+    last_sweep_end_time_s_ =
+        end_time_s;
+
+    return {
+        arrived_cell_count_,
+        newly_arrived_cell_count
+    };
+}
+
+FireFirstArrivalRasterUpdate
 FireFirstArrivalRaster::update_from_sweep (
     const FirePerimeter& start_perimeter,
     const FirePerimeter& end_perimeter,

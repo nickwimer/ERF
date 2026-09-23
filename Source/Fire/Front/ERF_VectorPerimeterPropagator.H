@@ -30,8 +30,25 @@ using NormalSpeedBatchFunction = std::function<std::vector<amrex::Real>(
     const std::vector<FireVec2>& outward_normals,
     amrex::Real time_s)>;
 
+struct FirePerimeterRk2AdvanceResult
+{
+    FirePerimeter perimeter;
+    std::vector<FireVec2> midpoint_vertices_m;
+};
+
 /**
- * Advance a fixed-topology perimeter by one explicit midpoint/RK2 step.
+ * Advance a fixed-topology perimeter by one explicit midpoint/RK2 step and
+ * retain the stage geometry required for RK2-consistent dense output.
+ */
+[[nodiscard]] FirePerimeterRk2AdvanceResult
+advance_perimeter_rk2_with_dense_output(
+    const FirePerimeter& perimeter,
+    amrex::Real time_s,
+    amrex::Real dt_s,
+    const NormalSpeedFunction& normal_speed_mps);
+
+/**
+ * Compatibility wrapper returning only the RK2 endpoint.
  */
 [[nodiscard]] FirePerimeter advance_perimeter_rk2(
     const FirePerimeter& perimeter,

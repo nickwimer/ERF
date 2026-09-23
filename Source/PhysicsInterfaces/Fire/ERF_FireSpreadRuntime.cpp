@@ -1788,36 +1788,48 @@ ERFFireSpreadRuntime::advance_wind_impl(
             spread.ellipse, outward_normal);
     };
 
-    FirePerimeter advanced =
-        advance_perimeter_rk2(
+    FirePerimeterRk2AdvanceResult rk2_advance =
+        advance_perimeter_rk2_with_dense_output(
             perimeter(), start_time_s, dt_s, normal_speed);
+    FirePerimeter advanced =
+        std::move(rk2_advance.perimeter);
 
     // RK2 samples current and midpoint locations. Explicitly reject a final
     // perimeter outside the supported physical environment before committing
     // history, since the endpoint is not itself an RK sampling location.
     require_perimeter_inside_environment(advanced, environment);
 
+    FireFront advanced_front(
+        std::vector<FireFrontComponent>{
+            {FireFrontRole::Outer, advanced}});
+    const std::vector<std::vector<FireVec2>> midpoint_vertices_m{
+        std::move(rk2_advance.midpoint_vertices_m)};
+
     FireFirstArrivalRaster next_arrival = first_arrival_;
     const FireFirstArrivalRasterUpdate arrival_update =
-        next_arrival.update_from_sweep(
-            perimeter(),
-            advanced,
+        next_arrival.update_from_front_rk2_sweep(
+            front_,
+            midpoint_vertices_m,
+            advanced_front,
             start_time_s,
             end_time_s,
-            config_.arrival_time_tolerance_s);
+            config_.arrival_time_tolerance_s,
+            config_.combustion_options.temporal_substeps);
 
     FireBurnedFractionRaster next_burned = burned_fraction_;
     const FireRasterBurnedAreaUpdate burned_update =
-        next_burned.update_from_linear_sweep(
-            perimeter(),
-            advanced,
+        next_burned.update_from_front_rk2_sweep(
+            front_,
+            midpoint_vertices_m,
+            advanced_front,
             config_.combustion_options.temporal_substeps);
 
     FireCombustionRaster next_combustion = combustion_;
     const FireCombustionRasterAdvance combustion_update =
-        next_combustion.advance_from_linear_sweep(
-            perimeter(),
-            advanced,
+        next_combustion.advance_from_front_rk2_sweep(
+            front_,
+            midpoint_vertices_m,
+            advanced_front,
             burned_fraction_,
             next_burned,
             dt_s);
@@ -2343,8 +2355,9 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             const FireFirstArrivalRasterUpdate
                 arrival_update =
                     next_arrival
-                        .update_from_front_linear_sweep(
+                        .update_from_front_rk2_sweep(
                             working_front,
+                            topology_advance.rk2_midpoint_vertices_m,
                             completed_front,
                             segment_start_time_s,
                             completed_time_s,
@@ -2359,8 +2372,9 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
             const FireRasterBurnedAreaUpdate
                 burned_update =
                     next_burned
-                        .update_from_front_linear_sweep(
+                        .update_from_front_rk2_sweep(
                             working_front,
+                            topology_advance.rk2_midpoint_vertices_m,
                             completed_front,
                             config_
                                 .combustion_options
@@ -2370,16 +2384,18 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 combustion_update =
                     spatial_fuel_raster_
                     ? next_combustion
-                        .advance_from_front_linear_sweep(
+                        .advance_from_front_rk2_sweep(
                             working_front,
+                            topology_advance.rk2_midpoint_vertices_m,
                             completed_front,
                             burned_before_segment,
                             next_burned,
                             *spatial_fuel_raster_,
                             completed_dt_s)
                     : next_combustion
-                        .advance_from_front_linear_sweep(
+                        .advance_from_front_rk2_sweep(
                             working_front,
+                            topology_advance.rk2_midpoint_vertices_m,
                             completed_front,
                             burned_before_segment,
                             next_burned,

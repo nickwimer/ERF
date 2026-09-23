@@ -75,8 +75,8 @@ require_counter_clockwise (
 
 } // namespace
 
-FirePerimeter
-advance_perimeter_rk2 (
+FirePerimeterRk2AdvanceResult
+advance_perimeter_rk2_with_dense_output (
     const FirePerimeter& perimeter,
     amrex::Real time_s,
     amrex::Real dt_s,
@@ -97,7 +97,7 @@ advance_perimeter_rk2 (
     }
 
     if (dt_s == amrex::Real(0.0)) {
-        return perimeter;
+        return {perimeter, perimeter.vertices_m()};
     }
 
     const auto& initial_vertices = perimeter.vertices_m();
@@ -134,7 +134,21 @@ advance_perimeter_rk2 (
     }
 
     require_counter_clockwise(final_vertices, "RK2 final state");
-    return FirePerimeter(std::move(final_vertices));
+    return {
+        FirePerimeter(std::move(final_vertices)),
+        midpoint.vertices_m()
+    };
+}
+
+FirePerimeter
+advance_perimeter_rk2 (
+    const FirePerimeter& perimeter,
+    amrex::Real time_s,
+    amrex::Real dt_s,
+    const NormalSpeedFunction& normal_speed_mps)
+{
+    return advance_perimeter_rk2_with_dense_output(
+        perimeter, time_s, dt_s, normal_speed_mps).perimeter;
 }
 
 FirePerimeter

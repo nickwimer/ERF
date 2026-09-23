@@ -1,4 +1,5 @@
 #include <ERF_VectorPerimeterPropagator.H>
+#include <ERF_FirePerimeterSweep.H>
 #include "ERF_FireTestUtils.H"
 
 #include <gtest/gtest.h>
@@ -302,3 +303,46 @@ TEST(FirePropagation, RejectsInvalidIntegratorInputs)
 }
 
 } // namespace
+
+
+TEST(FirePropagation, ExplicitMidpointDenseOutputUsesStageAndEndpoint)
+{
+    using ERFFire::FireFront;
+    using ERFFire::FireFrontComponent;
+    using ERFFire::FireFrontRole;
+
+    const FireFront start(
+        std::vector<FireFrontComponent>{
+            {FireFrontRole::Outer,
+             FirePerimeter(
+                 std::vector<FireVec2>{
+                     {amrex::Real(0), amrex::Real(0)},
+                     {amrex::Real(2), amrex::Real(0)},
+                     {amrex::Real(0), amrex::Real(2)}})}
+        });
+    const std::vector<std::vector<FireVec2>> stage{{
+        {amrex::Real(1), amrex::Real(0)},
+        {amrex::Real(3), amrex::Real(0)},
+        {amrex::Real(1), amrex::Real(2)}}};
+    const FireFront end(
+        std::vector<FireFrontComponent>{
+            {FireFrontRole::Outer,
+             FirePerimeter(
+                 std::vector<FireVec2>{
+                     {amrex::Real(3), amrex::Real(0)},
+                     {amrex::Real(5), amrex::Real(0)},
+                     {amrex::Real(3), amrex::Real(2)}})}
+        });
+
+    const auto sample =
+        ERFFire::interpolate_fire_front_rk2_sweep(
+            start, stage, end, amrex::Real(0.5));
+    const auto& v =
+        sample.components()[0].perimeter.vertices_m();
+
+    EXPECT_EQ(v[0].x, amrex::Real(1.25));
+    EXPECT_EQ(v[1].x, amrex::Real(3.25));
+    EXPECT_EQ(v[2].x, amrex::Real(1.25));
+    EXPECT_EQ(v[0].y, amrex::Real(0));
+    EXPECT_EQ(v[2].y, amrex::Real(2));
+}

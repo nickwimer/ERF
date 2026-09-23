@@ -116,6 +116,68 @@ interpolate_fire_front_linear_sweep(
 }
 
 FireFront
+interpolate_fire_front_rk2_sweep(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    amrex::Real alpha)
+{
+    const auto& start_components = start_front.components();
+    const auto& end_components = end_front.components();
+    if (start_components.size() != end_components.size()
+        || start_components.size() != midpoint_vertices_m.size()) {
+        throw std::invalid_argument(
+            "Fire RK2 front sweep requires matching component counts");
+    }
+    if (!std::isfinite(alpha)
+        || alpha < amrex::Real(0)
+        || alpha > amrex::Real(1)) {
+        throw std::invalid_argument(
+            "Fire RK2 front sweep alpha must be finite in [0,1]");
+    }
+    if (alpha == amrex::Real(0)) { return start_front; }
+    if (alpha == amrex::Real(1)) { return end_front; }
+
+    const amrex::Real stage_weight =
+        amrex::Real(2) * alpha * (amrex::Real(1) - alpha);
+    const amrex::Real endpoint_weight = alpha * alpha;
+
+    std::vector<FireFrontComponent> components;
+    components.reserve(start_components.size());
+    for (std::size_t c = 0; c < start_components.size(); ++c) {
+        if (start_components[c].role != end_components[c].role
+            || start_components[c].perimeter.size()
+                != end_components[c].perimeter.size()
+            || start_components[c].perimeter.size()
+                != midpoint_vertices_m[c].size()) {
+            throw std::invalid_argument(
+                "Fire RK2 front sweep requires matching roles and vertex counts");
+        }
+
+        const auto& start = start_components[c].perimeter.vertices_m();
+        const auto& end = end_components[c].perimeter.vertices_m();
+        std::vector<FireVec2> vertices;
+        vertices.reserve(start.size());
+        for (std::size_t i = 0; i < start.size(); ++i) {
+            const FireVec2 stage = midpoint_vertices_m[c][i];
+            if (!std::isfinite(stage.x) || !std::isfinite(stage.y)) {
+                throw std::invalid_argument(
+                    "Fire RK2 midpoint stage vertices must be finite");
+            }
+            vertices.push_back(
+                start[i]
+                + stage_weight * (stage - start[i])
+                + endpoint_weight * (end[i] - start[i]));
+        }
+        components.push_back({
+            start_components[c].role,
+            FirePerimeter(std::move(vertices))
+        });
+    }
+    return FireFront(std::move(components));
+}
+
+FireFront
 interpolate_fire_front_topology_event_sweep(
     const FireFront& start_front,
     const std::vector<std::vector<FireVec2>>& event_vertices_m,

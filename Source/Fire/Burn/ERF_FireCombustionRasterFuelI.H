@@ -466,6 +466,39 @@ FireCombustionRaster::advance_from_front_linear_sweep(
 }
 
 inline FireCombustionRasterAdvance
+FireCombustionRaster::advance_from_front_rk2_sweep(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    const FireBurnedFractionRaster& burned_before,
+    const FireBurnedFractionRaster& burned_after,
+    const FireFuelRaster& fuel_raster,
+    amrex::Real dt_s)
+{
+    validate_spatial_fuel(fuel_raster, true);
+    (void)interpolate_fire_front_rk2_sweep(
+        start_front, midpoint_vertices_m, end_front, amrex::Real(0));
+    const FirePerimeter& representative_start =
+        start_front.components().front().perimeter;
+    const FirePerimeter& representative_end =
+        end_front.components().front().perimeter;
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        representative_start,
+        representative_end.vertices_m(),
+        nullptr,
+        &start_front,
+        &end_front,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        &fuel_raster,
+        dt_s,
+        &midpoint_vertices_m);
+}
+
+inline FireCombustionRasterAdvance
 FireCombustionRaster::advance_from_front_topology_event_sweep(
     const FireFront& start_front,
     const std::vector<std::vector<FireVec2>>& event_vertices_m,

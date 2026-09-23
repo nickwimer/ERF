@@ -234,6 +234,16 @@ public:
         amrex::Real time_tolerance_s,
         std::size_t temporal_substeps);
 
+    [[nodiscard]] FireFirstArrivalRasterUpdate
+    update_from_front_rk2_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+        const FireFront& end_front,
+        amrex::Real start_time_s,
+        amrex::Real end_time_s,
+        amrex::Real time_tolerance_s,
+        std::size_t temporal_substeps);
+
     /**
      * Update first-arrival history from one pre-remesh physical sweep.
      *

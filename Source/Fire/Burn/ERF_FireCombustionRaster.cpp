@@ -1480,6 +1480,37 @@ FireCombustionRaster::advance_from_front_linear_sweep(
 }
 
 FireCombustionRasterAdvance
+FireCombustionRaster::advance_from_front_rk2_sweep(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    const FireBurnedFractionRaster& burned_before,
+    const FireBurnedFractionRaster& burned_after,
+    amrex::Real dt_s)
+{
+    (void)interpolate_fire_front_rk2_sweep(
+        start_front, midpoint_vertices_m, end_front, amrex::Real(0));
+    const FirePerimeter& representative_start =
+        start_front.components().front().perimeter;
+    const FirePerimeter& representative_end =
+        end_front.components().front().perimeter;
+    return detail::advance_fire_combustion_vertex_sweep(
+        *this,
+        representative_start,
+        representative_end.vertices_m(),
+        nullptr,
+        &start_front,
+        &end_front,
+        nullptr,
+        nullptr,
+        burned_before,
+        burned_after,
+        nullptr,
+        dt_s,
+        &midpoint_vertices_m);
+}
+
+FireCombustionRasterAdvance
 FireCombustionRaster::advance_from_linear_sweep(
     const FirePerimeter& start_perimeter,
     const FirePerimeter& end_perimeter,
@@ -1515,7 +1546,9 @@ detail::advance_fire_combustion_vertex_sweep(
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
     const FireFuelRaster* fuel_raster,
-    amrex::Real dt_s)
+    amrex::Real dt_s,
+    const std::vector<std::vector<FireVec2>>*
+        front_sweep_midpoint_vertices)
 {
     auto& geometry_ = raster.geometry_;
     auto& parameters_ = raster.parameters_;
@@ -1601,6 +1634,9 @@ detail::advance_fire_combustion_vertex_sweep(
         !front_sweep || !front_topology_event_sweep,
         "fire combustion sweep cannot combine fixed-front and "
         "front topology-event geometry");
+    require(
+        front_sweep_midpoint_vertices == nullptr || front_sweep,
+        "fire combustion RK2 midpoint geometry requires a fixed-front sweep");
 
     require(
         !front_topology_event_sweep || event_front != nullptr,
@@ -1608,10 +1644,18 @@ detail::advance_fire_combustion_vertex_sweep(
         "resolved event front");
 
     if (front_sweep) {
-        (void)interpolate_fire_front_linear_sweep(
-            *front_sweep_start,
-            *front_sweep_end,
-            amrex::Real(0.0));
+        if (front_sweep_midpoint_vertices != nullptr) {
+            (void)interpolate_fire_front_rk2_sweep(
+                *front_sweep_start,
+                *front_sweep_midpoint_vertices,
+                *front_sweep_end,
+                amrex::Real(0.0));
+        } else {
+            (void)interpolate_fire_front_linear_sweep(
+                *front_sweep_start,
+                *front_sweep_end,
+                amrex::Real(0.0));
+        }
     }
 
     if (front_topology_event_sweep) {
@@ -1754,11 +1798,20 @@ detail::advance_fire_combustion_vertex_sweep(
             amrex::Real sample_yhi_m{};
 
             if (fixed_front_sample) {
-                interpolated_front.emplace(
-                    interpolate_fire_front_linear_sweep(
-                        *front_sweep_start,
-                        *front_sweep_end,
-                        alpha));
+                if (front_sweep_midpoint_vertices != nullptr) {
+                    interpolated_front.emplace(
+                        interpolate_fire_front_rk2_sweep(
+                            *front_sweep_start,
+                            *front_sweep_midpoint_vertices,
+                            *front_sweep_end,
+                            alpha));
+                } else {
+                    interpolated_front.emplace(
+                        interpolate_fire_front_linear_sweep(
+                            *front_sweep_start,
+                            *front_sweep_end,
+                            alpha));
+                }
                 sample_front =
                     &*interpolated_front;
 

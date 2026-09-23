@@ -71,7 +71,9 @@ advance_fire_combustion_vertex_sweep(
     const FireBurnedFractionRaster& burned_before,
     const FireBurnedFractionRaster& burned_after,
     const FireFuelRaster* fuel_raster,
-    amrex::Real dt_s);
+    amrex::Real dt_s,
+    const std::vector<std::vector<FireVec2>>*
+        front_sweep_midpoint_vertices = nullptr);
 
 } // namespace detail
 
@@ -304,10 +306,29 @@ public:
         const FireBurnedFractionRaster& burned_after,
         amrex::Real dt_s);
 
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_front_rk2_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+        const FireFront& end_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        amrex::Real dt_s);
+
     /** Spatial Anderson-13 form of advance_from_front_linear_sweep(). */
     [[nodiscard]] FireCombustionRasterAdvance
     advance_from_front_linear_sweep(
         const FireFront& start_front,
+        const FireFront& end_front,
+        const FireBurnedFractionRaster& burned_before,
+        const FireBurnedFractionRaster& burned_after,
+        const FireFuelRaster& fuel_raster,
+        amrex::Real dt_s);
+
+    [[nodiscard]] FireCombustionRasterAdvance
+    advance_from_front_rk2_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
         const FireFront& end_front,
         const FireBurnedFractionRaster& burned_before,
         const FireBurnedFractionRaster& burned_after,
@@ -368,7 +389,9 @@ private:
         const FireBurnedFractionRaster& burned_before,
         const FireBurnedFractionRaster& burned_after,
         const FireFuelRaster* fuel_raster,
-        amrex::Real dt_s);
+        amrex::Real dt_s,
+        const std::vector<std::vector<FireVec2>>*
+            front_sweep_midpoint_vertices);
 
     [[nodiscard]] FireCombustionRasterTotals
     initialize_from_burned_fraction_impl(

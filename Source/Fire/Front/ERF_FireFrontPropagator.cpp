@@ -523,6 +523,7 @@ advance_front_rk2_batched_until_topology_event(
         return {
             front,
             amrex::Real(0.0),
+            initial_vertices_m,
             std::move(initial_vertices_m),
             std::nullopt
         };
@@ -683,6 +684,7 @@ advance_front_rk2_batched_until_topology_event(
         return {
             std::nullopt,
             dt_s * full_step_fraction,
+            {},
             std::move(event_vertices_m),
             FireFrontComponentTopologyEvent{
                 midpoint_hole_extinction_component_index,
@@ -728,6 +730,7 @@ advance_front_rk2_batched_until_topology_event(
         return {
             std::nullopt,
             dt_s * full_step_fraction,
+            {},
             std::move(event_vertices_m),
             FireFrontComponentTopologyEvent{
                 midpoint_component_index,
@@ -926,6 +929,7 @@ advance_front_rk2_batched_until_topology_event(
         return {
             std::nullopt,
             dt_s * full_step_fraction,
+            {},
             std::move(event_vertices_m),
             FireFrontComponentTopologyEvent{
                 final_hole_extinction_component_index,
@@ -963,6 +967,7 @@ advance_front_rk2_batched_until_topology_event(
         return {
             std::nullopt,
             dt_s * full_step_fraction,
+            {},
             std::move(event_vertices_m),
             FireFrontComponentTopologyEvent{
                 final_component_index,
@@ -1004,6 +1009,7 @@ advance_front_rk2_batched_until_topology_event(
         FireFront(
             std::move(final_components)),
         dt_s,
+        std::move(midpoint_vertices_m),
         std::move(final_vertices_m),
         std::nullopt
     };

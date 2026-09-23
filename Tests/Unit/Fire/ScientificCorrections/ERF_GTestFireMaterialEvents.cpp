@@ -177,3 +177,27 @@ TEST(FireScientificMaterial, HomogeneousEdgeResolutionPreservesVerticesExactly)
         EXPECT_EQ(a[i].y, b[i].y);
     }
 }
+
+
+TEST(FireScientificMaterial, Rk2DenseTrajectoryDetectsExcursionIntoThinPatch)
+{
+    const auto raster = make_raster(Real(0.2), false, true);
+    const std::vector<FireVec2> start{{Real(3), Real(4)}};
+    const std::vector<FireVec2> stage{{Real(6), Real(4)}};
+    const std::vector<FireVec2> end{{Real(3), Real(4)}};
+    const std::vector<FireFuelRasterCell> initial{
+        fm1(Real(0.08))};
+
+    EXPECT_EQ(
+        detail::first_fire_material_change(
+            raster, start, end, initial),
+        Real(1));
+
+    const Real fraction =
+        detail::first_fire_material_change_rk2(
+            raster, start, stage, end, initial);
+
+    const Real expected =
+        (Real(3) - std::sqrt(Real(3))) / Real(6);
+    EXPECT_NEAR(fraction, expected, Real(3.e-4));
+}

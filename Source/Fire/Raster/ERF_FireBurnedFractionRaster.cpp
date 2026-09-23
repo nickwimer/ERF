@@ -799,6 +799,74 @@ FireBurnedFractionRaster::update_from_front_linear_sweep (
 }
 
 FireRasterBurnedAreaUpdate
+FireBurnedFractionRaster::update_from_front_rk2_sweep (
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    std::size_t temporal_substeps)
+{
+    if (temporal_substeps == 0) {
+        throw std::invalid_argument(
+            "Fire burned-fraction front RK2 sweep "
+            "temporal_substeps must be positive");
+    }
+
+    // Validate topology correspondence before any temporary history update.
+    (void)interpolate_fire_front_rk2_sweep(
+        start_front,
+        midpoint_vertices_m,
+        end_front,
+        amrex::Real(0.0));
+
+    // Preserve the strong exception guarantee. Each sampled front update may
+    // commit to this temporary object, but persistent state is untouched until
+    // the entire physical sweep succeeds.
+    FireBurnedFractionRaster next(*this);
+
+    amrex::Real newly_burned_area_m2 =
+        amrex::Real(0.0);
+
+    for (std::size_t substep = 0;
+         substep < temporal_substeps;
+         ++substep) {
+        const amrex::Real alpha =
+            static_cast<amrex::Real>(substep + 1)
+            / static_cast<amrex::Real>(
+                temporal_substeps);
+
+        const FireFront sample_front =
+            interpolate_fire_front_rk2_sweep(
+                start_front,
+                midpoint_vertices_m,
+                end_front,
+                alpha);
+
+        const FireRasterBurnedAreaUpdate update =
+            next.update_from_front(sample_front);
+
+        newly_burned_area_m2 +=
+            update.newly_burned_area_m2;
+    }
+
+    const amrex::Real burned_area_m2 =
+        next.burned_area_m2();
+
+    if (!std::isfinite(newly_burned_area_m2)
+        || !std::isfinite(burned_area_m2)) {
+        throw std::overflow_error(
+            "Fire front RK2 sweep burned-area accounting "
+            "is not finite");
+    }
+
+    *this = std::move(next);
+
+    return {
+        burned_area_m2,
+        newly_burned_area_m2
+    };
+}
+
+FireRasterBurnedAreaUpdate
 FireBurnedFractionRaster::update_from_front_topology_event_sweep (
     const FireFront& start_front,
     const std::vector<std::vector<FireVec2>>& event_vertices_m,

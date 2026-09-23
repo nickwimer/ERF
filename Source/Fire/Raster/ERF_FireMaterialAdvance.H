@@ -112,6 +112,90 @@ inline amrex::Real first_fire_material_change(
     return first;
 }
 
+inline FireVec2 fire_material_rk2_dense_point(
+    const FireVec2& start,
+    const FireVec2& midpoint_stage,
+    const FireVec2& end,
+    amrex::Real alpha)
+{
+    return start
+        + (amrex::Real(2) * alpha * (amrex::Real(1) - alpha))
+            * (midpoint_stage - start)
+        + (alpha * alpha) * (end - start);
+}
+
+inline std::size_t fire_material_rk2_dense_substeps(
+    const std::vector<FireVec2>& starts,
+    const std::vector<FireVec2>& midpoint_stage,
+    const std::vector<FireVec2>& ends,
+    const FireCartesianRasterGeometry2D& g)
+{
+    if (starts.size() != midpoint_stage.size()
+        || starts.size() != ends.size()) {
+        throw std::logic_error("Fire RK2 material path batches differ in size");
+    }
+    amrex::Real max_quadratic = amrex::Real(0);
+    for (std::size_t i = 0; i < starts.size(); ++i) {
+        const FireVec2 quadratic =
+            (ends[i] - starts[i])
+            - amrex::Real(2) * (midpoint_stage[i] - starts[i]);
+        max_quadratic = std::max(
+            max_quadratic,
+            std::hypot(quadratic.x, quadratic.y));
+    }
+    const amrex::Real tolerance =
+        amrex::Real(1.e-6) * std::min(g.dx_m, g.dy_m);
+    if (!(tolerance > amrex::Real(0))) {
+        throw std::logic_error("Fire RK2 material path has invalid raster spacing");
+    }
+    const amrex::Real required =
+        max_quadratic > amrex::Real(0)
+        ? std::sqrt(max_quadratic / (amrex::Real(4) * tolerance))
+        : amrex::Real(1);
+    const std::size_t substeps = std::max<std::size_t>(
+        1, static_cast<std::size_t>(std::ceil(required)));
+    if (substeps > 4096) {
+        throw std::runtime_error(
+            "Fire RK2 material trajectory is too curved for raster-safe event localization; reduce the timestep");
+    }
+    return substeps;
+}
+
+inline amrex::Real first_fire_material_change_rk2(
+    const FireFuelRaster& raster,
+    const std::vector<FireVec2>& starts,
+    const std::vector<FireVec2>& midpoint_stage,
+    const std::vector<FireVec2>& ends,
+    const std::vector<FireFuelRasterCell>& initial)
+{
+    if (starts.size() != initial.size()) {
+        throw std::logic_error("Fire RK2 material path/material batches differ in size");
+    }
+    const std::size_t substeps =
+        fire_material_rk2_dense_substeps(
+            starts, midpoint_stage, ends, raster.geometry());
+    std::vector<FireVec2> previous = starts;
+    std::vector<FireVec2> next(starts.size());
+    for (std::size_t step = 1; step <= substeps; ++step) {
+        const amrex::Real alpha =
+            static_cast<amrex::Real>(step)
+            / static_cast<amrex::Real>(substeps);
+        for (std::size_t i = 0; i < starts.size(); ++i) {
+            next[i] = fire_material_rk2_dense_point(
+                starts[i], midpoint_stage[i], ends[i], alpha);
+        }
+        const amrex::Real local =
+            first_fire_material_change(
+                raster, previous, next, initial);
+        if (local < amrex::Real(1)) {
+            return (static_cast<amrex::Real>(step - 1) + local)
+                / static_cast<amrex::Real>(substeps);
+        }
+        previous = next;
+    }
+    return amrex::Real(1);
+}
+
 inline void require_fire_material_sweep_not_extinguished(
     const FireFront& start,
     const std::vector<std::vector<FireVec2>>& end,
@@ -158,6 +242,53 @@ inline void require_fire_material_sweep_not_extinguished(
                     "Barrier sliding/rerouting is not implemented");
             }
         }
+    }
+}
+
+inline void require_fire_material_rk2_sweep_not_extinguished(
+    const FireFront& start,
+    const std::vector<std::vector<FireVec2>>& midpoint_stage,
+    const std::vector<std::vector<FireVec2>>& end,
+    const FireFuelRaster& raster)
+{
+    std::vector<std::vector<FireVec2>> start_nested;
+    start_nested.reserve(start.components().size());
+    for (const auto& component : start.components()) {
+        start_nested.push_back(component.perimeter.vertices_m());
+    }
+    const auto starts =
+        fire_barrier_flatten_component_vertices(start_nested);
+    const auto mids =
+        fire_barrier_flatten_component_vertices(midpoint_stage);
+    const auto ends =
+        fire_barrier_flatten_component_vertices(end);
+    const std::size_t substeps =
+        fire_material_rk2_dense_substeps(
+            starts, mids, ends, raster.geometry());
+
+    FireFront previous = start;
+    for (std::size_t step = 1; step <= substeps; ++step) {
+        const amrex::Real alpha =
+            static_cast<amrex::Real>(step)
+            / static_cast<amrex::Real>(substeps);
+        std::vector<FireVec2> flat(starts.size());
+        for (std::size_t i = 0; i < starts.size(); ++i) {
+            flat[i] = fire_material_rk2_dense_point(
+                starts[i], mids[i], ends[i], alpha);
+        }
+        std::vector<std::vector<FireVec2>> nested;
+        nested.reserve(start.components().size());
+        std::size_t offset = 0;
+        for (const auto& component : start.components()) {
+            const std::size_t count = component.perimeter.size();
+            nested.emplace_back(
+                flat.begin() + static_cast<std::ptrdiff_t>(offset),
+                flat.begin() + static_cast<std::ptrdiff_t>(offset + count));
+            offset += count;
+        }
+        require_fire_material_sweep_not_extinguished(
+            previous, nested, raster);
+        previous = fire_barrier_rebuild_front(previous, flat);
     }
 }
 
@@ -308,8 +439,17 @@ advance_fire_front_material_segment(
             }
         }
         auto ends = detail::fire_barrier_flatten_component_vertices(trial.terminal_vertices_m);
-        const amrex::Real fraction = detail::first_fire_material_change(
-            raster, positions, ends, stage_materials);
+        amrex::Real fraction = amrex::Real(1);
+        if (!trial.topology_event.has_value()) {
+            const auto midpoint =
+                detail::fire_barrier_flatten_component_vertices(
+                    trial.rk2_midpoint_vertices_m);
+            fraction = detail::first_fire_material_change_rk2(
+                raster, positions, midpoint, ends, stage_materials);
+        } else {
+            fraction = detail::first_fire_material_change(
+                raster, positions, ends, stage_materials);
+        }
         if (fraction < amrex::Real(1)) {
             if (!(fraction > amrex::Real(0))) {
                 throw std::runtime_error(
@@ -332,7 +472,16 @@ advance_fire_front_material_segment(
             const auto flat = detail::fire_barrier_flatten_component_vertices(trial.terminal_vertices_m);
             trial.completed_front = detail::fire_barrier_rebuild_front(front, flat);
         }
-        detail::require_fire_material_sweep_not_extinguished(front, trial.terminal_vertices_m, raster);
+        if (!trial.topology_event.has_value()) {
+            detail::require_fire_material_rk2_sweep_not_extinguished(
+                front,
+                trial.rk2_midpoint_vertices_m,
+                trial.terminal_vertices_m,
+                raster);
+        } else {
+            detail::require_fire_material_sweep_not_extinguished(
+                front, trial.terminal_vertices_m, raster);
+        }
         return trial;
     }
     throw std::runtime_error("Fire material contact localization did not converge");

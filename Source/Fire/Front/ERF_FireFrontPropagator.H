@@ -41,6 +41,9 @@ struct FireFrontTopologyAdvanceResult
 {
     std::optional<FireFront> completed_front;
     amrex::Real advanced_dt_s{};
+    // Explicit-midpoint stage geometry for ordinary completed RK2 steps.
+    // Empty for localized topology events.
+    std::vector<std::vector<FireVec2>> rk2_midpoint_vertices_m;
     std::vector<std::vector<FireVec2>> terminal_vertices_m;
     std::optional<FireFrontComponentTopologyEvent> topology_event;
 };
@@ -92,7 +95,8 @@ advance_front_rk2_batched(
  * Hole when its represented signed area reaches exactly zero.
  *
  * On normal completion, completed_front is populated, topology_event is
- * empty, advanced_dt_s equals dt_s, and terminal_vertices_m contains the
+ * empty, advanced_dt_s equals dt_s, rk2_midpoint_vertices_m contains the
+ * explicit-midpoint stage geometry, and terminal_vertices_m contains the
  * endpoint vertices for every component in original component order.
  *
  * On a topology event, completed_front is empty, advanced_dt_s is the

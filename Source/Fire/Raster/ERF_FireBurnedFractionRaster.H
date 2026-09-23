@@ -158,6 +158,13 @@ public:
         const FireFront& end_front,
         std::size_t temporal_substeps);
 
+    [[nodiscard]] FireRasterBurnedAreaUpdate
+    update_from_front_rk2_sweep(
+        const FireFront& start_front,
+        const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+        const FireFront& end_front,
+        std::size_t temporal_substeps);
+
     /**
      * Update monotone burn history through a multi-component topology event.
      *

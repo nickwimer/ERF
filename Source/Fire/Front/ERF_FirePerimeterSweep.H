@@ -36,6 +36,22 @@ interpolate_fire_front_linear_sweep(
     amrex::Real alpha);
 
 /**
+ * Order-2 continuous extension for explicit-midpoint/RK2 fixed-topology
+ * motion. midpoint_vertices_m is the stage geometry x_n + 0.5*dt*k1,
+ * not the physical front at alpha=0.5.
+ *
+ *   x(alpha) = x_n
+ *            + 2*alpha*(1-alpha)*(x_stage-x_n)
+ *            + alpha^2*(x_{n+1}-x_n).
+ */
+[[nodiscard]] FireFront
+interpolate_fire_front_rk2_sweep(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    amrex::Real alpha);
+
+/**
  * Linear interpolation from a valid pre-event FireFront toward raw terminal
  * component vertices at a topology event.
  *
