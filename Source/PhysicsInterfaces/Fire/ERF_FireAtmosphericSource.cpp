@@ -211,6 +211,14 @@ make_erf_fire_atmospheric_source_column(
         pressure_pa.size() == nz,
         "ERF Fire atmospheric source pressure column size mismatch");
 
+    // Evaluate the finite-column diagnostic even though the production policy
+    // remains normalized deposition. This validates that the represented
+    // profile and its normalization are finite for this column and keeps the
+    // truncation semantics tied to the same top AGL height used by the source.
+    (void)erf_fire_exponential_column_coverage(
+        vertical_face_height_agl_m.back(),
+        options.extinction_depth_m);
+
     const std::vector<amrex::Real> vertical_weights =
         normalized_exponential_layer_weights(
             vertical_face_height_agl_m,

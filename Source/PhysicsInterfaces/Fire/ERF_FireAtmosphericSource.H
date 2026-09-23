@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 namespace ERFFire
@@ -20,15 +21,75 @@ namespace ERFFire
 /**
  * Vertical deposition options for the first ERF Fire-feedback projection.
  *
- * The normalized exponential shape follows the ground-fire heat/moisture
- * extinction convention used by WRF-Fire/SFIRE. The finite ERF column is
- * explicitly renormalized so all step-integrated Fire release is deposited
- * into the represented atmospheric column.
+ * The exponential shape follows the ground-fire heat/moisture extinction
+ * convention used by WRF-Fire/SFIRE. ERF-Fire currently normalizes that shape
+ * over the finite represented ERF column so all step-integrated Fire release
+ * is deposited into the model atmosphere. Use
+ * erf_fire_exponential_column_coverage() to diagnose the unrepresented
+ * exponential tail and the associated normalization amplification.
  */
 struct ERFFireAtmosphericSourceOptions
 {
     amrex::Real extinction_depth_m{amrex::Real(50.0)};
 };
+
+struct ERFFireAtmosphericColumnCoverage
+{
+    // Fraction of the unnormalized exp(-z/H)/H profile represented between
+    // ground and the supplied model-top AGL height.
+    amrex::Real represented_fraction{};
+
+    // Complement of represented_fraction. In the equivalent upward-flux
+    // interpretation this is the flux fraction still present above model top.
+    amrex::Real unrepresented_tail_fraction{};
+
+    // Factor by which the current finite-column normalization amplifies the
+    // represented profile so that the deposited weights sum to one.
+    amrex::Real normalization_amplification{};
+};
+
+/**
+ * Diagnose finite-column coverage of the exponential Fire feedback profile.
+ *
+ * This does not change the production deposition policy. It makes explicit the
+ * distinction between the unnormalized model-family profile and ERF-Fire's
+ * current conservative finite-column normalization.
+ */
+[[nodiscard]] inline ERFFireAtmosphericColumnCoverage
+erf_fire_exponential_column_coverage(
+    amrex::Real model_top_agl_m,
+    amrex::Real extinction_depth_m)
+{
+    if (!std::isfinite(model_top_agl_m)
+        || !(model_top_agl_m > amrex::Real(0))
+        || !std::isfinite(extinction_depth_m)
+        || !(extinction_depth_m > amrex::Real(0))) {
+        throw std::invalid_argument(
+            "ERF Fire exponential column diagnostic requires positive finite heights");
+    }
+
+    const amrex::Real tail =
+        std::exp(-model_top_agl_m / extinction_depth_m);
+    const amrex::Real represented =
+        -std::expm1(-model_top_agl_m / extinction_depth_m);
+    if (!std::isfinite(tail)
+        || !std::isfinite(represented)
+        || tail < amrex::Real(0)
+        || !(represented > amrex::Real(0))) {
+        throw std::overflow_error(
+            "ERF Fire exponential column diagnostic is not representable");
+    }
+
+    const amrex::Real amplification =
+        amrex::Real(1) / represented;
+    if (!std::isfinite(amplification)
+        || !(amplification >= amrex::Real(1))) {
+        throw std::overflow_error(
+            "ERF Fire exponential normalization amplification is invalid");
+    }
+
+    return {represented, tail, amplification};
+}
 
 struct ERFFireAtmosphericSourceCell
 {

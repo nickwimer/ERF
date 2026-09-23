@@ -624,3 +624,93 @@ TEST(FireAtmosphericSource, RejectsInvalidProjectionInputs)
                 Real(0.0)}),
         std::invalid_argument);
 }
+
+
+TEST(FireAtmosphericSource, ReportsFiniteColumnExponentialTailWithoutChangingPolicy)
+{
+    constexpr Real top_m = Real(8);
+    constexpr Real extinction_depth_m = Real(50);
+
+    const auto coverage =
+        ERFFire::erf_fire_exponential_column_coverage(
+            top_m, extinction_depth_m);
+
+    const Real expected_tail =
+        std::exp(-top_m / extinction_depth_m);
+    const Real expected_represented =
+        Real(1) - expected_tail;
+
+    EXPECT_NEAR(
+        coverage.unrepresented_tail_fraction,
+        expected_tail,
+        Real(8) * std::numeric_limits<Real>::epsilon());
+    EXPECT_NEAR(
+        coverage.represented_fraction,
+        expected_represented,
+        Real(8) * std::numeric_limits<Real>::epsilon());
+    EXPECT_NEAR(
+        coverage.normalization_amplification,
+        Real(1) / expected_represented,
+        Real(64) * std::numeric_limits<Real>::epsilon());
+
+    EXPECT_THROW(
+        (void)ERFFire::erf_fire_exponential_column_coverage(
+            Real(0), extinction_depth_m),
+        std::invalid_argument);
+}
+
+TEST(FireAtmosphericSource, ConservativeProjectionClosesEnergyAndWaterBudget)
+{
+    const FireSurfaceFeedbackCell release{
+        Real(0),
+        Real(7.25e6),
+        Real(2.75)};
+
+    const std::vector<Real> faces{
+        Real(0), Real(2), Real(9), Real(31)};
+    const std::vector<Real> volumes{
+        Real(12), Real(49), Real(154)};
+    const std::vector<Real> pressure{
+        p_0,
+        Real(0.91) * p_0,
+        Real(0.73) * p_0};
+    constexpr Real dt_s = Real(3.5);
+
+    const auto column =
+        ERFFire::make_erf_fire_atmospheric_source_column(
+            release,
+            faces,
+            volumes,
+            pressure,
+            dt_s,
+            ERFFireAtmosphericSourceOptions{Real(50)});
+
+    Real recovered_energy_j = Real(0);
+    Real recovered_water_kg = Real(0);
+    for (std::size_t k = 0; k < column.size(); ++k) {
+        const Real exner =
+            exner_from_pressure(pressure[k]);
+        recovered_energy_j +=
+            column[k].rhotheta_tendency_kg_K_m3_s
+            * Cp_d * exner * volumes[k] * dt_s;
+        recovered_water_kg +=
+            column[k].rhoqv_tendency_kg_m3_s
+            * volumes[k] * dt_s;
+    }
+
+    const Real energy_tol =
+        Real(1024) * std::numeric_limits<Real>::epsilon()
+        * std::max(Real(1), release.sensible_energy_j);
+    const Real water_tol =
+        Real(1024) * std::numeric_limits<Real>::epsilon()
+        * std::max(Real(1), release.water_released_kg);
+
+    EXPECT_NEAR(
+        recovered_energy_j,
+        release.sensible_energy_j,
+        energy_tol);
+    EXPECT_NEAR(
+        recovered_water_kg,
+        release.water_released_kg,
+        water_tol);
+}
