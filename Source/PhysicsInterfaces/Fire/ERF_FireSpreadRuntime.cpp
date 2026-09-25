@@ -112,6 +112,25 @@ runtime_clock_matches_history(
         <= tolerance;
 }
 
+bool
+fire_fuel_moisture_has_any_component(
+    const FireFuelMoisture& moisture) noexcept
+{
+    for (int component = 0;
+         component < FireFuelMoisture::component_count;
+         ++component) {
+        if (moisture.has(
+                static_cast<FireFuelMoistureClass>(component))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+uniform_spread_uses_legacy_single_class(
+    const ERFFireSpreadConfig& config) noexcept;
+
 std::size_t
 adaptive_rk2_history_substeps(
     const FireFront& start_front,
@@ -211,12 +230,27 @@ validate_runtime_scalars(
             && config.arrival_time_tolerance_s > amrex::Real(0.0),
         "fire spread arrival tolerance must be finite and positive");
 
-    (void)evaluate_rothermel(
-        config.fuel,
-        RothermelInputs{
-            config.dead_fuel_moisture_fraction,
-            amrex::Real(0.0),
-            amrex::Real(0.0)});
+    if (uniform_spread_uses_legacy_single_class(config)) {
+        (void)evaluate_rothermel(
+            config.fuel,
+            RothermelInputs{
+                config.dead_fuel_moisture_fraction,
+                amrex::Real(0.0),
+                amrex::Real(0.0)});
+        return;
+    }
+
+    require(
+        config.uniform_material.model_id
+            == FireFuelModelId::FM1,
+        "categorical uniform Fire runtime currently requires FM1 until "
+        "uniform combustion is material-driven");
+
+    (void)make_fire_fuel_spread_inputs(
+        config.uniform_material.model_id,
+        config.uniform_material.moisture,
+        amrex::Real(0.0),
+        amrex::Real(0.0));
 }
 
 bool
@@ -245,6 +279,102 @@ same_rothermel_fuel_parameters(
         && lhs.total_mineral_fraction == rhs.total_mineral_fraction
         && lhs.effective_mineral_fraction == rhs.effective_mineral_fraction
         && lhs.dead_moisture_of_extinction == rhs.dead_moisture_of_extinction;
+}
+
+bool
+uniform_spread_uses_legacy_single_class(
+    const ERFFireSpreadConfig& config) noexcept
+{
+    const FireFuelMaterial& material =
+        config.uniform_material;
+
+    if (material.model_id
+        != FireFuelModelId::FM1) {
+        return false;
+    }
+
+    // Old checkpoint readers and hand-built aggregate configs predate the
+    // categorical field and therefore leave its moisture completely absent.
+    if (!fire_fuel_moisture_has_any_component(
+            material.moisture)) {
+        return true;
+    }
+
+    amrex::Real material_dead_1h{};
+    if (!material.moisture.try_get(
+            FireFuelMoistureClass::Dead1h,
+            material_dead_1h)) {
+        // A partially populated categorical material is not a legacy config;
+        // let the categorical contract report the missing required moisture.
+        return false;
+    }
+
+    // Preserve the explicit synthetic-single-class compatibility API. Tests
+    // and legacy callers are allowed to replace the supplied FM1 bed or scalar
+    // moisture, but ERF-created runtime configs retain the exact catalog FM1
+    // parameters and matching categorical Dead1h moisture.
+    return !same_rothermel_fuel_parameters(
+               config.fuel,
+               make_fm1_fuel_parameters())
+        || material_dead_1h
+               != config.dead_fuel_moisture_fraction;
+}
+
+RichardsDirectionalSpread
+resolve_material_directional_spread(
+    const FireFuelMaterial& material,
+    const RothermelFuelParameters& fm1_compatibility_fuel,
+    amrex::Real model_wind_speed_mps,
+    amrex::Real slope_tangent,
+    const FireVec2& wind_direction,
+    const FireVec2& upslope_unit)
+{
+    require(
+        material.model_id
+            != FireFuelModelId::NonBurnable,
+        "burnable Fire material resolver received NonBurnable");
+
+    const FireFuelSpreadInputs inputs =
+        make_fire_fuel_spread_inputs(
+            material.model_id,
+            material.moisture,
+            model_wind_speed_mps,
+            slope_tangent);
+
+    if (material.model_id
+        == FireFuelModelId::FM1) {
+        // Preserve the legacy FM1 arithmetic exactly. For ERF-created
+        // categorical material this compatibility fuel is the exact Anderson
+        // FM1 projection; synthetic non-FM1 beds never enter this resolver.
+        const RothermelResult behavior =
+            evaluate_rothermel(
+                fm1_compatibility_fuel,
+                RothermelInputs{
+                    inputs.rothermel
+                        .dead_1h_moisture_fraction,
+                    inputs.rothermel
+                        .model_wind_speed_mps,
+                    inputs.rothermel
+                        .slope_tangent_magnitude});
+
+        return make_richards_directional_spread(
+            behavior,
+            wind_direction,
+            upslope_unit);
+    }
+
+    const Anderson13FuelParameters fuel =
+        make_anderson13_fuel_parameters(
+            inputs.anderson13_model_number);
+    const RothermelMulticlassResult behavior =
+        evaluate_rothermel_multiclass(
+            fuel,
+            inputs.rothermel);
+
+    return make_richards_directional_spread(
+        behavior,
+        wind_direction,
+        upslope_unit);
 }
 
 bool
@@ -1887,24 +2017,44 @@ ERFFireSpreadRuntime::advance_wind_impl(
                 terrain_gradient_m_per_m,
                 slope_tangent);
 
-        const FireFuelProperties& material =
-            fuel_field_.sample(position_m.x, position_m.y);
-
-        const RothermelResult behavior =
-            evaluate_rothermel(
-                material.single_dead_class,
-                RothermelInputs{
-                    material.moisture.get(FireFuelMoistureClass::Dead1h),
-                    speed_mps,
-                    slope_tangent});
-
-        const RichardsDirectionalSpread spread =
-            make_richards_directional_spread(
-                behavior,
-                terrain_metric.surface_unit_direction(wind_push_unit(
+        const FireVec2 wind_direction =
+            terrain_metric.surface_unit_direction(
+                wind_push_unit(
                     wind_mps,
-                    speed_mps)),
-                upslope_unit);
+                    speed_mps));
+
+        RichardsDirectionalSpread spread{};
+        if (uniform_spread_uses_legacy_single_class(
+                config_)) {
+            const FireFuelProperties& material =
+                fuel_field_.sample(
+                    position_m.x,
+                    position_m.y);
+
+            const RothermelResult behavior =
+                evaluate_rothermel(
+                    material.single_dead_class,
+                    RothermelInputs{
+                        material.moisture.get(
+                            FireFuelMoistureClass::Dead1h),
+                        speed_mps,
+                        slope_tangent});
+
+            spread =
+                make_richards_directional_spread(
+                    behavior,
+                    wind_direction,
+                    upslope_unit);
+        } else {
+            spread =
+                resolve_material_directional_spread(
+                    config_.uniform_material,
+                    config_.fuel,
+                    speed_mps,
+                    slope_tangent,
+                    wind_direction,
+                    upslope_unit);
+        }
 
         return terrain_metric.normal_speed_mps(
             spread.ellipse, outward_normal);
@@ -2215,50 +2365,17 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     continue;
                 }
 
-                if (material.model_id
-                    == FireFuelModelId::FM1) {
-                    amrex::Real dead_1h_moisture{};
-                    require(
-                        material.moisture.try_get(
-                            FireFuelMoistureClass::Dead1h,
-                            dead_1h_moisture),
-                        "spatial FM1 spread requires prescribed dead 1-h moisture");
-
-                    const RothermelResult behavior =
-                        evaluate_rothermel(
-                            config_.fuel,
-                            RothermelInputs{
-                                dead_1h_moisture,
-                                speed_mps,
-                                slope_tangent});
-
-                    spread =
-                        make_richards_directional_spread(
-                            behavior,
-                            wind_direction,
-                            upslope_unit);
-                } else {
-                    const FireFuelSpreadInputs inputs =
-                        make_fire_fuel_spread_inputs(
-                            material.model_id,
-                            material.moisture,
-                            speed_mps,
-                            slope_tangent);
-                    const Anderson13FuelParameters fuel =
-                        make_anderson13_fuel_parameters(
-                            inputs.anderson13_model_number);
-                    const RothermelMulticlassResult behavior =
-                        evaluate_rothermel_multiclass(
-                            fuel,
-                            inputs.rothermel);
-
-                    spread =
-                        make_richards_directional_spread(
-                            behavior,
-                            wind_direction,
-                            upslope_unit);
-                }
-            } else {
+                spread =
+                    resolve_material_directional_spread(
+                        material,
+                        config_.fuel,
+                        speed_mps,
+                        slope_tangent,
+                        wind_direction,
+                        upslope_unit);
+            } else if (
+                uniform_spread_uses_legacy_single_class(
+                    config_)) {
                 const FireFuelProperties& material =
                     fuel_field_.sample(
                         positions_m[index].x,
@@ -2276,6 +2393,15 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 spread =
                     make_richards_directional_spread(
                         behavior,
+                        wind_direction,
+                        upslope_unit);
+            } else {
+                spread =
+                    resolve_material_directional_spread(
+                        config_.uniform_material,
+                        config_.fuel,
+                        speed_mps,
+                        slope_tangent,
                         wind_direction,
                         upslope_unit);
             }
