@@ -2419,6 +2419,21 @@ detail::advance_fire_combustion_vertex_sweep(
             }
         }
 #endif
+
+        // For spatial Anderson-13 fuel, cumulative water is an algebraically
+        // derived field of consumed dry fuel and the immutable cellwise
+        // moisture accounting. Reconstruct it on the temporary candidate
+        // state before any extensive totals are reduced or persistent state
+        // is committed. This keeps the spatial invariant authoritative even
+        // if the generic combustion kernel's scalar parameter state differs
+        // from the full per-material moisture contract.
+        if (fuel_raster != nullptr) {
+            (void)detail::rewrite_water_for_spatial_fuel_impl(
+                parameters_,
+                geometry_,
+                next_states,
+                *fuel_raster);
+        }
     } catch (const std::invalid_argument& error) {
         local_failure = DistributedFailure::invalid_argument;
         local_error = error.what();
