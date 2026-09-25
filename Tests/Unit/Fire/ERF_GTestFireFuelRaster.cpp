@@ -528,6 +528,40 @@ run_device_fuel_combustion_accounting_probe(
         device_accounting.dataValue(),
         device_status.dataValue()};
 }
+
+DeviceFuelCombustionAccountingProbe
+run_device_spatial_fuel_combustion_accounting_probe(
+    const FireCombustionParameters& base,
+    const FireFuelRasterCell& cell)
+{
+    amrex::Gpu::DeviceScalar<FireFuelCombustionAccounting>
+        device_accounting;
+    amrex::Gpu::DeviceScalar<int> device_status;
+
+    auto* accounting_ptr =
+        device_accounting.dataPtr();
+    auto* status_ptr =
+        device_status.dataPtr();
+
+    amrex::ParallelFor(
+        1,
+        [=] AMREX_GPU_DEVICE (int) noexcept
+        {
+            FireFuelCombustionAccounting result{};
+            const auto status =
+                ERFFire::try_make_spatial_fire_combustion_accounting(
+                    base,
+                    cell,
+                    result);
+            *accounting_ptr = result;
+            *status_ptr = static_cast<int>(status);
+        });
+
+    return {
+        device_accounting.dataValue(),
+        device_status.dataValue()};
+}
+
 #endif
 
 } // namespace
@@ -1192,6 +1226,57 @@ TEST(FireFuelCombustionAccounting, DeviceSafeResolutionMatchesHost)
     EXPECT_EQ(
         actual.accounting.parameters.sensible_heat_release_j_kg_dry,
         host.parameters.sensible_heat_release_j_kg_dry);
+    EXPECT_EQ(
+        actual.accounting.parameters.burn_time_constant_s,
+        host.parameters.burn_time_constant_s);
+    EXPECT_EQ(
+        actual.accounting.parameters.combustion_water_yield_kg_per_kg_dry,
+        host.parameters.combustion_water_yield_kg_per_kg_dry);
+}
+#endif
+
+#ifdef AMREX_USE_GPU
+TEST(FireFuelCombustionAccounting, DeviceSafeSpatialFm2ResolutionMatchesHost)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM2;
+    cell.moisture.set(MoistureClass::Dead1h, Real(0.08));
+    cell.moisture.set(MoistureClass::Dead10h, Real(0.09));
+    cell.moisture.set(MoistureClass::Dead100h, Real(0.10));
+    cell.moisture.set(MoistureClass::LiveHerbaceous, Real(0.80));
+
+    const auto host =
+        ERFFire::make_spatial_fire_combustion_accounting(
+            base,
+            cell);
+    const auto actual =
+        run_device_spatial_fuel_combustion_accounting_probe(
+            base,
+            cell);
+
+    ASSERT_EQ(
+        actual.status,
+        static_cast<int>(
+            FireFuelCombustionAccountingStatus::success));
+    EXPECT_NEAR(
+        actual.accounting.parameters.dry_fuel_load_kg_m2,
+        host.parameters.dry_fuel_load_kg_m2,
+        fuel_accounting_tolerance(
+            host.parameters.dry_fuel_load_kg_m2));
+    EXPECT_NEAR(
+        actual.accounting.parameters.fuel_moisture_fraction,
+        host.parameters.fuel_moisture_fraction,
+        fuel_accounting_tolerance(
+            host.parameters.fuel_moisture_fraction));
+    EXPECT_NEAR(
+        actual.accounting.prescribed_water_load_kg_m2,
+        host.prescribed_water_load_kg_m2,
+        fuel_accounting_tolerance(
+            host.prescribed_water_load_kg_m2));
     EXPECT_EQ(
         actual.accounting.parameters.burn_time_constant_s,
         host.parameters.burn_time_constant_s);
