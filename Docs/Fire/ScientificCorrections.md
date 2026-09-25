@@ -244,8 +244,31 @@ A CFL-controlled two-way terrain/background-wind study at CFL 0.8, 0.4, 0.2,
 and 0.1 showed monotonically decreasing Fire and atmospheric differences.
 The thermodynamic `theta` and `rhoQ1` max-norm differences were close to
 first-order under the later refinements; velocity max norms converged more
-slowly but continued to decrease. This is numerical timestep-refinement
-evidence for the explicit outer coupling, not physical validation.
+slowly but continued to decrease.
+
+After the second re-audit corrections, the common-time CFL 0.4, 0.2, and 0.1
+runs were repeated to `t=2.0 s`. Fire endpoint quantities were monotone under
+both refinement pairs, with apparent orders about 1.15--1.22 for burned area,
+dry-fuel consumption, sensible energy, and released water. The final
+atmospheric plotfiles were compared directly with the in-tree temporal
+refinement analyzer. All seven reported max norms were monotone:
+
+| variable | max abs 0.4->0.2 | max abs 0.2->0.1 | apparent order |
+| --- | ---: | ---: | ---: |
+| density | 3.8811838751096062e-05 | 2.5446811818152781e-05 | 0.60901186876453828 |
+| rhotheta | 0.011643560789821095 | 0.0076340451985288382 | 0.6090126918886043 |
+| rhoQ1 | 1.9614135930777314e-07 | 9.8781814441011202e-08 | 0.98957640746647546 |
+| x_velocity | 0.0079946292580430622 | 0.0057571241999008205 | 0.4736827956776456 |
+| y_velocity | 0.0027365266460470765 | 0.0020659161599064753 | 0.40556419720834924 |
+| z_velocity | 0.0069303977723164847 | 0.0056427267972669753 | 0.29654565805884403 |
+| theta | 0.004549564178091714 | 0.002269963898243077 | 1.0030589971808945 |
+
+These atmospheric differences reproduce the earlier pre-re-audit refinement
+behavior to the reported precision. They support temporal consistency of the
+corrected implementation and show no evidence that stronger outer coupling is
+required for the present capability demonstration. This is numerical
+timestep-refinement evidence for the explicit outer coupling, not physical
+validation or a claim of second-order coupled accuracy.
 
 The second re-audit series and its follow-up fixes have now also been exercised
 natively on Kestrel H100 GPUs. The fresh evidence includes:
