@@ -112,25 +112,6 @@ runtime_clock_matches_history(
         <= tolerance;
 }
 
-bool
-fire_fuel_moisture_has_any_component(
-    const FireFuelMoisture& moisture) noexcept
-{
-    for (int component = 0;
-         component < FireFuelMoisture::component_count;
-         ++component) {
-        if (moisture.has(
-                static_cast<FireFuelMoistureClass>(component))) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool
-uniform_spread_uses_legacy_single_class(
-    const ERFFireSpreadConfig& config) noexcept;
-
 std::size_t
 adaptive_rk2_history_substeps(
     const FireFront& start_front,
@@ -230,27 +211,12 @@ validate_runtime_scalars(
             && config.arrival_time_tolerance_s > amrex::Real(0.0),
         "fire spread arrival tolerance must be finite and positive");
 
-    if (uniform_spread_uses_legacy_single_class(config)) {
-        (void)evaluate_rothermel(
-            config.fuel,
-            RothermelInputs{
-                config.dead_fuel_moisture_fraction,
-                amrex::Real(0.0),
-                amrex::Real(0.0)});
-        return;
-    }
-
-    require(
-        config.uniform_material.model_id
-            == FireFuelModelId::FM1,
-        "categorical uniform Fire runtime currently requires FM1 until "
-        "uniform combustion is material-driven");
-
-    (void)make_fire_fuel_spread_inputs(
-        config.uniform_material.model_id,
-        config.uniform_material.moisture,
-        amrex::Real(0.0),
-        amrex::Real(0.0));
+    (void)evaluate_rothermel(
+        config.fuel,
+        RothermelInputs{
+            config.dead_fuel_moisture_fraction,
+            amrex::Real(0.0),
+            amrex::Real(0.0)});
 }
 
 bool
@@ -279,56 +245,6 @@ same_rothermel_fuel_parameters(
         && lhs.total_mineral_fraction == rhs.total_mineral_fraction
         && lhs.effective_mineral_fraction == rhs.effective_mineral_fraction
         && lhs.dead_moisture_of_extinction == rhs.dead_moisture_of_extinction;
-}
-
-bool
-uniform_spread_uses_legacy_single_class(
-    const ERFFireSpreadConfig& config) noexcept
-{
-    const FireFuelMaterial& material =
-        config.uniform_material;
-
-    if (material.model_id
-        != FireFuelModelId::FM1) {
-        return false;
-    }
-
-    // Old checkpoint readers and hand-built aggregate configs predate the
-    // categorical field and therefore leave its moisture completely absent.
-    if (!fire_fuel_moisture_has_any_component(
-            material.moisture)) {
-        return true;
-    }
-
-    amrex::Real material_dead_1h{};
-    if (!material.moisture.try_get(
-            FireFuelMoistureClass::Dead1h,
-            material_dead_1h)) {
-        // A partially populated categorical material is not a legacy config;
-        // let categorical validation report the missing required moisture.
-        return false;
-    }
-
-    // Preserve the explicit synthetic-single-class compatibility API. Tests
-    // and legacy callers may replace the supplied FM1 bed or scalar moisture.
-    return !same_rothermel_fuel_parameters(
-               config.fuel,
-               make_fm1_fuel_parameters())
-        || material_dead_1h
-               != config.dead_fuel_moisture_fraction;
-}
-
-amrex::Real
-uniform_dead_1h_moisture(
-    const ERFFireSpreadConfig& config)
-{
-    if (uniform_spread_uses_legacy_single_class(
-            config)) {
-        return config.dead_fuel_moisture_fraction;
-    }
-
-    return config.uniform_material.moisture.get(
-        FireFuelMoistureClass::Dead1h);
 }
 
 bool
@@ -980,7 +896,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
       fuel_field_(
           config_.raster_geometry,
           config_.fuel,
-          uniform_dead_1h_moisture(config_)),
+          config_.dead_fuel_moisture_fraction),
       front_(
           std::vector<FireFrontComponent>{
               {
@@ -1019,7 +935,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
       fuel_field_(
           config_.raster_geometry,
           config_.fuel,
-          uniform_dead_1h_moisture(config_)),
+          config_.dead_fuel_moisture_fraction),
       front_(std::move(initial_front)),
       burned_fraction_(config_.raster_geometry),
       first_arrival_(config_.raster_geometry),
@@ -1057,7 +973,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
       fuel_field_(
           config_.raster_geometry,
           config_.fuel,
-          uniform_dead_1h_moisture(config_)),
+          config_.dead_fuel_moisture_fraction),
       spatial_fuel_raster_(std::move(spatial_fuel_raster)),
       front_(
           std::vector<FireFrontComponent>{
@@ -1105,7 +1021,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
       fuel_field_(
           config_.raster_geometry,
           config_.fuel,
-          uniform_dead_1h_moisture(config_)),
+          config_.dead_fuel_moisture_fraction),
       spatial_fuel_raster_(std::move(spatial_fuel_raster)),
       front_(std::move(initial_front)),
       burned_fraction_(config_.raster_geometry),
@@ -1153,7 +1069,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
       fuel_field_(
           config_.raster_geometry,
           config_.fuel,
-          uniform_dead_1h_moisture(config_)),
+          config_.dead_fuel_moisture_fraction),
       front_(restore_front_from_state(state)),
       burned_fraction_(
           config_.raster_geometry,
@@ -1238,7 +1154,7 @@ ERFFireSpreadRuntime::ERFFireSpreadRuntime(
       fuel_field_(
           config_.raster_geometry,
           config_.fuel,
-          uniform_dead_1h_moisture(config_)),
+          config_.dead_fuel_moisture_fraction),
       front_(std::move(front)),
       burned_fraction_(std::move(burned_fraction)),
       first_arrival_(std::move(first_arrival)),
