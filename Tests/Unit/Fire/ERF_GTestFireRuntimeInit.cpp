@@ -7,6 +7,7 @@
 #include <ERF_FireSpreadRuntime.H>
 #include <ERF_FireSpreadOutput.H>
 #include <ERF_FireFrontPropagator.H>
+#include <ERF_FireTerrainMetric.H>
 #include <ERF_FireWindAdjustment.H>
 #include <ERF_RichardsDirectionalSpread.H>
 #include <ERF_RothermelModel.H>
@@ -536,11 +537,81 @@ expect_runtime_distributed_state_equal(
     EXPECT_EQ(actual.current_time_s(), expected.current_time_s());
 }
 
-// Frozen legacy normal-speed arithmetic from the pre-field runtime. This
-// reference deliberately reads the old config, never FireFuelField. It uses
-// the unchanged low-level geometry/history algorithms but does not call a
-// production Runtime::advance_* entry point, so constructor equivalence alone
-// cannot make this comparison pass.
+std::size_t
+reference_history_temporal_substeps(
+    const FireFront& start_front,
+    const std::vector<std::vector<FireVec2>>& midpoint_vertices_m,
+    const FireFront& end_front,
+    const FireCartesianRasterGeometry2D& geometry,
+    std::size_t minimum_substeps)
+{
+    if (minimum_substeps == 0) {
+        throw std::invalid_argument(
+            "reference Fire history minimum temporal substeps must be positive");
+    }
+
+    const Real max_sample_travel_m =
+        Real(0.25) * std::min(geometry.dx_m, geometry.dy_m);
+    Real max_dense_derivative_m = Real(0);
+
+    const auto& start_components = start_front.components();
+    const auto& end_components = end_front.components();
+    if (start_components.size() != end_components.size()
+        || start_components.size() != midpoint_vertices_m.size()) {
+        throw std::invalid_argument(
+            "reference Fire RK2 history component count mismatch");
+    }
+
+    for (std::size_t component = 0;
+         component < start_components.size();
+         ++component) {
+        const auto& start =
+            start_components[component].perimeter.vertices_m();
+        const auto& midpoint =
+            midpoint_vertices_m[component];
+        const auto& end =
+            end_components[component].perimeter.vertices_m();
+
+        if (start.size() != midpoint.size()
+            || start.size() != end.size()) {
+            throw std::invalid_argument(
+                "reference Fire RK2 history vertex count mismatch");
+        }
+
+        for (std::size_t i = 0; i < start.size(); ++i) {
+            const FireVec2 derivative_at_start =
+                Real(2) * (midpoint[i] - start[i]);
+            const FireVec2 derivative_at_end =
+                Real(2) * (end[i] - midpoint[i]);
+
+            max_dense_derivative_m =
+                std::max(
+                    max_dense_derivative_m,
+                    std::max(
+                        std::hypot(
+                            derivative_at_start.x,
+                            derivative_at_start.y),
+                        std::hypot(
+                            derivative_at_end.x,
+                            derivative_at_end.y)));
+        }
+    }
+
+    const std::size_t motion_substeps =
+        std::max<std::size_t>(
+            1,
+            static_cast<std::size_t>(
+                std::ceil(
+                    max_dense_derivative_m
+                    / max_sample_travel_m)));
+    return std::max(minimum_substeps, motion_substeps);
+}
+
+// Frozen uniform-material oracle. It deliberately reads the legacy config
+// fields, never FireFuelField, so material-routing changes remain observable.
+// Terrain projection and physical-history integration intentionally track the
+// corrected production policies introduced after this oracle was first added:
+// local-surface metric propagation and RK2 dense-output histories.
 RuntimeState
 legacy_uniform_step(
     const Runtime& before,
@@ -565,15 +636,19 @@ legacy_uniform_step(
         const Real slope = ERFFire::norm(gradient);
         const Real wind_inactive = speed > Real(0) ? Real(0) : Real(1);
         const Real slope_inactive = slope > Real(0) ? Real(0) : Real(1);
-        const auto wind_direction = FireVec2{wind.x + wind_inactive, wind.y}
+        const FireVec2 map_wind_direction =
+            FireVec2{wind.x + wind_inactive, wind.y}
             / (speed + wind_inactive);
         const auto upslope = FireVec2{gradient.x + slope_inactive, gradient.y}
             / (slope + slope_inactive);
+        const ERFFire::FireTerrainMetric terrain_metric(gradient);
         const auto behavior = ERFFire::evaluate_rothermel(config.fuel,
             {config.dead_fuel_moisture_fraction, speed, slope});
         const auto spread = ERFFire::make_richards_directional_spread(
-            behavior, wind_direction, upslope);
-        return ERFFire::richards_normal_speed_mps(spread.ellipse, normal);
+            behavior,
+            terrain_metric.surface_unit_direction(map_wind_direction),
+            upslope);
+        return terrain_metric.normal_speed_mps(spread.ellipse, normal);
     };
     const auto normal_speeds = [&](const std::vector<FireVec2>& positions,
                                    const std::vector<FireVec2>& normals, Real time) {
@@ -584,6 +659,7 @@ legacy_uniform_step(
         return speeds;
     };
 
+    std::vector<std::vector<FireVec2>> midpoint_vertices_m;
     FireFront advanced = [&]() {
         if (batched) {
             auto result = ERFFire::advance_front_rk2_batched_until_topology_event(
@@ -592,31 +668,61 @@ legacy_uniform_step(
                 || result.advanced_dt_s != dt) {
                 throw std::logic_error("uniform equivalence fixture unexpectedly changed topology");
             }
+            midpoint_vertices_m =
+                result.rk2_midpoint_vertices_m;
             return std::move(*result.completed_front);
         }
-        return FireFront(std::vector<FireFrontComponent>{{FireFrontRole::Outer,
-            ERFFire::advance_perimeter_rk2(before.perimeter(), start, dt, normal_speed)}});
+
+        auto result =
+            ERFFire::advance_perimeter_rk2_with_dense_output(
+                before.perimeter(),
+                start,
+                dt,
+                normal_speed);
+        midpoint_vertices_m = {
+            result.midpoint_vertices_m};
+        return FireFront(
+            std::vector<FireFrontComponent>{
+                {
+                    FireFrontRole::Outer,
+                    std::move(result.perimeter)
+                }
+            });
     }();
-    const auto& perimeter = advanced.components().front().perimeter;
+
+    const std::size_t history_temporal_substeps =
+        reference_history_temporal_substeps(
+            before.front(),
+            midpoint_vertices_m,
+            advanced,
+            config.raster_geometry,
+            config.combustion_options.temporal_substeps);
+
     auto burned = before.burned_fraction_raster();
     auto arrival = before.first_arrival_raster();
     auto combustion = before.combustion_raster();
-    if (batched) {
-        (void)arrival.update_from_front_linear_sweep(before.front(), advanced,
-            start, end, std::min(config.arrival_time_tolerance_s, dt),
-            config.combustion_options.temporal_substeps);
-        (void)burned.update_from_front_linear_sweep(before.front(), advanced,
-            config.combustion_options.temporal_substeps);
-        (void)combustion.advance_from_front_linear_sweep(before.front(), advanced,
-            before.burned_fraction_raster(), burned, dt);
-    } else {
-        (void)arrival.update_from_sweep(before.perimeter(), perimeter,
-            start, end, config.arrival_time_tolerance_s);
-        (void)burned.update_from_linear_sweep(before.perimeter(), perimeter,
-            config.combustion_options.temporal_substeps);
-        (void)combustion.advance_from_linear_sweep(before.perimeter(), perimeter,
-            before.burned_fraction_raster(), burned, dt);
-    }
+
+    (void)arrival.update_from_front_rk2_sweep(
+        before.front(),
+        midpoint_vertices_m,
+        advanced,
+        start,
+        end,
+        std::min(config.arrival_time_tolerance_s, dt),
+        history_temporal_substeps);
+    (void)burned.update_from_front_rk2_sweep(
+        before.front(),
+        midpoint_vertices_m,
+        advanced,
+        history_temporal_substeps);
+    (void)combustion.advance_from_front_rk2_sweep(
+        before.front(),
+        midpoint_vertices_m,
+        advanced,
+        before.burned_fraction_raster(),
+        burned,
+        dt,
+        history_temporal_substeps);
     const std::vector<FireVec2> vertices = batched
         ? ERFFire::remesh_front(advanced, config.remesh_options)
               .front.components().front().perimeter.vertices_m()
