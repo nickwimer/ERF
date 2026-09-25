@@ -94,6 +94,40 @@ TEST(FireRuntimeInit, DefaultFireGridMatchesLevel0)
     EXPECT_EQ(config.raster_geometry.dy_m, Real(4.0));
 }
 
+TEST(FireRuntimeInit, UniformRuntimeMaterialIsCategoricalFm1)
+{
+    const Geometry geometry = make_geometry();
+    const auto options = make_options();
+    const auto config =
+        make_erf_fire_spread_config(
+            options,
+            geometry);
+
+    EXPECT_EQ(
+        config.uniform_material.model_id,
+        ERFFire::FireFuelModelId::FM1);
+    EXPECT_TRUE(
+        ERFFire::fire_fuel_model_moisture_complete(
+            config.uniform_material.model_id,
+            config.uniform_material.moisture));
+    EXPECT_EQ(
+        config.uniform_material.moisture.get(
+            ERFFire::FireFuelMoistureClass::Dead1h),
+        options.dead_fuel_moisture_fraction);
+    EXPECT_FALSE(
+        config.uniform_material.moisture.has(
+            ERFFire::FireFuelMoistureClass::Dead10h));
+    EXPECT_FALSE(
+        config.uniform_material.moisture.has(
+            ERFFire::FireFuelMoistureClass::Dead100h));
+    EXPECT_FALSE(
+        config.uniform_material.moisture.has(
+            ERFFire::FireFuelMoistureClass::LiveHerbaceous));
+    EXPECT_FALSE(
+        config.uniform_material.moisture.has(
+            ERFFire::FireFuelMoistureClass::LiveWoody));
+}
+
 TEST(FireRuntimeInit, FinerFireGridUsesSamePhysicalDomain)
 {
     const Geometry geometry = make_geometry();

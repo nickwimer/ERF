@@ -33,6 +33,19 @@ enum class FireFuelModelId : int
     FM13 = 13
 };
 
+/**
+ * Model-neutral resolved surface-fire material.
+ *
+ * Uniform and spatial production paths should use this same categorical
+ * representation. Storage location (uniform versus raster) is deliberately
+ * not part of material identity.
+ */
+struct FireFuelMaterial
+{
+    FireFuelModelId model_id{FireFuelModelId::FM1};
+    FireFuelMoisture moisture{};
+};
+
 struct FireFuelModelMoistureContract
 {
     bool valid_model{};

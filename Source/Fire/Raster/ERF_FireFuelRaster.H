@@ -34,15 +34,14 @@ namespace ERFFire
 {
 
 /**
- * Distributed storage accepts the stable material IDs defined by
+ * Distributed storage accepts the model-neutral material defined by
  * ERF_FireFuelModel.H. Storage validity is intentionally separate from the
  * required-moisture and production-physics contracts.
+ *
+ * Keep the raster-cell name as a compatibility alias while uniform and
+ * spatial runtime material converge on FireFuelMaterial.
  */
-struct FireFuelRasterCell
-{
-    FireFuelModelId model_id{FireFuelModelId::FM1};
-    FireFuelMoisture moisture{};
-};
+using FireFuelRasterCell = FireFuelMaterial;
 
 struct FireFuelRasterState
 {

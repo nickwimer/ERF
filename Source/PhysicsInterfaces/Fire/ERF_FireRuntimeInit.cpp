@@ -180,6 +180,11 @@ make_erf_fire_spread_config(
             "two-way fire.n_cell cannot mix finer and coarser axes relative to level 0");
     }
 
+    FireFuelMoisture uniform_moisture;
+    uniform_moisture.set(
+        FireFuelMoistureClass::Dead1h,
+        options.dead_fuel_moisture_fraction);
+
     return {
         make_fm1_fuel_parameters(),
         options.dead_fuel_moisture_fraction,
@@ -193,7 +198,10 @@ make_erf_fire_spread_config(
             options.remesh_max_edge_length_m,
             options.remesh_max_chord_error_m},
         raster_geometry,
-        options.arrival_time_tolerance_s};
+        options.arrival_time_tolerance_s,
+        FireFuelMaterial{
+            FireFuelModelId::FM1,
+            uniform_moisture}};
 }
 
 FireFuelField

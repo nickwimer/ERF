@@ -46,6 +46,12 @@ struct ERFFireSpreadConfig
     FirePerimeterRemeshOptions remesh_options{};
     FireCartesianRasterGeometry2D raster_geometry{};
     amrex::Real arrival_time_tolerance_s{amrex::Real(1.0e-6)};
+
+    // Canonical categorical material for the ERF-facing uniform path.
+    // Legacy single-class fields above remain compatibility state until the
+    // material-driven spread/combustion migration is complete. Keeping this
+    // field last preserves existing aggregate initializers during that migration.
+    FireFuelMaterial uniform_material{};
 };
 
 struct ERFFireSpreadRuntimeState
