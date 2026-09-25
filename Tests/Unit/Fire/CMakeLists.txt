@@ -21,6 +21,7 @@ if(ERF_ENABLE_CUDA)
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireDevelopedBuoyancyAnalysis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireBackgroundWindAnalysis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireMpiDecompositionAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTemporalRefinementAnalysis.cpp
     PROPERTIES LANGUAGE CUDA
   )
 endif()
@@ -449,6 +450,16 @@ target_link_libraries(
 )
 set_erf_compile_flags(erf_fire_atmospheric_response_analysis)
 add_dependencies(erf_fire_unit_tests erf_fire_atmospheric_response_analysis)
+
+add_executable(erf_fire_temporal_refinement_analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/ERF_FireTemporalRefinementAnalysis.cpp
+)
+target_link_libraries(
+  erf_fire_temporal_refinement_analysis
+  PRIVATE
+    AMReX::amrex
+)
+set_erf_compile_flags(erf_fire_temporal_refinement_analysis)
 
 
 add_test(
