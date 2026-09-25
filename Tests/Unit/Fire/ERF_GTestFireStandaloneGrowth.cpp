@@ -315,7 +315,7 @@ make_wind_only_reference_wavelet (
     return make_reference_wavelet_with_rates(
         vertex_count,
         age_s,
-        FireVec2{Real(1.0), Real(0.0)},
+        FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
         reference_wind_only_semi_major_rate_mps,
         reference_wind_only_flank_ros_mps,
         reference_wind_only_center_translation_rate_mps);
@@ -460,12 +460,12 @@ make_oblique_fm1_spread (bool mirrored = false)
 {
     const auto behavior = ERFFire::evaluate_rothermel(
         ERFFire::make_fm1_fuel_parameters(),
-        RothermelInputs{Real(0.08), Real(1.0), Real(0.20)});
+        RothermelInputs{amrex::Real(0.08), amrex::Real(1.0), amrex::Real(0.20)});
 
     return ERFFire::make_richards_directional_spread(
         behavior,
-        FireVec2{Real(1.0), Real(0.0)},
-        FireVec2{Real(0.0), mirrored ? Real(-1.0) : Real(1.0)});
+        FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
+        FireVec2{amrex::Real(0.0), mirrored ? amrex::Real(-1.0) : amrex::Real(1.0)});
 }
 
 RichardsDirectionalSpread
@@ -473,12 +473,12 @@ make_wind_only_fm1_spread ()
 {
     const auto behavior = ERFFire::evaluate_rothermel(
         ERFFire::make_fm1_fuel_parameters(),
-        RothermelInputs{Real(0.08), Real(1.0), Real(0.0)});
+        RothermelInputs{amrex::Real(0.08), amrex::Real(1.0), amrex::Real(0.0)});
 
     return ERFFire::make_richards_directional_spread(
         behavior,
-        FireVec2{Real(1.0), Real(0.0)},
-        FireVec2{Real(0.0), Real(1.0)});
+        FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
+        FireVec2{amrex::Real(0.0), amrex::Real(1.0)});
 }
 
 FirePerimeter
@@ -1230,11 +1230,11 @@ TEST(FireRasterIntegration, ExtinguishedRemeshedFrontCreatesNoAdditionalBurnHist
 {
     const auto behavior = ERFFire::evaluate_rothermel(
         ERFFire::make_fm1_fuel_parameters(),
-        RothermelInputs{Real(0.12), Real(1.0), Real(0.20)});
+        RothermelInputs{amrex::Real(0.12), amrex::Real(1.0), amrex::Real(0.20)});
     const auto spread = ERFFire::make_richards_directional_spread(
         behavior,
-        FireVec2{Real(1.0), Real(0.0)},
-        FireVec2{Real(0.0), Real(1.0)});
+        FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
+        FireVec2{amrex::Real(0.0), amrex::Real(1.0)});
 
     const FirePerimeterRemeshOptions options{
         0.25,
@@ -1278,7 +1278,7 @@ TEST(FireRasterIntegration, ExtinguishedRemeshedFrontCreatesNoAdditionalBurnHist
     auto run = advance_with_remeshing(
         ERFFireTest::make_circle(256, 10.0),
         spread,
-        FireVec2{Real(1.0), Real(0.0)},
+        FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
         options,
         false,
         observer);
@@ -1436,7 +1436,7 @@ TEST(FireArrivalIntegration, WindOnlyHeadStripTracksAnalyticArrivalThroughRemesh
             initial_vertex_count,
             initial_wavelet_age_s),
         spread,
-        FireVec2{Real(1.0), Real(0.0)},
+        FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
         options,
         false,
         post_remesh_observer,
@@ -1491,12 +1491,12 @@ TEST(FireArrivalIntegration, ExtinguishedRemeshedSweepsDoNotAdvanceArrivalHistor
 {
     const auto behavior = ERFFire::evaluate_rothermel(
         ERFFire::make_fm1_fuel_parameters(),
-        RothermelInputs{Real(0.12), Real(1.0), Real(0.20)});
+        RothermelInputs{amrex::Real(0.12), amrex::Real(1.0), amrex::Real(0.20)});
     const auto spread =
         ERFFire::make_richards_directional_spread(
             behavior,
-            FireVec2{Real(1.0), Real(0.0)},
-            FireVec2{Real(0.0), Real(1.0)});
+            FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
+            FireVec2{amrex::Real(0.0), amrex::Real(1.0)});
 
     const FirePerimeterRemeshOptions options{
         0.25,
@@ -1607,7 +1607,7 @@ TEST(FireArrivalIntegration, ExtinguishedRemeshedSweepsDoNotAdvanceArrivalHistor
     (void)advance_with_remeshing(
         ERFFireTest::make_circle(256, 10.0),
         spread,
-        FireVec2{Real(1.0), Real(0.0)},
+        FireVec2{amrex::Real(1.0), amrex::Real(0.0)},
         options,
         false,
         post_remesh_observer,
@@ -1642,9 +1642,9 @@ TEST(FireStandaloneGrowth, ExtinctionWithRemeshingIsIdempotentlyStationary)
 {
     const auto behavior = ERFFire::evaluate_rothermel(
         ERFFire::make_fm1_fuel_parameters(),
-        RothermelInputs{Real(0.12), Real(1.0), Real(0.20)});
+        RothermelInputs{amrex::Real(0.12), amrex::Real(1.0), amrex::Real(0.20)});
     const auto spread = ERFFire::make_richards_directional_spread(
-        behavior, FireVec2{Real(1.0), Real(0.0)}, FireVec2{Real(0.0), Real(1.0)});
+        behavior, FireVec2{amrex::Real(1.0), amrex::Real(0.0)}, FireVec2{amrex::Real(0.0), amrex::Real(1.0)});
 
     const FirePerimeterRemeshOptions options{
         0.25,
@@ -1701,9 +1701,9 @@ TEST(FireStandaloneGrowth, ExtinctionLeavesPerimeterExactlyStationary)
 {
     const auto behavior = ERFFire::evaluate_rothermel(
         ERFFire::make_fm1_fuel_parameters(),
-        RothermelInputs{Real(0.12), Real(1.0), Real(0.20)});
+        RothermelInputs{amrex::Real(0.12), amrex::Real(1.0), amrex::Real(0.20)});
     const auto spread = ERFFire::make_richards_directional_spread(
-        behavior, FireVec2{Real(1.0), Real(0.0)}, FireVec2{Real(0.0), Real(1.0)});
+        behavior, FireVec2{amrex::Real(1.0), amrex::Real(0.0)}, FireVec2{amrex::Real(0.0), amrex::Real(1.0)});
 
     FirePerimeter perimeter = ERFFireTest::make_circle(64, 10.0);
     const std::vector<FireVec2> initial_vertices = perimeter.vertices_m();
