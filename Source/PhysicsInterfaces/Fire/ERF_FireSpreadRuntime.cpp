@@ -2394,6 +2394,15 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     burned_before_segment =
                         next_burned;
 
+                // event_dt_s is computed before adding it to the represented
+                // history clock.  Rounding in event_time_s can make the
+                // represented duration one ulp smaller, so clamp the bisection
+                // tolerance to the duration actually passed to the history
+                // raster rather than to the pre-addition dt.
+                const amrex::Real event_duration_s =
+                    event_time_s
+                    - segment_start_time_s;
+
                 const FireFirstArrivalRasterUpdate
                     arrival_update =
                         next_arrival
@@ -2407,7 +2416,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                                 std::min(
                                     config_
                                         .arrival_time_tolerance_s,
-                                    event_dt_s));
+                                    event_duration_s));
 
                 const FireRasterBurnedAreaUpdate
                     burned_update =
@@ -2500,6 +2509,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 burned_before_segment =
                     next_burned;
 
+            // As for topology events above, the history API validates against
+            // the represented clock interval.  Clamp to that interval so a
+            // rounded completed_time_s cannot make an otherwise valid
+            // tolerance slightly exceed the duration.
+            const amrex::Real completed_duration_s =
+                completed_time_s
+                - segment_start_time_s;
+
             const FireFirstArrivalRasterUpdate
                 arrival_update =
                     next_arrival
@@ -2512,7 +2529,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             std::min(
                                 config_
                                     .arrival_time_tolerance_s,
-                                completed_dt_s),
+                                completed_duration_s),
                             history_temporal_substeps);
 
             const FireRasterBurnedAreaUpdate
