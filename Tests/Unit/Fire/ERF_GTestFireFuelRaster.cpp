@@ -694,15 +694,17 @@ run_device_raster_spatial_combustion_step_probe(
                 }
 
                 FireCombustionState state{};
+                FireCombustionState ignited{};
                 if (ERFFire::try_add_fire_combustion_ignition(
                         state,
                         accounting.parameters,
                         Real(1),
-                        state)
+                        ignited)
                     != ERFFire::FireCombustionStatus::success) {
                     *status_ptr = -2;
                     return;
                 }
+                state = ignited;
 
                 constexpr int substeps = 4;
                 const Real half_dt = Real(0.125);
