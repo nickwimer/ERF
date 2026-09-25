@@ -47,12 +47,13 @@ struct ERFFireSpreadConfig
     FireCartesianRasterGeometry2D raster_geometry{};
     amrex::Real arrival_time_tolerance_s{amrex::Real(1.0e-6)};
 
-    // Canonical categorical material for the ERF-facing uniform spread path.
-    // A default FM1 material with no prescribed moisture identifies legacy
-    // checkpoint/aggregate state; explicitly altered single-class fuel/moisture
-    // also remains on the compatibility path. Combustion migration follows in
-    // a separate invariant-preserving change. Keeping this field last preserves
-    // existing aggregate initializers during that migration.
+    // Canonical categorical material for the ERF-facing uniform path.
+    // Runtime construction sources categorical Dead1h moisture into the exact
+    // legacy FM1 compatibility field; the spread arithmetic itself deliberately
+    // remains unchanged so FM1 stays bitwise stable. A default FM1 material
+    // with no moisture identifies legacy checkpoint/aggregate state, while
+    // explicitly altered single-class fuel/moisture remains a compatibility
+    // path. Keeping this field last preserves existing aggregate initializers.
     FireFuelMaterial uniform_material{};
 };
 
