@@ -625,6 +625,127 @@ run_device_raster_spatial_fuel_combustion_accounting_probe(
     throw std::logic_error(
         "device raster combustion probe target is not locally owned");
 }
+
+struct DeviceSpatialCombustionStepProbe
+{
+    FireFuelCombustionAccounting accounting{};
+    FireCombustionState state{};
+    int status{};
+};
+
+DeviceSpatialCombustionStepProbe
+run_device_raster_spatial_combustion_step_probe(
+    const FireFuelRaster& raster,
+    int target_i,
+    int target_j,
+    const FireCombustionParameters& base)
+{
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "device raster combustion-step probe is single-rank only");
+    }
+
+    const amrex::IntVect target(target_i, target_j, 0);
+    for (amrex::MFIter mfi(raster.distributed_values());
+         mfi.isValid(); ++mfi) {
+        if (!mfi.validbox().contains(target)) {
+            continue;
+        }
+
+        const auto values =
+            raster.distributed_values().const_array(mfi);
+        amrex::Gpu::DeviceScalar<FireFuelCombustionAccounting>
+            device_accounting;
+        amrex::Gpu::DeviceScalar<FireCombustionState>
+            device_state;
+        amrex::Gpu::DeviceScalar<int> device_status;
+
+        auto* accounting_ptr =
+            device_accounting.dataPtr();
+        auto* state_ptr =
+            device_state.dataPtr();
+        auto* status_ptr =
+            device_status.dataPtr();
+
+        amrex::ParallelFor(
+            1,
+            [=] AMREX_GPU_DEVICE (int) noexcept
+            {
+                FireFuelRasterCell cell{};
+                FireFuelCombustionAccounting accounting{};
+                if (!ERFFire::detail::try_decode_fire_fuel_raster_cell(
+                        values,
+                        target_i,
+                        target_j,
+                        cell)) {
+                    *status_ptr = -1;
+                    return;
+                }
+                const auto material_status =
+                    ERFFire::try_make_spatial_fire_combustion_accounting(
+                        base,
+                        cell,
+                        accounting);
+                if (material_status
+                    != FireFuelCombustionAccountingStatus::success) {
+                    *status_ptr =
+                        static_cast<int>(material_status) + 10;
+                    return;
+                }
+
+                FireCombustionState state{};
+                if (ERFFire::try_add_fire_combustion_ignition(
+                        state,
+                        accounting.parameters,
+                        Real(1),
+                        state)
+                    != ERFFire::FireCombustionStatus::success) {
+                    *status_ptr = -2;
+                    return;
+                }
+
+                constexpr int substeps = 4;
+                const Real half_dt = Real(0.125);
+                for (int substep = 0;
+                     substep < substeps;
+                     ++substep) {
+                    ERFFire::FireCombustionAdvance first{};
+                    if (ERFFire::try_advance_fire_combustion(
+                            state,
+                            accounting.parameters,
+                            half_dt,
+                            first)
+                        != ERFFire::FireCombustionStatus::success) {
+                        *status_ptr = -3;
+                        return;
+                    }
+                    ERFFire::FireCombustionAdvance second{};
+                    if (ERFFire::try_advance_fire_combustion(
+                            first.state,
+                            accounting.parameters,
+                            half_dt,
+                            second)
+                        != ERFFire::FireCombustionStatus::success) {
+                        *status_ptr = -4;
+                        return;
+                    }
+                    state = second.state;
+                }
+
+                *accounting_ptr = accounting;
+                *state_ptr = state;
+                *status_ptr = 0;
+            });
+
+        return {
+            device_accounting.dataValue(),
+            device_state.dataValue(),
+            device_status.dataValue()};
+    }
+
+    throw std::logic_error(
+        "device raster combustion-step probe target is not locally owned");
+}
 #endif
 
 } // namespace
@@ -1400,6 +1521,41 @@ TEST(FireFuelCombustionAccounting, DeviceRasterFm2ResolutionMatchesHost)
         host.parameters.burn_time_constant_s);
 }
 #endif
+
+#ifdef AMREX_USE_GPU
+TEST(FireFuelCombustionAccounting, DeviceRasterFm2CombustionStepMatchesResolvedWater)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+    const auto raster =
+        make_anderson_combustion_fuel_raster();
+
+    const auto actual =
+        run_device_raster_spatial_combustion_step_probe(
+            raster,
+            1,
+            0,
+            base);
+
+    ASSERT_EQ(actual.status, 0);
+    const Real expected_water =
+        actual.state.consumed_dry_fuel_kg_m2
+        * (actual.accounting.parameters.fuel_moisture_fraction
+           + actual.accounting.parameters
+               .combustion_water_yield_kg_per_kg_dry);
+
+    EXPECT_NEAR(
+        actual.accounting.parameters.fuel_moisture_fraction,
+        Real(0.175),
+        fuel_accounting_tolerance(Real(0.175)));
+    EXPECT_NEAR(
+        actual.state.water_released_kg_m2,
+        expected_water,
+        fuel_accounting_tolerance(expected_water));
+}
+#endif
+
 
 
 TEST(FireFuelCombustion, AndersonModelsRemainUnsupportedUntilCombustionPolicy)
