@@ -562,6 +562,69 @@ run_device_spatial_fuel_combustion_accounting_probe(
         device_status.dataValue()};
 }
 
+
+
+DeviceFuelCombustionAccountingProbe
+run_device_raster_spatial_fuel_combustion_accounting_probe(
+    const FireFuelRaster& raster,
+    int target_i,
+    int target_j,
+    const FireCombustionParameters& base)
+{
+    if (amrex::ParallelDescriptor::NProcs() != 1) {
+        throw std::logic_error(
+            "device raster combustion probe is single-rank only");
+    }
+
+    const amrex::IntVect target(target_i, target_j, 0);
+    for (amrex::MFIter mfi(raster.distributed_values());
+         mfi.isValid(); ++mfi) {
+        if (!mfi.validbox().contains(target)) {
+            continue;
+        }
+
+        const auto values =
+            raster.distributed_values().const_array(mfi);
+        amrex::Gpu::DeviceScalar<FireFuelCombustionAccounting>
+            device_accounting;
+        amrex::Gpu::DeviceScalar<int> device_status;
+
+        auto* accounting_ptr =
+            device_accounting.dataPtr();
+        auto* status_ptr =
+            device_status.dataPtr();
+
+        amrex::ParallelFor(
+            1,
+            [=] AMREX_GPU_DEVICE (int) noexcept
+            {
+                FireFuelRasterCell cell{};
+                FireFuelCombustionAccounting result{};
+                const bool decoded =
+                    ERFFire::detail::try_decode_fire_fuel_raster_cell(
+                        values,
+                        target_i,
+                        target_j,
+                        cell);
+                const auto status =
+                    decoded
+                    ? ERFFire::try_make_spatial_fire_combustion_accounting(
+                        base,
+                        cell,
+                        result)
+                    : FireFuelCombustionAccountingStatus::invalid_model;
+                *accounting_ptr = result;
+                *status_ptr = static_cast<int>(status);
+            });
+
+        return {
+            device_accounting.dataValue(),
+            device_status.dataValue()};
+    }
+
+    throw std::logic_error(
+        "device raster combustion probe target is not locally owned");
+}
 #endif
 
 } // namespace
@@ -1285,6 +1348,59 @@ TEST(FireFuelCombustionAccounting, DeviceSafeSpatialFm2ResolutionMatchesHost)
         host.parameters.combustion_water_yield_kg_per_kg_dry);
 }
 #endif
+
+#ifdef AMREX_USE_GPU
+TEST(FireFuelCombustionAccounting, DeviceRasterFm2ResolutionMatchesHost)
+{
+    const FireCombustionParameters base =
+        ERFFire::make_fm1_combustion_parameters(
+            Real(0.08));
+    const auto raster =
+        make_anderson_combustion_fuel_raster();
+
+    FireFuelRasterCell cell;
+    cell.model_id = FireFuelModelId::FM2;
+    cell.moisture.set(MoistureClass::Dead1h, Real(0.08));
+    cell.moisture.set(MoistureClass::Dead10h, Real(0.09));
+    cell.moisture.set(MoistureClass::Dead100h, Real(0.10));
+    cell.moisture.set(MoistureClass::LiveHerbaceous, Real(0.80));
+
+    const auto host =
+        ERFFire::make_spatial_fire_combustion_accounting(
+            base,
+            cell);
+    const auto actual =
+        run_device_raster_spatial_fuel_combustion_accounting_probe(
+            raster,
+            1,
+            0,
+            base);
+
+    ASSERT_EQ(
+        actual.status,
+        static_cast<int>(
+            FireFuelCombustionAccountingStatus::success));
+    EXPECT_NEAR(
+        actual.accounting.parameters.dry_fuel_load_kg_m2,
+        host.parameters.dry_fuel_load_kg_m2,
+        fuel_accounting_tolerance(
+            host.parameters.dry_fuel_load_kg_m2));
+    EXPECT_NEAR(
+        actual.accounting.parameters.fuel_moisture_fraction,
+        host.parameters.fuel_moisture_fraction,
+        fuel_accounting_tolerance(
+            host.parameters.fuel_moisture_fraction));
+    EXPECT_NEAR(
+        actual.accounting.prescribed_water_load_kg_m2,
+        host.prescribed_water_load_kg_m2,
+        fuel_accounting_tolerance(
+            host.prescribed_water_load_kg_m2));
+    EXPECT_EQ(
+        actual.accounting.parameters.burn_time_constant_s,
+        host.parameters.burn_time_constant_s);
+}
+#endif
+
 
 TEST(FireFuelCombustion, AndersonModelsRemainUnsupportedUntilCombustionPolicy)
 {
