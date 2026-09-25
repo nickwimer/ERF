@@ -27,9 +27,23 @@ heat per dry mass and combustion-water yield retain the existing policy.
 Different particle classes, flaming/smouldering partitions, moisture-dependent
 burn histories, and observational calibration remain unresolved.
 
+A later native GPU regression exposed a separate spatial-water accounting
+invariant failure for multifuel combustion: the distributed FM2 runtime could
+finish a sweep with cumulative released water inconsistent with the resolved
+cellwise Anderson moisture while dry-fuel mass and sensible-energy accounting
+remained correct. The spatial combustion sweep now reconstructs cumulative
+water on its temporary candidate state from consumed dry fuel, the immutable
+cellwise prescribed-moisture accounting, and the retained combustion-water
+yield before extensive totals are reduced or persistent state is committed.
+The correction preserves the strong exception guarantee and does not introduce
+a new water-yield model.
+
 `FireScientificBurnTime.*` exercises the production resolver and the burn
 kernel against the independent table and exponential-time reference. Correct
 mass and energy accounting is checked separately from the release timescale.
+Dedicated GPU regression oracles also cover direct FM2 spatial resolution,
+distributed-raster decode plus resolution, and the resulting combustion-water
+identity.
 
 ## Surface-to-map propagation
 
@@ -233,11 +247,31 @@ first-order under the later refinements; velocity max norms converged more
 slowly but continued to decrease. This is numerical timestep-refinement
 evidence for the explicit outer coupling, not physical validation.
 
-The later RK2-dense-history, double-clock, adaptive-history, feedback-column,
-budget-oracle, and CTest-launcher commits were source-reviewed but had NOT yet
-been rebuilt or executed on Kestrel when this document was updated. They must
-therefore pass a fresh native CUDA/MPI regression gate before being treated as
-verified implementation.
+The second re-audit series and its follow-up fixes have now also been exercised
+natively on Kestrel H100 GPUs. The fresh evidence includes:
+
+- clean native CUDA/H100 compilation and link of the updated Fire unit target;
+- one-rank CTest execution through the configured Cray/Slurm MPI launcher;
+- 6/6 then 7/7 targeted re-audit tests, including RK2 dense histories,
+  curved material traversal, double authoritative clock, feedback-column
+  diagnostics, source energy/water budget closure, and multifuel water
+  accounting;
+- 56/56 affected Fire subsystem tests;
+- 118/118 dependent barrier, fuel-raster, combustion, burned-fraction,
+  arrival-history, and terrain-reference tests after correcting the exposed
+  multifuel water invariant;
+- a fresh SINGLE-precision CUDA build in which
+  `FireSpreadRuntime.AuthoritativeClockAccumulatesInDoublePrecision` passed,
+  together with all 7/7 targeted re-audit tests;
+- a two-rank CUDA/MPI `ParallelEnvironment.*` smoke test on two visible H100s;
+- 5/5 high-value coupled/decomposition/restart integration tests; and
+- 16/16 enabled `FireTimeStepIntegration.*` tests in the full current
+  integration suite.
+
+`FireTimeStepIntegration.MpiTerrainRestartInvariant` remains intentionally
+disabled for CUDA because the previously isolated nondeterminism occurs in the
+upstream terrain-fitted atmosphere evolution even with Fire disabled. Its
+disabled status is therefore not treated as a Fire correctness failure.
 
 The original isolated float/double terrain and material-event harnesses remain
 useful component evidence, but they are weaker than the native Kestrel tests
