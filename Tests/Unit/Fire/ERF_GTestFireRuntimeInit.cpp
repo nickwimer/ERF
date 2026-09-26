@@ -1441,20 +1441,12 @@ TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
         restored,
         original);
 
-    Runtime expected =
-        phase(
-            "copy original runtime",
-            [&]()
-            {
-                return Runtime(original);
-            });
-
     const auto expected_diagnostics =
         phase(
-            "post-checkpoint copied-original continuation",
+            "post-checkpoint original continuation",
             [&]()
             {
-                return expected.advance_direct_reference_wind_batched(
+                return original.advance_direct_reference_wind_batched(
                     batch,
                     Real(0.25));
             });
@@ -1474,7 +1466,7 @@ TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
         expected_diagnostics);
     expect_runtime_distributed_state_equal(
         restored,
-        expected);
+        original);
 }
 
 TEST(FireFuelRuntime, SpatialCheckpointV4RoundTripContinuesExactly)
