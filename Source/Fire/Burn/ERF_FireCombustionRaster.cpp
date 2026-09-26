@@ -323,7 +323,9 @@ initialize_combustion_states_on_device(
                 }
                 if (material_status
                     != FireFuelCombustionAccountingStatus::success) {
-                    return {4, 0};
+                    return {
+                        40 + static_cast<int>(material_status),
+                        0};
                 }
                 local_parameters = accounting.parameters;
             }
@@ -1275,8 +1277,14 @@ FireCombustionRaster::initialize_from_burned_fraction_impl(
                 ? "fire combustion initialization could not decode spatial fuel"
             : reason == 3
                 ? "NonBurnable combustion initialization is not canonical zero"
-            : reason == 4
-                ? "fire combustion initialization rejected spatial material"
+            : reason == 41
+                ? "fire combustion initialization found invalid base parameters"
+            : reason == 43
+                ? "fire combustion initialization found invalid Anderson model"
+            : reason == 44
+                ? "fire combustion initialization is missing required moisture"
+            : reason == 45
+                ? "fire combustion initialization material accounting overflowed"
             : reason == 5
                 ? "fire combustion initialization rejected ignition insertion"
                 : "fire combustion initialization rejected combustion state";
