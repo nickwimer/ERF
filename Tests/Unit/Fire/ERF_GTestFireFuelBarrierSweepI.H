@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -131,6 +132,26 @@ transient_sweep_speed(int& calls)
 
         return speeds;
     };
+}
+
+TEST(FireFuelBarrier, SweptEdgeHullCollapsesRoundoffThinMotion)
+{
+    const SweepReal epsilon =
+        std::numeric_limits<SweepReal>::epsilon();
+    const SweepReal offset =
+        SweepReal(8) * epsilon;
+
+    const auto hull =
+        ERFFire::detail::fire_barrier_swept_edge_hull(
+            {SweepReal(0), SweepReal(0)},
+            {SweepReal(1), -offset},
+            {SweepReal(1), offset},
+            {SweepReal(2), SweepReal(0)});
+
+    // Exact cross products retain a four-vertex diamond here, while
+    // FirePerimeter's scaled orientation test correctly treats it as
+    // roundoff-collinear.  The swept-edge hull must use the same resolution.
+    EXPECT_TRUE(hull.empty());
 }
 
 TEST(FireFuelBarrier, SweptEdgesDetectTransientBarrierBetweenLegalStates)

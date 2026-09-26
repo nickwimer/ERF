@@ -86,7 +86,44 @@ fire_barrier_sweep_turn(
         second - origin);
 }
 
-/** Convex hull of the four represented endpoint states, CCW without repeats. */
+inline bool
+fire_barrier_sweep_nonleft_turn(
+    const FireVec2& origin,
+    const FireVec2& first,
+    const FireVec2& second) noexcept
+{
+    const FireVec2 first_delta =
+        first - origin;
+    const FireVec2 second_delta =
+        second - origin;
+    const amrex::Real turn =
+        cross_2d(first_delta, second_delta);
+    const amrex::Real scale =
+        std::max({
+            norm(first_delta),
+            norm(second_delta),
+            norm(second - first),
+            amrex::Real(1)
+        });
+    const amrex::Real tolerance =
+        amrex::Real(64)
+        * std::numeric_limits<amrex::Real>::epsilon()
+        * scale
+        * scale;
+
+    return turn <= tolerance;
+}
+
+/**
+ * Convex hull of the four represented endpoint states, CCW without repeats.
+ *
+ * The turn predicate deliberately uses the same scaled orientation tolerance
+ * as FirePerimeter validation.  Otherwise a roundoff-thin swept quadrilateral
+ * can survive an exact cross-product hull test, then be rejected immediately
+ * as self-intersecting when FirePerimeter treats the same points as collinear.
+ * Collapsing geometry below that shared resolution is consistent with the
+ * roundoff-scale positive-area threshold used by the swept-edge barrier test.
+ */
 inline std::vector<FireVec2>
 fire_barrier_swept_edge_hull(
     const FireVec2& start_first,
@@ -128,11 +165,10 @@ fire_barrier_swept_edge_hull(
 
     for (const FireVec2& point : points) {
         while (count >= 2U
-               && fire_barrier_sweep_turn(
+               && fire_barrier_sweep_nonleft_turn(
                       hull[count - 2U],
                       hull[count - 1U],
-                      point)
-                      <= amrex::Real(0)) {
+                      point)) {
             --count;
         }
         hull[count++] = point;
@@ -144,11 +180,10 @@ fire_barrier_swept_edge_hull(
          --reverse) {
         const FireVec2& point = points[reverse - 1U];
         while (count > lower_count
-               && fire_barrier_sweep_turn(
+               && fire_barrier_sweep_nonleft_turn(
                       hull[count - 2U],
                       hull[count - 1U],
-                      point)
-                      <= amrex::Real(0)) {
+                      point)) {
             --count;
         }
         hull[count++] = point;
