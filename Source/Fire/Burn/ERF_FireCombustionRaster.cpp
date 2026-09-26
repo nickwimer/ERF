@@ -292,7 +292,7 @@ initialize_combustion_states_on_device(
                         i,
                         j,
                         fuel_cell)) {
-                    return {1, 0};
+                    return {2, 0};
                 }
 
                 FireFuelCombustionAccounting accounting{};
@@ -312,7 +312,7 @@ initialize_combustion_states_on_device(
                         && current.water_released_kg_m2 == amrex::Real(0);
                     if (!canonical_zero
                         || burned(i, j, k) != amrex::Real(0)) {
-                        return {1, 0};
+                        return {3, 0};
                     }
                     return {0, 0};
                 }
@@ -323,7 +323,7 @@ initialize_combustion_states_on_device(
                 }
                 if (material_status
                     != FireFuelCombustionAccountingStatus::success) {
-                    return {1, 0};
+                    return {4, 0};
                 }
                 local_parameters = accounting.parameters;
             }
@@ -342,7 +342,7 @@ initialize_combustion_states_on_device(
             }
             if (status
                 != FireCombustionStatus::success) {
-                return {1, 0};
+                return {5, 0};
             }
 
             store_combustion_state(
@@ -1268,8 +1268,18 @@ FireCombustionRaster::initialize_from_burned_fraction_impl(
                    initialization_failure) != 0) {
         local_failure =
             DistributedFailure::invalid_argument;
+        const int reason =
+            amrex::get<0>(initialization_failure);
         local_error =
-            "fire combustion initialization rejected combustion state";
+            reason == 2
+                ? "fire combustion initialization could not decode spatial fuel"
+            : reason == 3
+                ? "NonBurnable combustion initialization is not canonical zero"
+            : reason == 4
+                ? "fire combustion initialization rejected spatial material"
+            : reason == 5
+                ? "fire combustion initialization rejected ignition insertion"
+                : "fire combustion initialization rejected combustion state";
     }
 #else
     try {
