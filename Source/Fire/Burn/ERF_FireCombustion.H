@@ -145,9 +145,24 @@ add_fire_combustion_ignition_unchecked(
         amrex::Real(1) < next_fraction
             ? amrex::Real(1)
             : next_fraction;
-    next.remaining_dry_fuel_kg_m2 +=
-        newly_ignited_area_fraction
+
+    // Dry mass is constrained by the authoritative represented ignited area.
+    // Reconstruct the remaining reservoir from that conserved total instead
+    // of independently accumulating the requested ignition increment.  This
+    // matters when next_fraction is within the accepted roundoff overshoot of
+    // one and is therefore clamped to exactly one: adding the unclamped
+    // increment would create more represented dry mass than the clamped area
+    // can own, causing the state to reject itself on the next validation.
+    const amrex::Real represented_dry_fuel_kg_m2 =
+        next.ignited_area_fraction
         * p.dry_fuel_load_kg_m2;
+    const amrex::Real remaining =
+        represented_dry_fuel_kg_m2
+        - next.consumed_dry_fuel_kg_m2;
+    next.remaining_dry_fuel_kg_m2 =
+        remaining < amrex::Real(0)
+            ? amrex::Real(0)
+            : remaining;
     return next;
 }
 
@@ -163,9 +178,6 @@ advance_fire_combustion_unchecked(
     const amrex::Real newly_consumed =
         -state.remaining_dry_fuel_kg_m2
         * std::expm1(exponent);
-    const amrex::Real remaining =
-        state.remaining_dry_fuel_kg_m2
-        - newly_consumed;
     const amrex::Real energy_increment =
         newly_consumed
         * p.sensible_heat_release_j_kg_dry;
@@ -177,11 +189,22 @@ advance_fire_combustion_unchecked(
         * water_release_kg_per_kg_dry;
 
     FireCombustionState next = state;
+    next.consumed_dry_fuel_kg_m2 += newly_consumed;
+
+    // The represented oven-dry mass is fixed by ignited area.  Reconstruct
+    // the complementary remaining reservoir from cumulative consumption so
+    // repeated split advances cannot accumulate independent add/subtract
+    // roundoff in two redundant mass fields.
+    const amrex::Real represented_dry_fuel_kg_m2 =
+        next.ignited_area_fraction
+        * p.dry_fuel_load_kg_m2;
+    const amrex::Real remaining =
+        represented_dry_fuel_kg_m2
+        - next.consumed_dry_fuel_kg_m2;
     next.remaining_dry_fuel_kg_m2 =
         remaining < amrex::Real(0)
             ? amrex::Real(0)
             : remaining;
-    next.consumed_dry_fuel_kg_m2 += newly_consumed;
 
     // Sensible energy and released water are algebraically
     // derived from cumulative consumed dry fuel.  Reconstruct

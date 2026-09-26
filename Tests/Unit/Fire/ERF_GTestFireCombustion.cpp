@@ -98,6 +98,40 @@ TEST(FireCombustion, IgnitionAddsDryFuelWithoutInstantConsumption)
     EXPECT_EQ(state.water_released_kg_m2, Real(0.0));
 }
 
+TEST(FireCombustion, IgnitionClampPreservesDryMassInvariant)
+{
+    const auto p = synthetic_parameters();
+    const Real epsilon =
+        std::numeric_limits<Real>::epsilon();
+
+    FireCombustionState state;
+    state.ignited_area_fraction =
+        Real(1) - Real(1024) * epsilon;
+    state.remaining_dry_fuel_kg_m2 =
+        state.ignited_area_fraction
+            * p.dry_fuel_load_kg_m2
+        + Real(800) * epsilon;
+
+    FireCombustionState result;
+    const auto status =
+        ERFFire::try_add_fire_combustion_ignition(
+            state,
+            p,
+            Real(1152) * epsilon,
+            result);
+
+    ASSERT_EQ(
+        status,
+        ERFFire::FireCombustionStatus::success);
+    EXPECT_EQ(
+        result.ignited_area_fraction,
+        Real(1));
+    EXPECT_EQ(
+        result.remaining_dry_fuel_kg_m2
+            + result.consumed_dry_fuel_kg_m2,
+        p.dry_fuel_load_kg_m2);
+}
+
 TEST(FireCombustion, ExponentialDecayMatchesIndependentHalfLifeFixture)
 {
     const auto p = synthetic_parameters();
