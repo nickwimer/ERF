@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -96,8 +97,8 @@ segments_intersect (
         || (cd_b == 0 && point_on_segment(b, c, d));
 }
 
-bool
-self_intersects (
+std::optional<std::pair<std::size_t, std::size_t>>
+first_self_intersection (
     const std::vector<FireVec2>& vertices) noexcept
 {
     const std::size_t count = vertices.size();
@@ -122,12 +123,14 @@ self_intersects (
                     vertices[first_next],
                     vertices[second],
                     vertices[second_next])) {
-                return true;
+                return std::pair<std::size_t, std::size_t>{
+                    first,
+                    second};
             }
         }
     }
 
-    return false;
+    return std::nullopt;
 }
 
 } // namespace
@@ -170,9 +173,15 @@ FirePerimeter::validate () const
             "FirePerimeter requires non-zero signed area");
     }
 
-    if (self_intersects(m_vertices_m)) {
+    if (const auto intersection =
+            first_self_intersection(m_vertices_m);
+        intersection.has_value()) {
         throw std::invalid_argument(
-            "FirePerimeter cannot self-intersect");
+            std::string("FirePerimeter cannot self-intersect (edges ")
+            + std::to_string(intersection->first)
+            + " and "
+            + std::to_string(intersection->second)
+            + ")");
     }
 }
 
