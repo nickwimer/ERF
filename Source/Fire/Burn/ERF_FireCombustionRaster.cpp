@@ -292,7 +292,7 @@ initialize_combustion_states_on_device(
                         i,
                         j,
                         fuel_cell)) {
-                    return {1, 0};
+                    return {2, 0};
                 }
 
                 FireFuelCombustionAccounting accounting{};
@@ -312,7 +312,7 @@ initialize_combustion_states_on_device(
                         && current.water_released_kg_m2 == amrex::Real(0);
                     if (!canonical_zero
                         || burned(i, j, k) != amrex::Real(0)) {
-                        return {1, 0};
+                        return {3, 0};
                     }
                     return {0, 0};
                 }
@@ -323,7 +323,7 @@ initialize_combustion_states_on_device(
                 }
                 if (material_status
                     != FireFuelCombustionAccountingStatus::success) {
-                    return {1, 0};
+                    return {4, 0};
                 }
                 local_parameters = accounting.parameters;
             }
@@ -342,7 +342,82 @@ initialize_combustion_states_on_device(
             }
             if (status
                 != FireCombustionStatus::success) {
-                return {1, 0};
+                const amrex::Real burned_value =
+                    burned(i, j, k);
+                if (!detail::combustion_parameters_valid(
+                        local_parameters)) {
+                    return {51, 0};
+                }
+                if (!detail::combustion_state_valid(
+                        current,
+                        local_parameters)) {
+                    return {52, 0};
+                }
+                if (!amrex::Math::isfinite(burned_value)
+                    || burned_value < amrex::Real(0)
+                    || burned_value > amrex::Real(1)) {
+                    return {53, 0};
+                }
+
+                const amrex::Real next_fraction =
+                    current.ignited_area_fraction
+                    + burned_value;
+                if (next_fraction
+                    > amrex::Real(1)
+                        + detail::combustion_scaled_tolerance(
+                            amrex::Real(1))) {
+                    return {54, 0};
+                }
+
+                const FireCombustionState unchecked =
+                    detail::add_fire_combustion_ignition_unchecked(
+                        current,
+                        local_parameters,
+                        burned_value);
+                if (!amrex::Math::isfinite(
+                        unchecked.remaining_dry_fuel_kg_m2)) {
+                    return {55, 0};
+                }
+
+                const amrex::Real expected_mass =
+                    unchecked.ignited_area_fraction
+                    * local_parameters.dry_fuel_load_kg_m2;
+                const amrex::Real represented_mass =
+                    unchecked.remaining_dry_fuel_kg_m2
+                    + unchecked.consumed_dry_fuel_kg_m2;
+                if (amrex::Math::abs(
+                        expected_mass - represented_mass)
+                    > detail::combustion_scaled_tolerance(
+                        expected_mass)) {
+                    return {56, 0};
+                }
+
+                const amrex::Real expected_energy =
+                    unchecked.consumed_dry_fuel_kg_m2
+                    * local_parameters
+                        .sensible_heat_release_j_kg_dry;
+                if (amrex::Math::abs(
+                        expected_energy
+                        - unchecked.sensible_energy_j_m2)
+                    > detail::combustion_scaled_tolerance(
+                        expected_energy)) {
+                    return {57, 0};
+                }
+
+                const amrex::Real expected_water =
+                    unchecked.consumed_dry_fuel_kg_m2
+                    * (local_parameters
+                           .fuel_moisture_fraction
+                       + local_parameters
+                           .combustion_water_yield_kg_per_kg_dry);
+                if (amrex::Math::abs(
+                        expected_water
+                        - unchecked.water_released_kg_m2)
+                    > detail::combustion_scaled_tolerance(
+                        expected_water)) {
+                    return {58, 0};
+                }
+                return {59, 0};
             }
 
             store_combustion_state(
@@ -1268,8 +1343,34 @@ FireCombustionRaster::initialize_from_burned_fraction_impl(
                    initialization_failure) != 0) {
         local_failure =
             DistributedFailure::invalid_argument;
+        const int reason =
+            amrex::get<0>(initialization_failure);
         local_error =
-            "fire combustion initialization rejected combustion state";
+            reason == 2
+                ? "fire combustion initialization could not decode spatial fuel"
+            : reason == 3
+                ? "NonBurnable combustion initialization is not canonical zero"
+            : reason == 4
+                ? "fire combustion initialization rejected spatial material"
+            : reason == 51
+                ? "fire combustion initialization has invalid local parameters"
+            : reason == 52
+                ? "fire combustion initialization has invalid prior state"
+            : reason == 53
+                ? "fire combustion initialization has invalid burned fraction"
+            : reason == 54
+                ? "fire combustion initialization ignition exceeds unit burned fraction"
+            : reason == 55
+                ? "fire combustion initialization ignition produced non-finite dry fuel"
+            : reason == 56
+                ? "fire combustion initialization violates dry-mass conservation"
+            : reason == 57
+                ? "fire combustion initialization violates sensible-energy accounting"
+            : reason == 58
+                ? "fire combustion initialization violates water accounting"
+            : reason == 59
+                ? "fire combustion initialization failed an unclassified ignition invariant"
+                : "fire combustion initialization rejected combustion state";
     }
 #else
     try {
