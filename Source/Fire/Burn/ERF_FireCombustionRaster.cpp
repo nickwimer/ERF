@@ -2234,7 +2234,77 @@ detail::advance_fire_combustion_vertex_sweep(
                                 first_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {5, 0, 0};
+                            if (!detail::combustion_parameters_valid(
+                                    local_parameters)) {
+                                return {51, 0, 0};
+                            }
+                            if (!amrex::Math::isfinite(
+                                    current.ignited_area_fraction)
+                                || current.ignited_area_fraction
+                                    < amrex::Real(0)
+                                || current.ignited_area_fraction
+                                    > amrex::Real(1)
+                                || !amrex::Math::isfinite(
+                                    current.remaining_dry_fuel_kg_m2)
+                                || current.remaining_dry_fuel_kg_m2
+                                    < amrex::Real(0)
+                                || !amrex::Math::isfinite(
+                                    current.consumed_dry_fuel_kg_m2)
+                                || current.consumed_dry_fuel_kg_m2
+                                    < amrex::Real(0)
+                                || !amrex::Math::isfinite(
+                                    current.sensible_energy_j_m2)
+                                || current.sensible_energy_j_m2
+                                    < amrex::Real(0)
+                                || !amrex::Math::isfinite(
+                                    current.water_released_kg_m2)
+                                || current.water_released_kg_m2
+                                    < amrex::Real(0)) {
+                                return {52, 0, 0};
+                            }
+
+                            const amrex::Real expected_mass =
+                                current.ignited_area_fraction
+                                * local_parameters
+                                    .dry_fuel_load_kg_m2;
+                            const amrex::Real represented_mass =
+                                current.remaining_dry_fuel_kg_m2
+                                + current.consumed_dry_fuel_kg_m2;
+                            if (amrex::Math::abs(
+                                    expected_mass
+                                    - represented_mass)
+                                > detail::combustion_scaled_tolerance(
+                                    expected_mass)) {
+                                return {53, 0, 0};
+                            }
+
+                            const amrex::Real expected_energy =
+                                current.consumed_dry_fuel_kg_m2
+                                * local_parameters
+                                    .sensible_heat_release_j_kg_dry;
+                            if (amrex::Math::abs(
+                                    expected_energy
+                                    - current.sensible_energy_j_m2)
+                                > detail::combustion_scaled_tolerance(
+                                    expected_energy)) {
+                                return {54, 0, 0};
+                            }
+
+                            const amrex::Real expected_water =
+                                current.consumed_dry_fuel_kg_m2
+                                * (local_parameters
+                                       .fuel_moisture_fraction
+                                   + local_parameters
+                                       .combustion_water_yield_kg_per_kg_dry);
+                            if (amrex::Math::abs(
+                                    expected_water
+                                    - current.water_released_kg_m2)
+                                > detail::combustion_scaled_tolerance(
+                                    expected_water)) {
+                                return {55, 0, 0};
+                            }
+
+                            return {56, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2324,6 +2394,18 @@ detail::advance_fire_combustion_vertex_sweep(
                     ? "spatial fuel combustion accounting was rejected"
                 : invalid_reason == 5
                     ? "first-half combustion state was rejected"
+                : invalid_reason == 51
+                    ? "first-half combustion parameters are invalid"
+                : invalid_reason == 52
+                    ? "first-half combustion state has invalid scalar bounds"
+                : invalid_reason == 53
+                    ? "first-half combustion state violates dry-mass conservation"
+                : invalid_reason == 54
+                    ? "first-half combustion state violates sensible-energy accounting"
+                : invalid_reason == 55
+                    ? "first-half combustion state violates water accounting"
+                : invalid_reason == 56
+                    ? "first-half combustion state failed an unclassified validator condition"
                 : invalid_reason == 6
                     ? "combustion ignition insertion was rejected"
                 : invalid_reason == 7
