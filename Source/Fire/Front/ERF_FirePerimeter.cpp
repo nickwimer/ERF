@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -176,12 +177,41 @@ FirePerimeter::validate () const
     if (const auto intersection =
             first_self_intersection(m_vertices_m);
         intersection.has_value()) {
-        throw std::invalid_argument(
-            std::string("FirePerimeter cannot self-intersect (edges ")
-            + std::to_string(intersection->first)
-            + " and "
-            + std::to_string(intersection->second)
-            + ")");
+        const std::size_t first =
+            intersection->first;
+        const std::size_t second =
+            intersection->second;
+        const std::size_t count =
+            m_vertices_m.size();
+        const FireVec2& a =
+            m_vertices_m[first];
+        const FireVec2& b =
+            m_vertices_m[(first + 1) % count];
+        const FireVec2& c =
+            m_vertices_m[second];
+        const FireVec2& d =
+            m_vertices_m[(second + 1) % count];
+
+        std::ostringstream message;
+        message.precision(
+            std::numeric_limits<amrex::Real>::max_digits10);
+        message
+            << "FirePerimeter cannot self-intersect ("
+            << count
+            << " vertices; edges "
+            << first
+            << " [("
+            << a.x << "," << a.y
+            << ")->("
+            << b.x << "," << b.y
+            << ")] and "
+            << second
+            << " [("
+            << c.x << "," << c.y
+            << ")->("
+            << d.x << "," << d.y
+            << ")])";
+        throw std::invalid_argument(message.str());
     }
 }
 
