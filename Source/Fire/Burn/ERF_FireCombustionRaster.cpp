@@ -2228,7 +2228,93 @@ detail::advance_fire_combustion_vertex_sweep(
                                 first_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {3, 0, 0};
+                            if (!detail::combustion_state_valid(
+                                    current,
+                                    local_parameters)
+                                || !amrex::Math::isfinite(
+                                    device_half_substep_dt_s)
+                                || device_half_substep_dt_s
+                                    < amrex::Real(0)) {
+                                return {30, 0, 0};
+                            }
+
+                            const FireCombustionAdvance diagnostic =
+                                detail::advance_fire_combustion_unchecked(
+                                    current,
+                                    local_parameters,
+                                    device_half_substep_dt_s);
+                            const FireCombustionState& candidate =
+                                diagnostic.state;
+
+                            if (!detail::combustion_parameters_valid(
+                                    local_parameters)
+                                || !amrex::Math::isfinite(
+                                    candidate.ignited_area_fraction)
+                                || candidate.ignited_area_fraction
+                                    < amrex::Real(0)
+                                || candidate.ignited_area_fraction
+                                    > amrex::Real(1)
+                                || !amrex::Math::isfinite(
+                                    candidate.remaining_dry_fuel_kg_m2)
+                                || candidate.remaining_dry_fuel_kg_m2
+                                    < amrex::Real(0)
+                                || !amrex::Math::isfinite(
+                                    candidate.consumed_dry_fuel_kg_m2)
+                                || candidate.consumed_dry_fuel_kg_m2
+                                    < amrex::Real(0)
+                                || !amrex::Math::isfinite(
+                                    candidate.sensible_energy_j_m2)
+                                || candidate.sensible_energy_j_m2
+                                    < amrex::Real(0)
+                                || !amrex::Math::isfinite(
+                                    candidate.water_released_kg_m2)
+                                || candidate.water_released_kg_m2
+                                    < amrex::Real(0)) {
+                                return {31, 0, 0};
+                            }
+
+                            const amrex::Real expected_mass =
+                                candidate.ignited_area_fraction
+                                * local_parameters
+                                    .dry_fuel_load_kg_m2;
+                            const amrex::Real represented_mass =
+                                candidate.remaining_dry_fuel_kg_m2
+                                + candidate.consumed_dry_fuel_kg_m2;
+                            if (amrex::Math::abs(
+                                    expected_mass
+                                    - represented_mass)
+                                > detail::combustion_scaled_tolerance(
+                                    expected_mass)) {
+                                return {32, 0, 0};
+                            }
+
+                            const amrex::Real expected_energy =
+                                candidate.consumed_dry_fuel_kg_m2
+                                * local_parameters
+                                    .sensible_heat_release_j_kg_dry;
+                            if (amrex::Math::abs(
+                                    expected_energy
+                                    - candidate.sensible_energy_j_m2)
+                                > detail::combustion_scaled_tolerance(
+                                    expected_energy)) {
+                                return {33, 0, 0};
+                            }
+
+                            const amrex::Real expected_water =
+                                candidate.consumed_dry_fuel_kg_m2
+                                * (local_parameters
+                                       .fuel_moisture_fraction
+                                   + local_parameters
+                                       .combustion_water_yield_kg_per_kg_dry);
+                            if (amrex::Math::abs(
+                                    expected_water
+                                    - candidate.water_released_kg_m2)
+                                > detail::combustion_scaled_tolerance(
+                                    expected_water)) {
+                                return {34, 0, 0};
+                            }
+
+                            return {35, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2312,8 +2398,18 @@ detail::advance_fire_combustion_vertex_sweep(
                     ? "pre-state/history mismatch"
                 : invalid_reason == 2
                     ? "spatial material decode/accounting"
-                : invalid_reason == 3
-                    ? "first-half combustion advance"
+                : invalid_reason == 30
+                    ? "first-half input/dt validation"
+                : invalid_reason == 31
+                    ? "first-half scalar bounds"
+                : invalid_reason == 32
+                    ? "first-half dry-mass accounting"
+                : invalid_reason == 33
+                    ? "first-half sensible-energy accounting"
+                : invalid_reason == 34
+                    ? "first-half water accounting"
+                : invalid_reason == 35
+                    ? "first-half unclassified post-state rejection"
                 : invalid_reason == 4
                     ? "ignition insertion"
                 : invalid_reason == 5
