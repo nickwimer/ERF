@@ -2124,6 +2124,12 @@ detail::advance_fire_combustion_vertex_sweep(
         const int device_temporal_substeps =
             temporal_substeps;
 
+        // Preserve a specific invalid-argument reason from the device so
+        // failures are diagnosable without changing any acceptance criterion.
+        // Codes: 1=pre-state/history mismatch, 2=fuel decode,
+        // 3=NonBurnable invariant, 4=material accounting,
+        // 5=first-half combustion, 6=ignition insertion,
+        // 7=second-half combustion, 8=endpoint/history mismatch.
         const auto device_failures =
             amrex::ParReduce(
                 amrex::TypeList<
@@ -2169,7 +2175,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 i,
                                 j,
                                 fuel_cell)) {
-                            return {1, 0, 0};
+                            return {2, 0, 0};
                         }
 
                         FireFuelCombustionAccounting accounting{};
@@ -2201,7 +2207,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 && schedule_zero;
                             return canonical_zero
                                 ? amrex::GpuTuple<int, int, int>{0, 0, 0}
-                                : amrex::GpuTuple<int, int, int>{1, 0, 0};
+                                : amrex::GpuTuple<int, int, int>{3, 0, 0};
                         }
 
                         if (material_status
@@ -2210,7 +2216,7 @@ detail::advance_fire_combustion_vertex_sweep(
                         }
                         if (material_status
                             != FireFuelCombustionAccountingStatus::success) {
-                            return {1, 0, 0};
+                            return {4, 0, 0};
                         }
                         local_parameters =
                             accounting.parameters;
@@ -2228,7 +2234,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 first_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {1, 0, 0};
+                            return {5, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2248,7 +2254,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 with_ignition);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {1, 0, 0};
+                            return {6, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2268,7 +2274,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 second_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {1, 0, 0};
+                            return {7, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2285,7 +2291,7 @@ detail::advance_fire_combustion_vertex_sweep(
                     if (!device_fraction_equal(
                             current.ignited_area_fraction,
                             after(i, j, k))) {
-                        return {1, 0, 0};
+                        return {8, 0, 0};
                     }
 
                     store_combustion_state(
@@ -2304,9 +2310,30 @@ detail::advance_fire_combustion_vertex_sweep(
             throw std::overflow_error(
                 "fire combustion device update produced non-finite accounting");
         }
-        if (amrex::get<0>(device_failures) != 0) {
+        const int invalid_reason =
+            amrex::get<0>(device_failures);
+        if (invalid_reason != 0) {
+            const char* reason =
+                invalid_reason == 1
+                    ? "pre-state is not synchronized with burned history"
+                : invalid_reason == 2
+                    ? "spatial fuel decode failed"
+                : invalid_reason == 3
+                    ? "NonBurnable state is not canonical zero"
+                : invalid_reason == 4
+                    ? "spatial fuel combustion accounting was rejected"
+                : invalid_reason == 5
+                    ? "first-half combustion state was rejected"
+                : invalid_reason == 6
+                    ? "combustion ignition insertion was rejected"
+                : invalid_reason == 7
+                    ? "second-half combustion state was rejected"
+                : invalid_reason == 8
+                    ? "endpoint combustion state is not synchronized with burned history"
+                    : "unknown invalid-argument reason";
             throw std::invalid_argument(
-                "fire combustion device update rejected combustion state");
+                std::string("fire combustion device update rejected: ")
+                + reason);
         }
 #else
         for (amrex::MFIter mfi(next_states);
