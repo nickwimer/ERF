@@ -2169,7 +2169,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 i,
                                 j,
                                 fuel_cell)) {
-                            return {1, 0, 0};
+                            return {2, 0, 0};
                         }
 
                         FireFuelCombustionAccounting accounting{};
@@ -2210,7 +2210,7 @@ detail::advance_fire_combustion_vertex_sweep(
                         }
                         if (material_status
                             != FireFuelCombustionAccountingStatus::success) {
-                            return {1, 0, 0};
+                            return {2, 0, 0};
                         }
                         local_parameters =
                             accounting.parameters;
@@ -2228,7 +2228,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 first_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {1, 0, 0};
+                            return {3, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2248,7 +2248,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 with_ignition);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {1, 0, 0};
+                            return {4, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2268,7 +2268,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 second_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {1, 0, 0};
+                            return {5, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2285,7 +2285,7 @@ detail::advance_fire_combustion_vertex_sweep(
                     if (!device_fraction_equal(
                             current.ignited_area_fraction,
                             after(i, j, k))) {
-                        return {1, 0, 0};
+                        return {6, 0, 0};
                     }
 
                     store_combustion_state(
@@ -2304,9 +2304,26 @@ detail::advance_fire_combustion_vertex_sweep(
             throw std::overflow_error(
                 "fire combustion device update produced non-finite accounting");
         }
-        if (amrex::get<0>(device_failures) != 0) {
+        const int invalid_reason =
+            amrex::get<0>(device_failures);
+        if (invalid_reason != 0) {
+            const char* reason =
+                invalid_reason == 1
+                    ? "pre-state/history mismatch"
+                : invalid_reason == 2
+                    ? "spatial material decode/accounting"
+                : invalid_reason == 3
+                    ? "first-half combustion advance"
+                : invalid_reason == 4
+                    ? "ignition insertion"
+                : invalid_reason == 5
+                    ? "second-half combustion advance"
+                : invalid_reason == 6
+                    ? "endpoint/history mismatch"
+                    : "unknown rejection";
             throw std::invalid_argument(
-                "fire combustion device update rejected combustion state");
+                std::string("fire combustion device update rejected: ")
+                + reason);
         }
 #else
         for (amrex::MFIter mfi(next_states);
