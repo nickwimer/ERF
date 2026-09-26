@@ -723,10 +723,13 @@ legacy_uniform_step(
         burned,
         dt,
         history_temporal_substeps);
+    const auto& perimeter =
+        advanced.components().front().perimeter;
     const std::vector<FireVec2> vertices = batched
         ? ERFFire::remesh_front(advanced, config.remesh_options)
               .front.components().front().perimeter.vertices_m()
-        : ERFFire::remesh_perimeter(perimeter, config.remesh_options).perimeter.vertices_m();
+        : ERFFire::remesh_perimeter(perimeter, config.remesh_options)
+              .perimeter.vertices_m();
     RuntimeState expected;
     expected.config = config;
     expected.current_time_s = end;
