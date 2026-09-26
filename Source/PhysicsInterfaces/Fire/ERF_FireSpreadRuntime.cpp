@@ -2322,14 +2322,8 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 throw std::runtime_error("Fire material/topology subcycling exceeded its safety limit");
             }
             if (spatial_fuel_raster_) {
-                try {
-                    working_front = resolve_fire_front_material_edges(
-                        working_front, *spatial_fuel_raster_);
-                } catch (const std::invalid_argument& error) {
-                    throw std::invalid_argument(
-                        std::string("fire material-edge refinement failed: ")
-                        + error.what());
-                }
+                working_front = resolve_fire_front_material_edges(
+                    working_front, *spatial_fuel_raster_);
             }
             const amrex::Real segment_dt_s =
                 end_time_s
@@ -2341,8 +2335,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                         > amrex::Real(0.0),
                 "fire topology-event segment dt is invalid");
 
-            FireFrontTopologyAdvanceResult topology_advance;
-            try {
+            FireFrontTopologyAdvanceResult
                 topology_advance =
                     spatial_fuel_raster_
                     ? advance_fire_front_material_segment(
@@ -2357,11 +2350,6 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                         segment_start_time_s,
                         segment_dt_s,
                         normal_speeds);
-            } catch (const std::invalid_argument& error) {
-                throw std::invalid_argument(
-                    std::string("fire material/RK2 propagation failed: ")
-                    + error.what());
-            }
 
             if (topology_advance
                     .topology_event.has_value()) {
@@ -2389,20 +2377,12 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     "fire topology event made no forward progress");
 
                 FireFront event_front =
-                    [&]() {
-                        try {
-                            return resolve_front_topology_event(
-                                working_front,
-                                topology_advance
-                                    .terminal_vertices_m,
-                                *topology_advance
-                                    .topology_event);
-                        } catch (const std::invalid_argument& error) {
-                            throw std::invalid_argument(
-                                std::string("fire topology-event resolution failed: ")
-                                + error.what());
-                        }
-                    }();
+                    resolve_front_topology_event(
+                        working_front,
+                        topology_advance
+                            .terminal_vertices_m,
+                        *topology_advance
+                            .topology_event);
 
                 if (spatial_fuel_raster_) {
                     collective_require_resolved_fire_topology_avoids_nonburnable(
@@ -2423,10 +2403,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                     event_time_s
                     - segment_start_time_s;
 
-                FireFirstArrivalRasterUpdate arrival_update;
-                FireRasterBurnedAreaUpdate burned_update;
-                FireCombustionRasterAdvance combustion_update;
-                try {
+                const FireFirstArrivalRasterUpdate
                     arrival_update =
                         next_arrival
                             .update_from_front_topology_event_sweep(
@@ -2441,6 +2418,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                                         .arrival_time_tolerance_s,
                                     event_duration_s));
 
+                const FireRasterBurnedAreaUpdate
                     burned_update =
                         next_burned
                             .update_from_front_topology_event_sweep(
@@ -2452,6 +2430,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                                     .combustion_options
                                     .temporal_substeps);
 
+                const FireCombustionRasterAdvance
                     combustion_update =
                         spatial_fuel_raster_
                         ? next_combustion
@@ -2473,11 +2452,6 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                                 burned_before_segment,
                                 next_burned,
                                 event_dt_s);
-                } catch (const std::invalid_argument& error) {
-                    throw std::invalid_argument(
-                        std::string("fire topology-event history update failed: ")
-                        + error.what());
-                }
 
                 newly_arrived_cell_count +=
                     arrival_update
@@ -2543,10 +2517,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 completed_time_s
                 - segment_start_time_s;
 
-            FireFirstArrivalRasterUpdate arrival_update;
-            FireRasterBurnedAreaUpdate burned_update;
-            FireCombustionRasterAdvance combustion_update;
-            try {
+            const FireFirstArrivalRasterUpdate
                 arrival_update =
                     next_arrival
                         .update_from_front_rk2_sweep(
@@ -2561,6 +2532,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                                 completed_duration_s),
                             history_temporal_substeps);
 
+            const FireRasterBurnedAreaUpdate
                 burned_update =
                     next_burned
                         .update_from_front_rk2_sweep(
@@ -2569,6 +2541,7 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             completed_front,
                             history_temporal_substeps);
 
+            const FireCombustionRasterAdvance
                 combustion_update =
                     spatial_fuel_raster_
                     ? next_combustion
@@ -2590,11 +2563,6 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                             next_burned,
                             completed_dt_s,
                             history_temporal_substeps);
-            } catch (const std::invalid_argument& error) {
-                throw std::invalid_argument(
-                    std::string("fire completed-segment history update failed: ")
-                    + error.what());
-            }
 
             newly_arrived_cell_count +=
                 arrival_update
@@ -2667,22 +2635,14 @@ ERFFireSpreadRuntime::advance_wind_batched_impl(
                 vertex_count(advanced_front);
 
         FireFrontRemeshResult remeshed =
-            [&]() {
-                try {
-                    return spatial_fuel_raster_
-                        ? collective_remesh_fire_front_avoiding_nonburnable(
-                            advanced_front,
-                            config_.remesh_options,
-                            *spatial_fuel_raster_)
-                        : remesh_front(
-                            advanced_front,
-                            config_.remesh_options);
-                } catch (const std::invalid_argument& error) {
-                    throw std::invalid_argument(
-                        std::string("fire final remesh failed: ")
-                        + error.what());
-                }
-            }();
+            spatial_fuel_raster_
+            ? collective_remesh_fire_front_avoiding_nonburnable(
+                advanced_front,
+                config_.remesh_options,
+                *spatial_fuel_raster_)
+            : remesh_front(
+                advanced_front,
+                config_.remesh_options);
 
         const std::size_t
             post_remesh_vertex_count =

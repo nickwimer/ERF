@@ -505,15 +505,8 @@ advance_fire_front_material_segment(
         throw std::runtime_error("Fire predictor contact time is not representable");
     }
     for (int retry = 0; retry < 128; ++retry) {
-        FireFrontTopologyAdvanceResult trial;
-        try {
-            trial = advance_front_rk2_batched_until_topology_event(
-                front, time_s, dt, normal_speed);
-        } catch (const std::invalid_argument& error) {
-            throw std::invalid_argument(
-                std::string("Fire material RK2 trial failed before material snapping: ")
-                + error.what());
-        }
+        auto trial = advance_front_rk2_batched_until_topology_event(
+            front, time_s, dt, normal_speed);
         if (!trial.topology_event.has_value()) {
             for (auto& component : trial.terminal_vertices_m) {
                 for (auto& p : component) { p = detail::fire_material_snap(p, g); }
@@ -550,19 +543,8 @@ advance_fire_front_material_segment(
             for (auto& component : trial.terminal_vertices_m) {
                 for (auto& p : component) { p = detail::fire_material_snap(p, g); }
             }
-            const auto flat =
-                detail::fire_barrier_flatten_component_vertices(
-                    trial.terminal_vertices_m);
-            try {
-                trial.completed_front =
-                    detail::fire_barrier_rebuild_front(
-                        front,
-                        flat);
-            } catch (const std::invalid_argument& error) {
-                throw std::invalid_argument(
-                    std::string("Fire material snap/rebuild failed: ")
-                    + error.what());
-            }
+            const auto flat = detail::fire_barrier_flatten_component_vertices(trial.terminal_vertices_m);
+            trial.completed_front = detail::fire_barrier_rebuild_front(front, flat);
         }
         if (!trial.topology_event.has_value()) {
             detail::require_fire_material_rk2_sweep_not_extinguished(

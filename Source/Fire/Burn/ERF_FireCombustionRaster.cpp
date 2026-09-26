@@ -292,7 +292,7 @@ initialize_combustion_states_on_device(
                         i,
                         j,
                         fuel_cell)) {
-                    return {2, 0};
+                    return {1, 0};
                 }
 
                 FireFuelCombustionAccounting accounting{};
@@ -312,7 +312,7 @@ initialize_combustion_states_on_device(
                         && current.water_released_kg_m2 == amrex::Real(0);
                     if (!canonical_zero
                         || burned(i, j, k) != amrex::Real(0)) {
-                        return {3, 0};
+                        return {1, 0};
                     }
                     return {0, 0};
                 }
@@ -323,7 +323,7 @@ initialize_combustion_states_on_device(
                 }
                 if (material_status
                     != FireFuelCombustionAccountingStatus::success) {
-                    return {4, 0};
+                    return {1, 0};
                 }
                 local_parameters = accounting.parameters;
             }
@@ -342,82 +342,7 @@ initialize_combustion_states_on_device(
             }
             if (status
                 != FireCombustionStatus::success) {
-                const amrex::Real burned_value =
-                    burned(i, j, k);
-                if (!detail::combustion_parameters_valid(
-                        local_parameters)) {
-                    return {51, 0};
-                }
-                if (!detail::combustion_state_valid(
-                        current,
-                        local_parameters)) {
-                    return {52, 0};
-                }
-                if (!amrex::Math::isfinite(burned_value)
-                    || burned_value < amrex::Real(0)
-                    || burned_value > amrex::Real(1)) {
-                    return {53, 0};
-                }
-
-                const amrex::Real next_fraction =
-                    current.ignited_area_fraction
-                    + burned_value;
-                if (next_fraction
-                    > amrex::Real(1)
-                        + detail::combustion_scaled_tolerance(
-                            amrex::Real(1))) {
-                    return {54, 0};
-                }
-
-                const FireCombustionState unchecked =
-                    detail::add_fire_combustion_ignition_unchecked(
-                        current,
-                        local_parameters,
-                        burned_value);
-                if (!amrex::Math::isfinite(
-                        unchecked.remaining_dry_fuel_kg_m2)) {
-                    return {55, 0};
-                }
-
-                const amrex::Real expected_mass =
-                    unchecked.ignited_area_fraction
-                    * local_parameters.dry_fuel_load_kg_m2;
-                const amrex::Real represented_mass =
-                    unchecked.remaining_dry_fuel_kg_m2
-                    + unchecked.consumed_dry_fuel_kg_m2;
-                if (amrex::Math::abs(
-                        expected_mass - represented_mass)
-                    > detail::combustion_scaled_tolerance(
-                        expected_mass)) {
-                    return {56, 0};
-                }
-
-                const amrex::Real expected_energy =
-                    unchecked.consumed_dry_fuel_kg_m2
-                    * local_parameters
-                        .sensible_heat_release_j_kg_dry;
-                if (amrex::Math::abs(
-                        expected_energy
-                        - unchecked.sensible_energy_j_m2)
-                    > detail::combustion_scaled_tolerance(
-                        expected_energy)) {
-                    return {57, 0};
-                }
-
-                const amrex::Real expected_water =
-                    unchecked.consumed_dry_fuel_kg_m2
-                    * (local_parameters
-                           .fuel_moisture_fraction
-                       + local_parameters
-                           .combustion_water_yield_kg_per_kg_dry);
-                if (amrex::Math::abs(
-                        expected_water
-                        - unchecked.water_released_kg_m2)
-                    > detail::combustion_scaled_tolerance(
-                        expected_water)) {
-                    return {58, 0};
-                }
-                return {59, 0};
+                return {1, 0};
             }
 
             store_combustion_state(
@@ -1343,34 +1268,8 @@ FireCombustionRaster::initialize_from_burned_fraction_impl(
                    initialization_failure) != 0) {
         local_failure =
             DistributedFailure::invalid_argument;
-        const int reason =
-            amrex::get<0>(initialization_failure);
         local_error =
-            reason == 2
-                ? "fire combustion initialization could not decode spatial fuel"
-            : reason == 3
-                ? "NonBurnable combustion initialization is not canonical zero"
-            : reason == 4
-                ? "fire combustion initialization rejected spatial material"
-            : reason == 51
-                ? "fire combustion initialization has invalid local parameters"
-            : reason == 52
-                ? "fire combustion initialization has invalid prior state"
-            : reason == 53
-                ? "fire combustion initialization has invalid burned fraction"
-            : reason == 54
-                ? "fire combustion initialization ignition exceeds unit burned fraction"
-            : reason == 55
-                ? "fire combustion initialization ignition produced non-finite dry fuel"
-            : reason == 56
-                ? "fire combustion initialization violates dry-mass conservation"
-            : reason == 57
-                ? "fire combustion initialization violates sensible-energy accounting"
-            : reason == 58
-                ? "fire combustion initialization violates water accounting"
-            : reason == 59
-                ? "fire combustion initialization failed an unclassified ignition invariant"
-                : "fire combustion initialization rejected combustion state";
+            "fire combustion initialization rejected combustion state";
     }
 #else
     try {
@@ -2225,12 +2124,6 @@ detail::advance_fire_combustion_vertex_sweep(
         const int device_temporal_substeps =
             temporal_substeps;
 
-        // Preserve a specific invalid-argument reason from the device so
-        // failures are diagnosable without changing any acceptance criterion.
-        // Codes: 1=pre-state/history mismatch, 2=fuel decode,
-        // 3=NonBurnable invariant, 4=material accounting,
-        // 5=first-half combustion, 6=ignition insertion,
-        // 7=second-half combustion, 8=endpoint/history mismatch.
         const auto device_failures =
             amrex::ParReduce(
                 amrex::TypeList<
@@ -2276,7 +2169,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 i,
                                 j,
                                 fuel_cell)) {
-                            return {2, 0, 0};
+                            return {1, 0, 0};
                         }
 
                         FireFuelCombustionAccounting accounting{};
@@ -2308,7 +2201,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 && schedule_zero;
                             return canonical_zero
                                 ? amrex::GpuTuple<int, int, int>{0, 0, 0}
-                                : amrex::GpuTuple<int, int, int>{3, 0, 0};
+                                : amrex::GpuTuple<int, int, int>{1, 0, 0};
                         }
 
                         if (material_status
@@ -2317,7 +2210,7 @@ detail::advance_fire_combustion_vertex_sweep(
                         }
                         if (material_status
                             != FireFuelCombustionAccountingStatus::success) {
-                            return {4, 0, 0};
+                            return {1, 0, 0};
                         }
                         local_parameters =
                             accounting.parameters;
@@ -2335,77 +2228,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 first_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            if (!detail::combustion_parameters_valid(
-                                    local_parameters)) {
-                                return {51, 0, 0};
-                            }
-                            if (!amrex::Math::isfinite(
-                                    current.ignited_area_fraction)
-                                || current.ignited_area_fraction
-                                    < amrex::Real(0)
-                                || current.ignited_area_fraction
-                                    > amrex::Real(1)
-                                || !amrex::Math::isfinite(
-                                    current.remaining_dry_fuel_kg_m2)
-                                || current.remaining_dry_fuel_kg_m2
-                                    < amrex::Real(0)
-                                || !amrex::Math::isfinite(
-                                    current.consumed_dry_fuel_kg_m2)
-                                || current.consumed_dry_fuel_kg_m2
-                                    < amrex::Real(0)
-                                || !amrex::Math::isfinite(
-                                    current.sensible_energy_j_m2)
-                                || current.sensible_energy_j_m2
-                                    < amrex::Real(0)
-                                || !amrex::Math::isfinite(
-                                    current.water_released_kg_m2)
-                                || current.water_released_kg_m2
-                                    < amrex::Real(0)) {
-                                return {52, 0, 0};
-                            }
-
-                            const amrex::Real expected_mass =
-                                current.ignited_area_fraction
-                                * local_parameters
-                                    .dry_fuel_load_kg_m2;
-                            const amrex::Real represented_mass =
-                                current.remaining_dry_fuel_kg_m2
-                                + current.consumed_dry_fuel_kg_m2;
-                            if (amrex::Math::abs(
-                                    expected_mass
-                                    - represented_mass)
-                                > detail::combustion_scaled_tolerance(
-                                    expected_mass)) {
-                                return {53, 0, 0};
-                            }
-
-                            const amrex::Real expected_energy =
-                                current.consumed_dry_fuel_kg_m2
-                                * local_parameters
-                                    .sensible_heat_release_j_kg_dry;
-                            if (amrex::Math::abs(
-                                    expected_energy
-                                    - current.sensible_energy_j_m2)
-                                > detail::combustion_scaled_tolerance(
-                                    expected_energy)) {
-                                return {54, 0, 0};
-                            }
-
-                            const amrex::Real expected_water =
-                                current.consumed_dry_fuel_kg_m2
-                                * (local_parameters
-                                       .fuel_moisture_fraction
-                                   + local_parameters
-                                       .combustion_water_yield_kg_per_kg_dry);
-                            if (amrex::Math::abs(
-                                    expected_water
-                                    - current.water_released_kg_m2)
-                                > detail::combustion_scaled_tolerance(
-                                    expected_water)) {
-                                return {55, 0, 0};
-                            }
-
-                            return {56, 0, 0};
+                            return {1, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2425,7 +2248,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 with_ignition);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {6, 0, 0};
+                            return {1, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2445,7 +2268,7 @@ detail::advance_fire_combustion_vertex_sweep(
                                 second_half);
                         if (status
                             == FireCombustionStatus::invalid_argument) {
-                            return {7, 0, 0};
+                            return {1, 0, 0};
                         }
                         if (status
                             == FireCombustionStatus::overflow_error) {
@@ -2462,7 +2285,7 @@ detail::advance_fire_combustion_vertex_sweep(
                     if (!device_fraction_equal(
                             current.ignited_area_fraction,
                             after(i, j, k))) {
-                        return {8, 0, 0};
+                        return {1, 0, 0};
                     }
 
                     store_combustion_state(
@@ -2481,42 +2304,9 @@ detail::advance_fire_combustion_vertex_sweep(
             throw std::overflow_error(
                 "fire combustion device update produced non-finite accounting");
         }
-        const int invalid_reason =
-            amrex::get<0>(device_failures);
-        if (invalid_reason != 0) {
-            const char* reason =
-                invalid_reason == 1
-                    ? "pre-state is not synchronized with burned history"
-                : invalid_reason == 2
-                    ? "spatial fuel decode failed"
-                : invalid_reason == 3
-                    ? "NonBurnable state is not canonical zero"
-                : invalid_reason == 4
-                    ? "spatial fuel combustion accounting was rejected"
-                : invalid_reason == 5
-                    ? "first-half combustion state was rejected"
-                : invalid_reason == 51
-                    ? "first-half combustion parameters are invalid"
-                : invalid_reason == 52
-                    ? "first-half combustion state has invalid scalar bounds"
-                : invalid_reason == 53
-                    ? "first-half combustion state violates dry-mass conservation"
-                : invalid_reason == 54
-                    ? "first-half combustion state violates sensible-energy accounting"
-                : invalid_reason == 55
-                    ? "first-half combustion state violates water accounting"
-                : invalid_reason == 56
-                    ? "first-half combustion state failed an unclassified validator condition"
-                : invalid_reason == 6
-                    ? "combustion ignition insertion was rejected"
-                : invalid_reason == 7
-                    ? "second-half combustion state was rejected"
-                : invalid_reason == 8
-                    ? "endpoint combustion state is not synchronized with burned history"
-                    : "unknown invalid-argument reason";
+        if (amrex::get<0>(device_failures) != 0) {
             throw std::invalid_argument(
-                std::string("fire combustion device update rejected: ")
-                + reason);
+                "fire combustion device update rejected combustion state");
         }
 #else
         for (amrex::MFIter mfi(next_states);
