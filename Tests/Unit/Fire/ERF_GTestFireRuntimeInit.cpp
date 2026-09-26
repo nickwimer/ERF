@@ -1307,9 +1307,12 @@ TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
     const auto batch =
         fuel_runtime_batch(environment);
 
-    (void)original.advance_direct_reference_wind_batched(
-        batch,
-        Real(0.25));
+    {
+        SCOPED_TRACE("pre-checkpoint Anderson-13 advance");
+        (void)original.advance_direct_reference_wind_batched(
+            batch,
+            Real(0.25));
+    }
 
     const auto before =
         original.combustion_raster()
@@ -1373,14 +1376,23 @@ TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
         original);
 
     Runtime expected = original;
-    const auto expected_diagnostics =
-        expected.advance_direct_reference_wind_batched(
-            batch,
-            Real(0.25));
-    const auto restored_diagnostics =
-        restored.advance_direct_reference_wind_batched(
-            batch,
-            Real(0.25));
+    ERFFire::ERFFireStepDiagnostics expected_diagnostics;
+    {
+        SCOPED_TRACE("post-checkpoint copied-original continuation");
+        expected_diagnostics =
+            expected.advance_direct_reference_wind_batched(
+                batch,
+                Real(0.25));
+    }
+
+    ERFFire::ERFFireStepDiagnostics restored_diagnostics;
+    {
+        SCOPED_TRACE("post-checkpoint restored continuation");
+        restored_diagnostics =
+            restored.advance_direct_reference_wind_batched(
+                batch,
+                Real(0.25));
+    }
 
     expect_step_diagnostics_equal(
         restored_diagnostics,
