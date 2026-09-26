@@ -1286,19 +1286,44 @@ TEST(FireFuelRuntime, SpatialRuntimeRequiresCanonicalFm1Base)
 
 TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
 {
+    const auto phase =
+        [](const char* name, auto&& operation)
+        {
+            try {
+                return operation();
+            } catch (const std::exception& error) {
+                throw std::runtime_error(
+                    std::string(name)
+                    + ": "
+                    + error.what());
+            }
+        };
+
     const auto config =
         fuel_runtime_config();
-    const auto spatial_fuel =
-        fuel_runtime_anderson_raster(
-            config,
-            FireFuelModelId::FM2,
-            FireFuelModelId::FM10);
 
-    Runtime original(
-        fuel_runtime_ignition(),
-        Real(0),
-        config,
-        spatial_fuel);
+    const auto spatial_fuel =
+        phase(
+            "Anderson-13 fuel-raster construction",
+            [&]()
+            {
+                return fuel_runtime_anderson_raster(
+                    config,
+                    FireFuelModelId::FM2,
+                    FireFuelModelId::FM10);
+            });
+
+    Runtime original =
+        phase(
+            "Anderson-13 runtime construction",
+            [&]()
+            {
+                return Runtime(
+                    fuel_runtime_ignition(),
+                    Real(0),
+                    config,
+                    spatial_fuel);
+            });
 
     const auto environment =
         fuel_runtime_environment(
@@ -1307,44 +1332,85 @@ TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
     const auto batch =
         fuel_runtime_batch(environment);
 
-    {
-        SCOPED_TRACE("pre-checkpoint Anderson-13 advance");
-        (void)original.advance_direct_reference_wind_batched(
-            batch,
-            Real(0.25));
-    }
+    (void)phase(
+        "pre-checkpoint Anderson-13 advance",
+        [&]()
+        {
+            return original.advance_direct_reference_wind_batched(
+                batch,
+                Real(0.25));
+        });
 
     const auto before =
-        original.combustion_raster()
-            .collective_snapshot_state_to_io_rank();
+        phase(
+            "pre-checkpoint combustion snapshot",
+            [&]()
+            {
+                return original.combustion_raster()
+                    .collective_snapshot_state_to_io_rank();
+            });
 
     const std::uint64_t fingerprint =
-        ERFFire::collective_fire_fuel_raster_fingerprint_fnv1a64(
-            *original.spatial_fuel_raster());
+        phase(
+            "spatial-fuel fingerprint",
+            [&]()
+            {
+                return ERFFire::
+                    collective_fire_fuel_raster_fingerprint_fnv1a64(
+                        *original.spatial_fuel_raster());
+            });
+
     amrex::MultiFab checkpoint =
-        ERFFire::make_erf_fire_checkpoint_v4_raster(
-            original);
+        phase(
+            "checkpoint raster construction",
+            [&]()
+            {
+                return ERFFire::make_erf_fire_checkpoint_v4_raster(
+                    original);
+            });
 
     auto options = make_options();
     options.reference_height_agl_m = Real(0.5);
     std::stringstream stream;
-    ERFFire::write_erf_fire_checkpoint_v4_metadata(
-        original,
-        options,
-        fingerprint,
-        stream);
+    phase(
+        "checkpoint metadata write",
+        [&]()
+        {
+            ERFFire::write_erf_fire_checkpoint_v4_metadata(
+                original,
+                options,
+                fingerprint,
+                stream);
+        });
 
     auto metadata =
-        ERFFire::read_erf_fire_checkpoint_v4_metadata(
-            stream);
+        phase(
+            "checkpoint metadata read",
+            [&]()
+            {
+                return ERFFire::read_erf_fire_checkpoint_v4_metadata(
+                    stream);
+            });
+
     Runtime restored =
-        ERFFire::collective_restore_erf_fire_checkpoint_v4(
-            std::move(metadata),
-            checkpoint);
+        phase(
+            "checkpoint v4 restore",
+            [&]()
+            {
+                return ERFFire::
+                    collective_restore_erf_fire_checkpoint_v4(
+                        std::move(metadata),
+                        checkpoint);
+            });
 
     const auto after =
-        restored.combustion_raster()
-            .collective_snapshot_state_to_io_rank();
+        phase(
+            "post-restore combustion snapshot",
+            [&]()
+            {
+                return restored.combustion_raster()
+                    .collective_snapshot_state_to_io_rank();
+            });
 
     if (amrex::ParallelDescriptor::IOProcessor()) {
         ASSERT_EQ(after.cells.size(), before.cells.size());
@@ -1375,24 +1441,33 @@ TEST(FireFuelRuntime, Anderson13CheckpointV4RestoresRawCombustionExactly)
         restored,
         original);
 
-    Runtime expected = original;
-    ERFFire::ERFFireStepDiagnostics expected_diagnostics;
-    {
-        SCOPED_TRACE("post-checkpoint copied-original continuation");
-        expected_diagnostics =
-            expected.advance_direct_reference_wind_batched(
-                batch,
-                Real(0.25));
-    }
+    Runtime expected =
+        phase(
+            "copy original runtime",
+            [&]()
+            {
+                return Runtime(original);
+            });
 
-    ERFFire::ERFFireStepDiagnostics restored_diagnostics;
-    {
-        SCOPED_TRACE("post-checkpoint restored continuation");
-        restored_diagnostics =
-            restored.advance_direct_reference_wind_batched(
-                batch,
-                Real(0.25));
-    }
+    const auto expected_diagnostics =
+        phase(
+            "post-checkpoint copied-original continuation",
+            [&]()
+            {
+                return expected.advance_direct_reference_wind_batched(
+                    batch,
+                    Real(0.25));
+            });
+
+    const auto restored_diagnostics =
+        phase(
+            "post-checkpoint restored continuation",
+            [&]()
+            {
+                return restored.advance_direct_reference_wind_batched(
+                    batch,
+                    Real(0.25));
+            });
 
     expect_step_diagnostics_equal(
         restored_diagnostics,
