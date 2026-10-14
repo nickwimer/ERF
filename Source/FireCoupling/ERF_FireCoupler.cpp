@@ -11,6 +11,7 @@
 #include <AMReX_VisMF.H>
 #include <AMReX_PlotFileUtil.H>
 #include <AMReX_Utility.H>
+#include <cmath>
 #include <sstream>
 #include <type_traits>
 #include <utility>
@@ -123,6 +124,12 @@ FireCoupler::set_fire_grid (int lev, const FireGrid& fg,
     m_Q_lat_atm_prev = std::make_unique<MultiFab>(ba_atm_2d, dm_atm, 1, ng_flux);
     m_Q_atm_prev->setVal(0.0_rt);
     m_Q_lat_atm_prev->setVal(0.0_rt);
+    m_has_direct_smoke_mass_prev = false;
+    m_smoke_mass_atm_prev.reset();
+    if (m_params.smoke_enable) {
+        m_smoke_mass_atm_prev = std::make_unique<MultiFab>(ba_atm_2d, dm_atm, 1, ng_flux);
+        m_smoke_mass_atm_prev->setVal(0.0_rt);
+    }
 }
 
 void
@@ -217,13 +224,35 @@ FireCoupler::update_flux_buffer (const Geometry& geom_atm)
         m_Q_lat_atm_prev->setVal(0.0_rt);
     }
 
-    // A reader may sample these fluxes in the halo columns around every tile;
-    // give them the neighbouring box's value (and the edge column's
-    // outside a non-periodic face), so a column sees the same flux whichever box
-    // holds it. On a finer level the columns outside the refined region have no
-    // fire grid and keep the zero they were allocated with.
+    // Direct smoke reports extensive kg for each fire-grid cell over this
+    // engine step, unlike sensible/latent rates. Sum the C*C identical-area
+    // fire cells in an atmospheric column, rather than averaging the mass.
+    // A supplied *zero* field also suppresses legacy heat-derived smoke.
+    if (m_smoke_mass_atm_prev) {
+        if (fluxes.smoke_mass_kg) {
+            const MultiFab& smoke = *fluxes.smoke_mass_kg;
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                smoke.nComp() == 1 && smoke.boxArray() == m_fg.ba
+                && smoke.DistributionMap() == m_fg.dm,
+                "[FIRE] smoke_mass_kg must be a one-component MultiFab on the fire exchange grid");
+            if (smoke.contains_nan(0, 1) || smoke.contains_inf(0, 1) || smoke.min(0) < 0.0_rt) {
+                amrex::Abort("[FIRE] smoke_mass_kg must contain finite, nonnegative emitted mass [kg/cell]");
+            }
+            coarsen_fire_flux_to_atm(*m_smoke_mass_atm_prev, smoke, geom_atm, m_fg);
+            m_smoke_mass_atm_prev->mult(Real(m_fg.C) * Real(m_fg.C), 0, 1, 0);
+            m_has_direct_smoke_mass_prev = true;
+        } else {
+            m_smoke_mass_atm_prev->setVal(0.0_rt);
+            m_has_direct_smoke_mass_prev = false;
+        }
+    }
+
+    // Give the held fields consistent interior, neighbor and boundary halos.
     fire_fill_boundary(*m_Q_atm_prev, geom_atm);
     fire_fill_boundary(*m_Q_lat_atm_prev, geom_atm);
+    if (m_smoke_mass_atm_prev) {
+        fire_fill_boundary(*m_smoke_mass_atm_prev, geom_atm);
+    }
 }
 
 void
@@ -233,7 +262,8 @@ FireCoupler::add_sources (MultiFab& cc_source,
                           const MultiFab* z_phys_nd,
                           const Geometry& geom,
                           bool has_moisture,
-                          int step)
+                          int step,
+                          Real dt_advance)
 {
     // Heat and vapour, with the WRF-Fire profile (ERF_FireAtmCoupling.H)
     if (m_params.injects_flux() && m_Q_atm_prev && m_params.fire_atm_feedback > 0.0_rt) {
@@ -270,9 +300,19 @@ FireCoupler::add_sources (MultiFab& cc_source,
             m_params.heat_tendency_exner);
     }
 
-    // The smoke tracer, after the heat: proportional to the fuel burnt, which
-    // the engine's heat per kilogram recovers from the lagged sensible flux
-    if (m_params.smoke_enable && m_Q_atm_prev) {
+    // Direct emitted mass takes precedence over the legacy heat-based proxy.
+    // Both remain independent of the heat feedback multiplier, allowing
+    // smoke-only output under passive or zero-heating coupling.
+    if (m_params.smoke_enable && m_has_direct_smoke_mass_prev && m_smoke_mass_atm_prev) {
+        if (!(dt_advance > 0.0_rt) || !std::isfinite(dt_advance)) {
+            amrex::Abort("[FIRE] direct smoke mass needs a finite positive receiving timestep");
+        }
+        inject_direct_smoke_mass_from_fire(
+            cc_source, *m_smoke_mass_atm_prev, z_phys_nd, geom,
+            dt_advance, RhoSmoke_comp, m_params.fire_debug, step);
+    } else if (m_params.smoke_enable && m_Q_atm_prev) {
+        // Backward compatibility: older engines may still infer emissions
+        // from their sensible flux and smoke_heat_per_kg().
         inject_smoke_from_fire(
             cc_source,
             *m_Q_atm_prev,
@@ -300,6 +340,13 @@ FireCoupler::write_checkpoint (const std::string& checkpointname) const
     }
     if (m_Q_lat_atm_prev) {
         VisMF::Write(*m_Q_lat_atm_prev, MultiFabFileFullPrefix(m_lev, checkpointname, "Level_", "FireQLatAtmPrev"));
+    }
+    // Presence of this file records whether the engine supplied the direct
+    // smoke channel, even when every emitted amount was exactly zero.
+    // Its absence means use the legacy heat-based fallback after restart.
+    if (m_has_direct_smoke_mass_prev && m_smoke_mass_atm_prev) {
+        VisMF::Write(*m_smoke_mass_atm_prev,
+                     MultiFabFileFullPrefix(m_lev, checkpointname, "Level_", "FireSmokeMassAtmPrev"));
     }
 }
 
@@ -369,5 +416,28 @@ FireCoupler::read_checkpoint (const std::string& restart_chkfile, int max_level,
         // VisMF restores the valid cells (a checkpoint may hold no ghost
         // columns), so refill the ghosts the way update_flux_buffer() does.
         fire_fill_boundary(*mf, m_geom_atm);
+    }
+
+    m_has_direct_smoke_mass_prev = false;
+    if (m_smoke_mass_atm_prev) {
+        // Older checkpoints did not contain this optional field. Missing
+        // means the legacy heat-derived smoke path, not a direct zero field.
+        const std::string header = restart_chkfile + "/Level_" + std::to_string(m_lev)
+                                 + "/FireSmokeMassAtmPrev_H";
+        int has_smoke = 0;
+        if (ParallelDescriptor::IOProcessor()) {
+            has_smoke = amrex::FileExists(header) ? 1 : 0;
+        }
+        ParallelDescriptor::Bcast(&has_smoke, 1, ParallelDescriptor::IOProcessorNumber());
+        if (has_smoke) {
+            const std::string prefix = MultiFabFileFullPrefix(
+                m_lev, restart_chkfile, "Level_", "FireSmokeMassAtmPrev");
+            AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+                VisMF(prefix).boxArray() == m_smoke_mass_atm_prev->boxArray(),
+                "[FIRE] checkpoint direct smoke mass layout differs from the atmospheric exchange grid");
+            VisMF::Read(*m_smoke_mass_atm_prev, prefix);
+            fire_fill_boundary(*m_smoke_mass_atm_prev, m_geom_atm);
+            m_has_direct_smoke_mass_prev = true;
+        }
     }
 }

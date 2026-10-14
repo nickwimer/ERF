@@ -127,6 +127,9 @@ public:
      * @param[in]     geom          Geometry of the level
      * @param[in]     has_moisture  The vapour source exists
      * @param[in]     step          Step of the level, for the debug output
+     * @param[in]     dt_advance    Full receiving atmospheric timestep [s];
+     *                              the direct smoke-mass amount is deposited
+     *                              over this interval, not per RK stage
      */
     void add_sources (amrex::MultiFab& cc_source,
                       const amrex::MultiFab& S_old,
@@ -134,7 +137,8 @@ public:
                       const amrex::MultiFab* z_phys_nd,
                       const amrex::Geometry& geom,
                       bool has_moisture,
-                      int step);
+                      int step,
+                      amrex::Real dt_advance);
 
     /**
      * @brief Write the fire to a checkpoint: the engine's state
@@ -189,6 +193,10 @@ public:
     const amrex::MultiFab* get_Q_atm_prev () const { return m_Q_atm_prev.get(); }
     /// Latent heat flux [W/m2] of the previous fire step, laid out as get_Q_atm_prev().
     const amrex::MultiFab* get_Q_lat_atm_prev () const { return m_Q_lat_atm_prev.get(); }
+    /// Direct smoke mass [kg/atmospheric column] pending from the last fire step;
+    /// nullptr if the smoke tracer is disabled. Not a surface mass flux.
+    const amrex::MultiFab* get_smoke_mass_atm_prev () const { return m_smoke_mass_atm_prev.get(); }
+    bool has_direct_smoke_mass_prev () const { return m_has_direct_smoke_mass_prev; }
 
 private:
     /// Average the engine's fluxes onto the atmospheric columns for the next step.
@@ -208,6 +216,10 @@ private:
     // level they hold zero.
     std::unique_ptr<amrex::MultiFab> m_Q_atm_prev;      ///< sensible [W/m2]
     std::unique_ptr<amrex::MultiFab> m_Q_lat_atm_prev;  ///< latent   [W/m2]
+    // Direct, extensive emission mass held across one-step lag. The flag is
+    // distinct from mass=0: a provided zero field suppresses legacy emissions.
+    std::unique_ptr<amrex::MultiFab> m_smoke_mass_atm_prev;  ///< kg / atmospheric column
+    bool m_has_direct_smoke_mass_prev = false;
 };
 
 #endif

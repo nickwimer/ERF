@@ -151,7 +151,8 @@
                                         zpn_to_use,
                                         fine_geom,
                                         has_moisture,
-                                        istep[level]);
+                                        istep[level],
+                                        static_cast<amrex::Real>(dt_advance));
         }
 #endif
 

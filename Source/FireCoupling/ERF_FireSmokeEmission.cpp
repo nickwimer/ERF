@@ -78,4 +78,54 @@ void inject_smoke_from_fire(
     }
 }
 
+void inject_direct_smoke_mass_from_fire(
+    MultiFab& cc_source,
+    const MultiFab& smoke_mass_atm_kg,
+    const MultiFab* z_phys_nd,
+    const Geometry& geom_atm,
+    Real dt_advance,
+    int smoke_comp,
+    bool fire_debug,
+    int step)
+{
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(dt_advance > 0.0_rt,
+        "[FIRE] direct smoke mass requires a positive receiving timestep");
+    const auto dx = geom_atm.CellSizeArray();
+    const int klo = geom_atm.Domain().smallEnd(2);
+    const Real area = dx[0] * dx[1];
+    const Real inv_dt_area = Real(1.0) / (dt_advance * area);
+
+    for (MFIter mfi(cc_source, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const Box& tile = mfi.tilebox();
+        if (tile.smallEnd(2) > klo || tile.bigEnd(2) < klo) { continue; }
+        const Box bx0 = makeSlab(tile, 2, klo);
+        const auto src = cc_source.array(mfi, smoke_comp);
+        const auto mass = smoke_mass_atm_kg.const_array(mfi);
+        const bool has_nd = z_phys_nd != nullptr;
+        Array4<const Real> znd;
+        if (has_nd) { znd = z_phys_nd->const_array(mfi); }
+        const Real dz = dx[2];
+        ParallelFor(bx0, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            Real dz_cell = dz;
+            if (has_nd) {
+                dz_cell = Real(0.25) * ((znd(i,  j,  k+1) - znd(i,  j,  k))
+                                     + (znd(i+1,j,  k+1) - znd(i+1,j,  k))
+                                     + (znd(i,  j+1,k+1) - znd(i,  j+1,k))
+                                     + (znd(i+1,j+1,k+1) - znd(i+1,j+1,k)));
+                dz_cell = amrex::max(dz_cell, Real(1.0e-6) * dz);
+            }
+            // Cell-integrated kg -> volumetric rate kg/(m3 s).
+            src(i, j, k) += mass(i, j, 0) * inv_dt_area / dz_cell;
+        });
+    }
+
+    if (fire_debug) {
+        Print() << "[FIRE DEBUG] Direct smoke mass: step=" << step
+                << " pending_mass_kg=" << smoke_mass_atm_kg.sum(0)
+                << " receiving_dt_s=" << dt_advance
+                << " smoke_src_max=" << cc_source.max(smoke_comp)
+                << " kg/m3/s\n";
+    }
+}
+
 #endif // ERF_ENABLE_FIRE
