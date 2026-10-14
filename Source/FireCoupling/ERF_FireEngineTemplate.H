@@ -85,17 +85,20 @@ public:
     void advance (const FireForcing& forcing) override;
 
     /**
-     * Point fluxes.sensible (and fluxes.latent, if the fuel releases water) at
-     * the step's mean heat flux into the air on the fire grid [W/m2]; leave a
-     * pointer nullptr for none. The fields must stay valid until the next
-     * advance(). Called only when the coupling injects heat or smoke.
+     * Point fluxes.sensible/latent at their independently optional step-mean
+     * heat fluxes [W/m2]. Prefer fluxes.smoke_mass_kg for smoke: direct,
+     * step-integrated emitted smoke mass [kg per exchange-grid cell], also
+     * independently optional (an allocated zero field suppresses the
+     * legacy fallback). Adapt any internal combustion grid to the ERF-provided
+     * fire exchange grid. Pointers survive until the next advance().
+     * Called only when the coupling injects heat or smoke.
      */
     void fill_fluxes (FireFluxes& fluxes) override;
 
     /**
-     * Heat released per kilogram of fuel burned [J/kg], matching the sensible
-     * flux last handed over; the coupling divides by it to get the fuel burnt
-     * that the smoke emission factor applies to.
+     * Optional legacy conversion: heat released per kilogram of fuel
+     * consumed [J/kg], needed only by engines not reporting smoke_mass_kg.
+     * Remove this declaration when using direct smoke output exclusively.
      */
     amrex::Real smoke_heat_per_kg () const override;
 

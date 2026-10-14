@@ -40,5 +40,24 @@ void inject_smoke_from_fire(
     bool                   fire_debug,
     int                    step);
 
+/**
+ * @brief Deposit a directly reported, step-integrated smoke mass [kg/column].
+ *
+ * The source is prepared as kg/(m3 s) using the full receiving atmospheric
+ * timestep, and added to the lowest atmospheric cell on its true volume.
+ * Called at each RK stage with the SAME amount; no inventory is consumed in
+ * this function, since RK integration provides the stage weights.
+ * No fire emission factor, sensible heat, or fire_atm_feedback is applied.
+ */
+void inject_direct_smoke_mass_from_fire(
+    amrex::MultiFab&       cc_source,
+    const amrex::MultiFab& smoke_mass_atm_kg,
+    const amrex::MultiFab* z_phys_nd,
+    const amrex::Geometry& geom_atm,
+    amrex::Real            dt_advance,
+    int                    smoke_comp,
+    bool                   fire_debug,
+    int                    step);
+
 #endif // ERF_ENABLE_FIRE
 #endif // ERF_FIRE_SMOKE_EMISSION_H

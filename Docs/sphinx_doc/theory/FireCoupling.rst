@@ -264,24 +264,56 @@ warning at start-up.
 Smoke tracer
 ------------
 
-With :cpp:`erf.fire.smoke_enable` (which needs :cpp:`erf.transport_scalar`)
-the smoke tracer is fed at the surface with
+With :cpp:`erf.fire.smoke_enable` (which requires
+:cpp:`erf.transport_scalar`), the preferred interface is direct emitted
+smoke mass: ``FireFluxes::smoke_mass_kg`` supplies one value [kg] per
+fire *exchange-grid* cell, accumulated over the just-completed
+``FireForcing`` interval from ``time`` to ``time + dt``. The engine may
+use any internal numerical grid, but is responsible for returning
+conservatively mapped values on the common exchange grid. These are
+extensive emission masses, not kg/m2 or kg/m2/s, fuel consumption or
+sensible heat. A provided field containing only zeros is authoritative
+and does not trigger the legacy heat-derived emission approximation.
+
+ERF sums fire-cell masses onto atmospheric columns (rather than
+averaging the masses), holds them through the existing one-step coupling
+lag, and deposits them in the lowest atmospheric cell as a source
+in kg/(m3 s). The source divides the pending mass by the receiving
+atmospheric time step and the cell's projected-area volume. Applying
+the same source at every Runge-Kutta stage does not consume the
+amount multiple times; integration supplies the stage weights.
+The pending mass is checkpointed, including the distinction between
+a supplied zero field and a missing direct channel. The direct
+emission is not multiplied by :cpp:`erf.fire.fire_atm_feedback` or
+:cpp:`erf.fire.smoke_emission_factor`; it is already the emitted smoke mass.
+
+Legacy engines can omit ``smoke_mass_kg``. Then ERF retains the
+existing heat-derived approximation:
 
 .. math::
 
-   F_{smoke} = \epsilon\, \frac{Q}{H_c} \quad [\mathrm{kg\,m^{-2}\,s^{-1}}],
+   F_{smoke} = \epsilon\, \frac{Q_{sensible}}{H_c}
+   \quad [\mathrm{kg\,m^{-2}\,s^{-1}}],
 
-where :math:`\epsilon` = :cpp:`erf.fire.smoke_emission_factor` (kg of smoke
-per kg of fuel, default 0.02) and :math:`H_c` is the heat the engine releases
-per kilogram of fuel burnt (``FireEngine::smoke_heat_per_kg``). The emission
-uses the same held, area-averaged heat flux as the energy injection and is
-placed in the lowest atmospheric cell. The tracer is advected and diffused
-like any other scalar and is plotted as ``smoke``; its integral is printed
-with the other integrated quantities. All passive scalars share one boundary
-condition, so on a face that ingests the ``scalar`` boundary plane
-(:cpp:`erf.bndry_input_var_names`) the smoke takes the base scalar's plane
-values too.
+where :math:`\epsilon` is :cpp:`erf.fire.smoke_emission_factor`
+(default 0.02 kg smoke/kg fuel) and :math:`H_c` is the sensible
+heat per kilogram of burned fuel [J/kg] provided by the optional
+``FireEngine::smoke_heat_per_kg()``. This compatibility mode retains
+the old one-step mean-rate timing and should not be mistaken for
+a heterogeneous-fuel emissions model.
 
+The fire model or a separate emissions provider owns fuel consumption,
+emission factors and species yields. ERF owns exchange-grid aggregation,
+vertical source placement, passive-tracer advection/diffusion, and
+the atmospheric state and its checkpoint. The current coupling
+provides one generic smoke-mass tracer, not a multi-species aerosol
+chemistry mechanism. As before, it is plotted as ``smoke`` and its
+integral is reported with other transported quantities.
+
+All passive scalars currently share one boundary-condition slot.
+A ``scalar`` inflow boundary plane may therefore assign the base
+scalar's boundary values to smoke. Species-specific boundary
+conditions and multiple smoke/chemistry species are future work.
 Inputs
 ------
 

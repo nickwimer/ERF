@@ -54,17 +54,27 @@ struct FireForcing
 /**
  * @brief The fluxes a fire engine hands to the atmosphere after its step
  *
- * Both fields live on the fire grid, per unit ground area, as the mean over
- * the engine's step; the coupling averages them onto the atmospheric columns
- * and injects them at the next step. The pointers stay valid until the
- * engine's next advance. Sensible and latent pointers are independently
- * optional: nullptr means no flux for that channel on this step, without
- * suppressing a valid flux from the other channel.
+ * Sensible and latent fields are step-mean fluxes [W/m2] per projected
+ * ground area, on the ERF-provided fire exchange grid. Either pointer may
+ * be null independently. smoke_mass_kg is instead the total emitted smoke
+ * mass [kg] in each exchange-grid cell during the just-completed
+ * FireForcing interval [time, time+dt]. A non-null smoke field, including an
+ * allocated field containing all zeros, is authoritative: ERF must not
+ * infer additional smoke from heat. When it is null, the legacy heat-based
+ * smoke conversion is available for older engines.
+ *
+ * The engine owns the combustion and emissions physics; ERF owns conservative
+ * horizontal transfer, source placement, atmospheric tracer transport and
+ * pending-feedback checkpointing. The engine may use a different internal
+ * numerical grid but must fill these fields on the shared exchange grid.
+ * All pointers stay valid until the engine's next advance and their
+ * presence must be consistent across MPI ranks.
  */
 struct FireFluxes
 {
     const amrex::MultiFab* sensible = nullptr;  ///< Sensible heat flux into the air [W/m2]; nullptr = none this step
     const amrex::MultiFab* latent   = nullptr;  ///< Latent heat flux into the air [W/m2]; nullptr = no water released
+    const amrex::MultiFab* smoke_mass_kg = nullptr; ///< Direct emitted smoke mass [kg/cell] over the completed step; independently optional
     /// With erf.fire.fire_debug: text the coupling appends to its debug line of
     /// the sensible flux (for example how the engine split its heat)
     std::string            debug_note;
@@ -146,11 +156,13 @@ public:
     virtual void fill_fluxes (FireFluxes& fluxes) = 0;
 
     /**
-     * @brief Heat released per kilogram of fuel burned [J/kg], matching the
-     *        sensible flux last handed over, to turn it into the fuel burnt
-     *        that the smoke emission factor applies to
+     * @brief Optional legacy conversion for heat-derived smoke [J/kg].
+     *
+     * Used only when smoke_mass_kg is null and a nonzero sensible flux
+     * is available. New engines with direct emissions need not implement it.
+     * Returning zero indicates no legacy heat-to-smoke conversion.
      */
-    virtual amrex::Real smoke_heat_per_kg () const = 0;
+    virtual amrex::Real smoke_heat_per_kg () const { return amrex::Real(0.0); }
 
     /// The engine needs the surface precipitation accumulation in FireForcing.
     virtual bool wants_surface_precip () const { return false; }

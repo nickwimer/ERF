@@ -75,6 +75,7 @@ constexpr Real ALFG = 100.0;               // e-folding height [m]: 1 - e^{-5} o
 constexpr Real RHO = 1.15;                 // air density [kg/m3]
 constexpr Real FEEDBACK = 0.5;             // erf.fire.fire_atm_feedback
 constexpr Real EMISSION = 0.02;            // erf.fire.smoke_emission_factor
+constexpr Real SMOKE_KG_PER_FIRE_CELL = 0.125_rt; // direct emitted kg over one fire step
 constexpr Real BACKGROUND = 7.0;           // every other source of the cell
 constexpr Real Cp_fire = 1004.64, L_V = 2.501e6;   // the coupling's c_p and L_v
 /// Relative round-off tolerance of the build precision
@@ -121,6 +122,8 @@ public:
         fill_linear_flux(*sensible, fg.geom);
         latent = std::make_unique<MultiFab>(fg.ba, fg.dm, 1, 0);
         latent->setVal(QLAT);
+        smoke = std::make_unique<MultiFab>(fg.ba, fg.dm, 1, 0);
+        smoke->setVal(SMOKE_KG_PER_FIRE_CELL);
     }
 
     void advance (const FireForcing& forcing) override
@@ -142,6 +145,7 @@ public:
         ++n_fill;
         fluxes.sensible = report_sensible ? sensible.get() : nullptr;
         fluxes.latent   = report_latent ? latent.get() : nullptr;
+        fluxes.smoke_mass_kg = report_smoke ? smoke.get() : nullptr;
     }
     Real smoke_heat_per_kg () const override { return HEAT_PER_KG; }
     bool wants_surface_precip () const override { return wants_precip; }
@@ -157,10 +161,11 @@ public:
     }
     void write_plotfile (const std::string&, Real, int) const override {}
 
-    std::unique_ptr<MultiFab> sensible, latent;
+    std::unique_ptr<MultiFab> sensible, latent, smoke;
     std::unique_ptr<MultiFab> open_fraction, roof_height;   ///< on the level's k = 0 slabs, when the test sets them
     bool report_latent = true;
     bool report_sensible = true;
+    bool report_smoke = false; // Legacy tests keep the heat-based emission path.
     bool wants_precip  = false;
     int n_advance = 0, n_fill = 0;
     mutable int n_write_chk = 0;
@@ -252,11 +257,11 @@ void step (FireCoupler& cpl, Level& lev)
 
 /// The cell sources after add_sources on a uniform background
 std::unique_ptr<MultiFab> sources (FireCoupler& cpl, Level& lev, Real background = BACKGROUND,
-                                   const MultiFab* znd = nullptr)
+                                   const MultiFab* znd = nullptr, Real receiving_dt = 0.5_rt)
 {
     auto src = std::make_unique<MultiFab>(lev.ba, lev.dm, NVAR_max, 0);
     src->setVal(background);
-    cpl.add_sources(*src, lev.S, lev.zcc, znd, lev.geom, true, 1);
+    cpl.add_sources(*src, lev.S, lev.zcc, znd, lev.geom, true, 1, receiving_dt);
     return src;
 }
 
@@ -392,6 +397,98 @@ void LatentOnlyFluxInjectsWaterWithoutHeating ()
     EXPECT_EQ(src_cleared->norm0(RhoTheta_comp), 0.0_rt);
     EXPECT_EQ(src_cleared->norm0(RhoQ1_comp), 0.0_rt)
         << "a disappeared latent flux must not be reused in a later timestep";
+}
+
+// Independently emitted smoke does not require heat or latent feedback,
+// including when the fire is passive with respect to the atmosphere.
+void DirectSmokeMassOnlyConservesAcrossReceivingTimesteps ()
+{
+    auto lev = make_level(false);
+    StandInEngine* eng = nullptr;
+    auto cpl = make_coupler(*lev, coupling("passive", true), eng);
+    eng->report_sensible = false;
+    eng->report_latent = false;
+    eng->report_smoke = true;
+    step(*cpl, *lev);
+
+    ASSERT_TRUE(cpl->has_direct_smoke_mass_prev());
+    EXPECT_EQ(cpl->get_Q_atm_prev()->norm0(0), 0.0_rt);
+    EXPECT_EQ(cpl->get_Q_lat_atm_prev()->norm0(0), 0.0_rt);
+    const MultiFab& mass = *cpl->get_smoke_mass_atm_prev();
+    const Real expected_column = Real(C * C) * SMOKE_KG_PER_FIRE_CELL;
+    MultiFab residual(mass.boxArray(), mass.DistributionMap(), 1, mass.nGrowVect());
+    residual.setVal(expected_column);
+    MultiFab::Subtract(residual, mass, 0, 0, 1, mass.nGrowVect());
+    EXPECT_LE(residual.norm0(0, 1, mass.nGrowVect()), REL * expected_column)
+        << "summed direct smoke mass, including atmospheric halo columns";
+
+    const Real emitted_kg = Real(NX * NY * C * C) * SMOKE_KG_PER_FIRE_CELL;
+    for (Real next_dt : {0.25_rt, 0.5_rt, 1.25_rt}) {
+        auto src = sources(*cpl, *lev, 0.0_rt, nullptr, next_dt);
+        EXPECT_EQ(src->norm0(RhoTheta_comp), 0.0_rt);
+        EXPECT_EQ(src->norm0(RhoQ1_comp), 0.0_rt);
+        const Real deposited_kg =
+            src->sum(RhoSmoke_comp) * DXY * DXY * DZ * next_dt;
+        EXPECT_NEAR(deposited_kg, emitted_kg, REL * emitted_kg)
+            << "a completed fire step emits the same total kg for any receiving dt";
+    }
+}
+
+void DirectSmokeMassOnOffsetFireExchangeRegion ()
+{
+    // The fire grid starts at atmospheric x=2, not the domain origin.
+    // Summation must retain the actual geographic column indices.
+    auto lev = make_level(true);
+    StandInEngine* eng = nullptr;
+    auto cpl = make_coupler(*lev, coupling("passive", true), eng);
+    eng->report_sensible = false;
+    eng->report_latent = false;
+    eng->report_smoke = true;
+    step(*cpl, *lev);
+    ASSERT_TRUE(cpl->has_direct_smoke_mass_prev());
+
+    constexpr int NCOLS_X = 4; // atmospheric columns [2,5]
+    const Real expected = Real(NCOLS_X * NY * C * C) * SMOKE_KG_PER_FIRE_CELL;
+    EXPECT_NEAR(cpl->get_smoke_mass_atm_prev()->sum(0), expected, REL * expected);
+    auto src = sources(*cpl, *lev, 0.0_rt, nullptr, 0.75_rt);
+    EXPECT_NEAR(src->sum(RhoSmoke_comp) * DXY * DXY * DZ * 0.75_rt,
+                expected, REL * expected)
+        << "conservative exchange across a nonzero atmospheric-region offset";
+}
+
+void DirectSmokeZeroSuppressesLegacyAndVanishedChannelsClear ()
+{
+    auto lev = make_level(false);
+    StandInEngine* eng = nullptr;
+    auto cpl = make_coupler(*lev, coupling("lagged", true), eng);
+
+    // Allocated zero is an explicit direct output; never replace it with
+    // the positive heat-derived legacy smoke source.
+    eng->report_smoke = true;
+    eng->smoke->setVal(0.0_rt);
+    step(*cpl, *lev);
+    EXPECT_TRUE(cpl->has_direct_smoke_mass_prev());
+    auto src_zero = sources(*cpl, *lev, 0.0_rt);
+    EXPECT_EQ(src_zero->norm0(RhoSmoke_comp), 0.0_rt);
+    EXPECT_GT(src_zero->max(RhoTheta_comp), 0.0_rt);
+
+    // Absent direct output selects the unchanged legacy fallback.
+    eng->report_smoke = false;
+    step(*cpl, *lev);
+    EXPECT_FALSE(cpl->has_direct_smoke_mass_prev());
+    auto src_legacy = sources(*cpl, *lev, 0.0_rt);
+    Real expected = 0.0_rt;
+    for (int i = 0; i < NX; ++i) {
+        expected += Real(NY) * EMISSION * flux_at_column(i) / HEAT_PER_KG;
+    }
+    EXPECT_NEAR(src_legacy->sum(RhoSmoke_comp) * DZ, expected, REL * expected)
+        << "legacy heat-derived smoke when the direct channel is absent";
+
+    // With both emissions and sensible heat absent, never replay stale smoke.
+    eng->report_sensible = false;
+    step(*cpl, *lev);
+    auto src_absent = sources(*cpl, *lev, 0.0_rt);
+    EXPECT_EQ(src_absent->norm0(RhoSmoke_comp), 0.0_rt);
 }
 
 void TheInjectedHeatIsTheSurfaceFlux ()
@@ -808,6 +905,66 @@ void TheCheckpointRestoresTheLaggedFluxes ()
     ParallelDescriptor::Barrier();
 }
 
+void DirectSmokeMassCheckpointPreservesZeroVsAbsent ()
+{
+    auto lev = make_level(false);
+    FireCouplingParams p = coupling("passive", true);
+    StandInEngine* eng = nullptr;
+    auto cpl = make_coupler(*lev, p, eng);
+    eng->report_sensible = false;
+    eng->report_latent = false;
+    eng->report_smoke = true;
+    step(*cpl, *lev);
+
+    const std::string chk = make_chk_dir("fire_direct_smoke_chk");
+    cpl->write_checkpoint(chk);
+    ParallelDescriptor::Barrier();
+    StandInEngine* eng2 = nullptr;
+    auto restored = make_coupler(*lev, p, eng2);
+    restored->read_checkpoint(chk, 0, 11);
+    EXPECT_TRUE(restored->has_direct_smoke_mass_prev());
+    const auto src = sources(*restored, *lev, 0.0_rt, nullptr, 1.25_rt);
+    const Real expected = Real(NX * NY * C * C) * SMOKE_KG_PER_FIRE_CELL;
+    EXPECT_NEAR(src->sum(RhoSmoke_comp) * DXY * DXY * DZ * 1.25_rt,
+                expected, REL * expected);
+
+    // A supplied all-zero field is still the authoritative emission source
+    // after restart: missing and present-zero are not interchangeable.
+    eng->smoke->setVal(0.0_rt);
+    step(*cpl, *lev);
+    const std::string zero_chk = make_chk_dir("fire_direct_smoke_zero_chk");
+    cpl->write_checkpoint(zero_chk);
+    ParallelDescriptor::Barrier();
+    StandInEngine* zero_eng = nullptr;
+    auto zero_restored = make_coupler(*lev, p, zero_eng);
+    zero_restored->read_checkpoint(zero_chk, 0, 12);
+    EXPECT_TRUE(zero_restored->has_direct_smoke_mass_prev());
+    auto src_zero = sources(*zero_restored, *lev, 0.0_rt);
+    EXPECT_EQ(src_zero->norm0(RhoSmoke_comp), 0.0_rt);
+
+    // Older checkpoints contain no direct-emission header and select
+    // legacy heat-derived smoke after restoration.
+    StandInEngine* old_eng = nullptr;
+    auto old = make_coupler(*lev, coupling("lagged", true), old_eng);
+    step(*old, *lev);
+    const std::string old_chk = make_chk_dir("fire_legacy_smoke_chk");
+    old->write_checkpoint(old_chk);
+    ParallelDescriptor::Barrier();
+    StandInEngine* old_eng2 = nullptr;
+    auto old_restored = make_coupler(*lev, coupling("lagged", true), old_eng2);
+    old_restored->read_checkpoint(old_chk, 0, 11);
+    EXPECT_FALSE(old_restored->has_direct_smoke_mass_prev());
+    const auto legacy = sources(*old_restored, *lev, 0.0_rt);
+    EXPECT_GT(legacy->sum(RhoSmoke_comp), 0.0_rt);
+
+    if (ParallelDescriptor::IOProcessor()) {
+        FileSystem::RemoveAll(chk);
+        FileSystem::RemoveAll(zero_chk);
+        FileSystem::RemoveAll(old_chk);
+    }
+    ParallelDescriptor::Barrier();
+}
+
 void ACheckpointOfAnotherFireGridIsRefused ()
 {
     // the coupler on the region of columns 2-5; its own region and level pass
@@ -889,6 +1046,22 @@ TEST(FireCoupler, SynchronousCouplingHandsOverTheNewWindAndDropsVanishedFluxes)
     SynchronousCouplingHandsOverTheNewWindAndDropsAVanishedLatentFlux();
 }
 TEST(FireCoupler, LatentOnlyFluxInjectsWaterWithoutHeating)        { LatentOnlyFluxInjectsWaterWithoutHeating(); }
+TEST(FireCoupler, DirectSmokeMassOnlyConservesAcrossReceivingTimesteps)
+{
+    DirectSmokeMassOnlyConservesAcrossReceivingTimesteps();
+}
+TEST(FireCoupler, DirectSmokeMassOnOffsetFireExchangeRegion)
+{
+    DirectSmokeMassOnOffsetFireExchangeRegion();
+}
+TEST(FireCoupler, DirectSmokeZeroSuppressesLegacyAndVanishedChannelsClear)
+{
+    DirectSmokeZeroSuppressesLegacyAndVanishedChannelsClear();
+}
+TEST(FireCoupler, DirectSmokeMassCheckpointPreservesZeroVsAbsent)
+{
+    DirectSmokeMassCheckpointPreservesZeroVsAbsent();
+}
 TEST(FireCoupler, TheInjectedHeatIsTheSurfaceFlux)                 { TheInjectedHeatIsTheSurfaceFlux(); }
 TEST(FireCoupler, PassiveCouplingInjectsNoHeat)                    { PassiveCouplingInjectsNoHeat(); }
 TEST(FireCoupler, TheOpenFractionKeepsTheColumnEnergyAndThinsTheCellsUnderTheRoof)
